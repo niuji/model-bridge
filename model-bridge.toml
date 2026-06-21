@@ -1,0 +1,10 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+path = "model-bridge.db"
+
+[bridge]
+# 后台自动刷新模型列表间隔（分钟）
+refresh_interval_min = 10

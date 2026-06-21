@@ -1,0 +1,58 @@
+use axum::response::{IntoResponse, Response};
+use std::sync::Arc;
+
+use crate::state::{
+    AnthropicModelEntry, AnthropicModelsList, AppState, OpenAIModelEntry, OpenAIModelsList,
+};
+
+pub async fn get_openai_models(state: Arc<AppState>) -> Response {
+    let routes = state.openai_routes.read().await;
+    let mut models: Vec<OpenAIModelEntry> = Vec::with_capacity(routes.len());
+
+    // 按 provider 分组去重
+    for (model_id, route) in routes.iter() {
+        models.push(OpenAIModelEntry {
+            id: model_id.clone(),
+            object: "model".to_string(),
+            created: 0,
+            owned_by: route.provider_name.clone(),
+        });
+    }
+
+    // 排序
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
+
+    let result = OpenAIModelsList {
+        object: "list".to_string(),
+        data: models,
+    };
+
+    axum::Json(result).into_response()
+}
+
+pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
+    let routes = state.anthropic_routes.read().await;
+    let mut models: Vec<AnthropicModelEntry> = Vec::with_capacity(routes.len());
+
+    for (model_id, route) in routes.iter() {
+        models.push(AnthropicModelEntry {
+            id: model_id.clone(),
+            entry_type: "model".to_string(),
+            display_name: format!("{} ({})", model_id, route.provider_name),
+            created_at: String::new(),
+        });
+    }
+
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
+
+    let result = AnthropicModelsList {
+        data: models,
+        has_more: false,
+        first_id: None,
+        last_id: None,
+    };
+
+    axum::Json(result).into_response()
+}
