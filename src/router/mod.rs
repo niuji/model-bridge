@@ -2,7 +2,7 @@ pub mod admin;
 pub mod models_list;
 pub mod proxy;
 
-use axum::{extract::Request, middleware, response::{Html, IntoResponse, Response}, Router};
+use axum::{extract::Request, response::{Html, IntoResponse, Response}, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -55,10 +55,6 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/stats/overview", axum::routing::get(admin::stats_overview))
         .route("/stats/models", axum::routing::get(admin::stats_models))
         .route("/stats/daily", axum::routing::get(admin::stats_daily))
-        .layer(middleware::from_fn_with_state(
-            state.db.clone(),
-            crate::middleware::auth::api_key_auth,
-        ))
         .with_state(state);
 
     let cors = CorsLayer::new()
