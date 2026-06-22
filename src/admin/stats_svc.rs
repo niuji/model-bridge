@@ -14,8 +14,12 @@ pub struct StatsOverview {
 pub struct ModelStats {
     pub model_id: String,
     pub request_count: i64,
+    pub total_tokens: i64,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub cache_hit_rate: f64,
 }
 
 #[derive(Serialize)]
@@ -24,6 +28,12 @@ pub struct DailyStats {
     pub request_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+}
+
+#[derive(Serialize)]
+pub struct HourlyStats {
+    pub hour: String,
+    pub total_tokens: i64,
 }
 
 pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
@@ -36,6 +46,7 @@ pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
             COALESCE(AVG(latency_ms), 0.0),
             COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)
         FROM usage_records
+        WHERE created_at >= datetime('now', '-7 days')
         "#,
     )
     .fetch_one(pool)
@@ -51,14 +62,17 @@ pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
 }
 
 pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats>> {
-    let rows = sqlx::query_as::<_, (String, i64, i64, i64)>(
+    let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64, i64)>(
         r#"
         SELECT
             model_id,
             COUNT(*) as cnt,
             COALESCE(SUM(input_tokens), 0),
-            COALESCE(SUM(output_tokens), 0)
+            COALESCE(SUM(output_tokens), 0),
+            COALESCE(SUM(cache_read_tokens), 0),
+            COALESCE(SUM(cache_write_tokens), 0)
         FROM usage_records
+        WHERE created_at >= datetime('now', '-7 days')
         GROUP BY model_id
         ORDER BY cnt DESC
         "#,
@@ -68,12 +82,22 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
 
     Ok(rows
         .into_iter()
-        .map(|(model_id, request_count, total_input_tokens, total_output_tokens)| {
+        .map(|(model_id, request_count, total_input_tokens, total_output_tokens, cache_read_tokens, cache_write_tokens)| {
+            let total_tokens = total_input_tokens + total_output_tokens;
+            let cache_hit_rate = if total_input_tokens > 0 {
+                (cache_read_tokens as f64 / total_input_tokens as f64 * 100.0 * 100.0).round() / 100.0
+            } else {
+                0.0
+            };
             ModelStats {
                 model_id,
                 request_count,
+                total_tokens,
                 total_input_tokens,
                 total_output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                cache_hit_rate,
             }
         })
         .collect())
@@ -107,5 +131,26 @@ pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec
                 output_tokens,
             },
         )
+        .collect())
+}
+
+pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlyStats>> {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        r#"
+        SELECT
+            strftime('%Y-%m-%d %H:00', created_at) as hour,
+            COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens
+        FROM usage_records
+        WHERE created_at >= datetime('now', '-7 days')
+        GROUP BY strftime('%Y-%m-%d %H:00', created_at)
+        ORDER BY hour ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(hour, total_tokens)| HourlyStats { hour, total_tokens })
         .collect())
 }

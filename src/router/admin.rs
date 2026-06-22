@@ -13,7 +13,7 @@ use crate::{admin::provider_svc, admin::stats_svc, state::AppState};
 // ===== Provider handlers =====
 
 pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match provider_svc::list_providers(&state.db).await {
+    match provider_svc::list_providers(&state.db, &state.provider_defs).await {
         Ok(providers) => Json(providers).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -27,7 +27,7 @@ pub async fn get_provider(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match provider_svc::get_provider(&state.db, &id).await {
+    match provider_svc::get_provider(&state.db, &state.provider_defs, &id).await {
         Ok(Some(provider)) => Json(provider).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -43,80 +43,18 @@ pub async fn get_provider(
 }
 
 #[derive(Deserialize)]
-pub struct CreateProviderRequest {
-    pub name: String,
-    pub openai_base_url: Option<String>,
-    pub anthropic_base_url: Option<String>,
-    pub api_key: String,
-}
-
-pub async fn create_provider(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateProviderRequest>,
-) -> impl IntoResponse {
-    if req.openai_base_url.is_none() && req.anthropic_base_url.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "at least one of openai_base_url or anthropic_base_url is required"})),
-        )
-            .into_response();
-    }
-
-    let (openai_ok, anthropic_ok) = provider_svc::validate_provider(
-        &state.client,
-        req.openai_base_url.as_deref(),
-        req.anthropic_base_url.as_deref(),
-        &req.api_key,
-    )
-    .await;
-
-    if req.openai_base_url.is_some() && !openai_ok {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "openai_base_url /models probe failed"})),
-        )
-            .into_response();
-    }
-    if req.anthropic_base_url.is_some() && !anthropic_ok {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "anthropic_base_url /models probe failed"})),
-        )
-            .into_response();
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    match provider_svc::create_provider(
-        &state.db,
-        &id,
-        &req.name,
-        req.openai_base_url.as_deref(),
-        req.anthropic_base_url.as_deref(),
-        &req.api_key,
-    )
-    .await
-    {
-        Ok(provider) => {
-            if let Err(e) = provider_svc::refresh_routes(&state).await {
-                tracing::error!("Failed to refresh routes: {}", e);
-            }
-            (StatusCode::CREATED, Json(provider)).into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
+pub struct UpdateProviderChannel {
+    pub channel_type: String,
+    pub base_url: String,
+    pub is_enabled: bool,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateProviderRequest {
-    pub name: String,
-    pub openai_base_url: Option<String>,
-    pub anthropic_base_url: Option<String>,
-    pub api_key: Option<String>,
+    pub api_key: String,
     pub is_enabled: bool,
+    pub channels: Vec<UpdateProviderChannel>,
+    pub models: Vec<String>,
 }
 
 pub async fn update_provider(
@@ -124,37 +62,36 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
-    // 验证至少配置了一个 URL（与 create_provider 保持一致）
-    if req.openai_base_url.is_none() && req.anthropic_base_url.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "at least one of openai_base_url or anthropic_base_url is required"})),
-        )
-            .into_response();
-    }
+    let channels: Vec<(String, String, bool)> = req
+        .channels
+        .into_iter()
+        .map(|c| (c.channel_type, c.base_url, c.is_enabled))
+        .collect();
 
     match provider_svc::update_provider(
         &state.db,
         &id,
-        &req.name,
-        req.openai_base_url.as_deref(),
-        req.anthropic_base_url.as_deref(),
-        req.api_key.as_deref(),
+        &req.api_key,
         req.is_enabled,
+        &channels,
+        &req.models,
     )
     .await
     {
-        Ok(Some(provider)) => {
+        Ok(()) => {
             if let Err(e) = provider_svc::refresh_routes(&state).await {
                 tracing::error!("Failed to refresh routes: {}", e);
             }
-            Json(provider).into_response()
+            // 返回更新后的详情
+            match provider_svc::get_provider(&state.db, &state.provider_defs, &id).await {
+                Ok(Some(provider)) => Json(provider).into_response(),
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "failed to read updated provider"})),
+                )
+                    .into_response(),
+            }
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "provider not found"})),
-        )
-            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -163,24 +100,21 @@ pub async fn update_provider(
     }
 }
 
-pub async fn delete_provider(
+pub async fn fetch_provider_models(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match provider_svc::delete_provider(&state.db, &id).await {
-        Ok(true) => {
-            if let Err(e) = provider_svc::refresh_routes(&state).await {
-                tracing::error!("Failed to refresh routes: {}", e);
-            }
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "provider not found"})),
-        )
-            .into_response(),
+    match provider_svc::fetch_models_from_api(
+        &state.client,
+        &state.db,
+        &state.provider_defs,
+        &id,
+    )
+    .await
+    {
+        Ok(models) => Json(serde_json::json!({ "models": models })).into_response(),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
@@ -191,7 +125,6 @@ pub async fn refresh_provider(
     State(state): State<Arc<AppState>>,
     Path(_id): Path<String>,
 ) -> impl IntoResponse {
-    // 刷新所有 provider 的路由表（_id 保留用于未来按需刷新单个 provider）
     match provider_svc::refresh_routes(&state).await {
         Ok(_) => Json(serde_json::json!({"status": "ok"})).into_response(),
         Err(e) => (
@@ -245,12 +178,10 @@ pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }
 }
 
-/// 脱敏显示密钥：mb-xxx...xxx（前3后4）
 fn mask_key(key: &str) -> String {
     if key.len() <= 10 {
         return key.to_string();
     }
-    // 格式: mb-{uuid}，去掉 mb- 前缀后取前3后4
     let body = if key.starts_with("mb-") { &key[3..] } else { key };
     if body.len() <= 7 {
         return key.to_string();
@@ -415,6 +346,17 @@ pub async fn stats_daily(
     axum::extract::Query(params): axum::extract::Query<StatsQuery>,
 ) -> impl IntoResponse {
     match stats_svc::get_daily_stats(&state.db, params.days).await {
+        Ok(stats) => Json(stats).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn stats_hourly(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match stats_svc::get_hourly_stats(&state.db).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

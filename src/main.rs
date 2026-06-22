@@ -35,9 +35,11 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     // 构建应用状态
+    let provider_defs = config::load_providers(&app_config.providers_file)?;
     let state = Arc::new(AppState {
         openai_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         anthropic_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        provider_defs,
         db: pool.clone(),
         client,
     });

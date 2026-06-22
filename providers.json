@@ -1,0 +1,38 @@
+[
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "icon": "openai.svg",
+    "models_endpoint": "https://api.openai.com/v1/models",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://api.openai.com" },
+      { "type": "openai_responses", "base_url": "https://api.openai.com" }
+    ]
+  },
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "icon": "deepseek.svg",
+    "models_endpoint": "https://api.deepseek.com/v1/models",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://api.deepseek.com" }
+    ]
+  },
+  {
+    "id": "minimax",
+    "name": "MiniMax",
+    "icon": "minimax.ico",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://api.minimaxi.com" }
+    ]
+  },
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "icon": "anthropic.svg",
+    "models_endpoint": "https://api.anthropic.com/v1/models",
+    "channels": [
+      { "type": "anthropic", "base_url": "https://api.anthropic.com" }
+    ]
+  }
+]

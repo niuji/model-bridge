@@ -16,6 +16,9 @@ pub struct AppConfig {
     pub admin: ServerConfig,
     pub database: DatabaseConfig,
     pub bridge: BridgeConfig,
+    /// Provider 定义 JSON 文件路径
+    #[serde(default = "default_providers_file")]
+    pub providers_file: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -35,6 +38,30 @@ pub struct BridgeConfig {
     pub refresh_interval_min: u64,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProviderDef {
+    pub id: String,
+    pub name: String,
+    /// 图标（emoji 或图片 URL）
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// 获取模型列表的端点，不配置则不支持自动获取
+    pub models_endpoint: Option<String>,
+    #[serde(default)]
+    pub channels: Vec<ChannelDef>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChannelDef {
+    #[serde(rename = "type")]
+    pub channel_type: String,
+    pub base_url: String,
+}
+
+fn default_providers_file() -> String {
+    "providers.json".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -52,16 +79,24 @@ impl Default for AppConfig {
             bridge: BridgeConfig {
                 refresh_interval_min: 10,
             },
+            providers_file: default_providers_file(),
         }
     }
 }
 
 pub fn load_config(cli: &Cli) -> anyhow::Result<AppConfig> {
-    if cli.config.exists() {
+    let config: AppConfig = if cli.config.exists() {
         let content = std::fs::read_to_string(&cli.config)?;
-        let config: AppConfig = toml::from_str(&content)?;
-        Ok(config)
+        toml::from_str(&content)?
     } else {
-        Ok(AppConfig::default())
-    }
+        AppConfig::default()
+    };
+    Ok(config)
+}
+
+/// 从 JSON 文件加载 Provider 定义
+pub fn load_providers(path: &str) -> anyhow::Result<Vec<ProviderDef>> {
+    let content = std::fs::read_to_string(path)?;
+    let providers: Vec<ProviderDef> = serde_json::from_str(&content)?;
+    Ok(providers)
 }

@@ -32,13 +32,16 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
     let admin_api = Router::new()
         .route(
             "/providers",
-            axum::routing::get(admin::list_providers).post(admin::create_provider),
+            axum::routing::get(admin::list_providers),
         )
         .route(
             "/providers/{id}",
             axum::routing::get(admin::get_provider)
-                .put(admin::update_provider)
-                .delete(admin::delete_provider),
+                .put(admin::update_provider),
+        )
+        .route(
+            "/providers/{id}/fetch-models",
+            axum::routing::get(admin::fetch_provider_models),
         )
         .route(
             "/providers/{id}/refresh",
@@ -57,6 +60,7 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/stats/overview", axum::routing::get(admin::stats_overview))
         .route("/stats/models", axum::routing::get(admin::stats_models))
         .route("/stats/daily", axum::routing::get(admin::stats_daily))
+        .route("/stats/hourly", axum::routing::get(admin::stats_hourly))
         .with_state(state);
 
     let cors = CorsLayer::new()
@@ -86,11 +90,11 @@ async fn serve_ui(request: Request) -> Response {
 
     // 尝试在嵌入的静态资源目录中查找文件
     if let Some(file) = WEB_UI_DIR.get_file(path) {
-        let content = file.contents_utf8().unwrap_or("");
         let mime = mime_guess::from_path(path).first_or_octet_stream();
+        let content = file.contents();
         return (
             [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
-            content.to_owned(),
+            content.to_vec(),
         )
             .into_response();
     }

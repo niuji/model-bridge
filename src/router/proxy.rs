@@ -151,6 +151,8 @@ async fn proxy_to_provider(
                 route.provider_id,
                 0,
                 0,
+                0,
+                0,
                 latency_ms,
                 "error",
                 Some(e.to_string()),
@@ -197,6 +199,8 @@ async fn proxy_buffered_response(
                 provider_id,
                 usage.0,
                 usage.1,
+                usage.2,
+                usage.3,
                 latency_ms,
                 if status.is_success() { "success" } else { "error" },
                 None,
@@ -219,6 +223,8 @@ async fn proxy_buffered_response(
                 state.clone(),
                 model,
                 provider_id,
+                0,
+                0,
                 0,
                 0,
                 latency_ms,
@@ -282,6 +288,8 @@ async fn proxy_streaming_response(
                         provider_final.clone(),
                         0,
                         0,
+                        0,
+                        0,
                         latency_ms,
                         "error",
                         Some(e.to_string()),
@@ -300,6 +308,8 @@ async fn proxy_streaming_response(
                 provider_final,
                 usage.0,
                 usage.1,
+                usage.2,
+                usage.3,
                 latency_ms,
                 "success",
                 None,
@@ -350,10 +360,10 @@ fn extract_model_from_body(body: &[u8]) -> Option<String> {
         .and_then(|v| v.get("model")?.as_str().map(|s| s.to_string()))
 }
 
-fn extract_usage_from_response(body: &[u8]) -> (i64, i64) {
+fn extract_usage_from_response(body: &[u8]) -> (i64, i64, i64, i64) {
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
-        Err(_) => return (0, 0),
+        Err(_) => return (0, 0, 0, 0),
     };
 
     if let Some(usage) = v.get("usage") {
@@ -361,15 +371,31 @@ fn extract_usage_from_response(body: &[u8]) -> (i64, i64) {
         let o_input = usage.get("prompt_tokens").and_then(|v| v.as_i64());
         let o_output = usage.get("completion_tokens").and_then(|v| v.as_i64());
         if o_input.is_some() || o_output.is_some() {
-            return (o_input.unwrap_or(0), o_output.unwrap_or(0));
+            // OpenAI cache: prompt_tokens_details.cached_tokens
+            let cache_read = usage
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            // OpenAI cache write: prompt_tokens_details.cached_tokens is essentially cache read
+            // No separate cache write in OpenAI format
+            return (o_input.unwrap_or(0), o_output.unwrap_or(0), cache_read, 0);
         }
         // Anthropic 格式: input_tokens, output_tokens
         let a_input = usage.get("input_tokens").and_then(|v| v.as_i64());
         let a_output = usage.get("output_tokens").and_then(|v| v.as_i64());
-        return (a_input.unwrap_or(0), a_output.unwrap_or(0));
+        let cache_read = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let cache_write = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        return (a_input.unwrap_or(0), a_output.unwrap_or(0), cache_read, cache_write);
     }
 
-    (0, 0)
+    (0, 0, 0, 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -379,17 +405,21 @@ async fn write_usage(
     provider_id: String,
     input_tokens: i64,
     output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
     latency_ms: i64,
     status: &str,
     error_msg: Option<String>,
 ) {
     if let Err(e) = sqlx::query(
-        "INSERT INTO usage_records (model_id, provider_id, input_tokens, output_tokens, latency_ms, status, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_records (model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&model_id)
     .bind(&provider_id)
     .bind(input_tokens)
     .bind(output_tokens)
+    .bind(cache_read_tokens)
+    .bind(cache_write_tokens)
     .bind(latency_ms)
     .bind(status)
     .bind(&error_msg)
