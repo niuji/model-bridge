@@ -2,16 +2,18 @@ pub mod admin;
 pub mod models_list;
 pub mod proxy;
 
-use axum::{response::Html, Router};
+use axum::{extract::Request, middleware, response::{Html, IntoResponse, Response}, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::state::AppState;
 
-/// 嵌入管理界面 HTML
-const WEB_UI: &str = include_str!("../../web/dist/index.html");
+/// 嵌入整个管理界面静态资源
+static WEB_UI_DIR: include_dir::Dir<'static> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
-pub fn create_router(state: Arc<AppState>) -> Router {
+/// 构建代理路由（OpenAI + Anthropic 协议转发）
+pub fn create_proxy_router(state: Arc<AppState>) -> Router {
     let openai_router = Router::new()
         .route("/v1/{*path}", axum::routing::any(proxy::openai_handler))
         .with_state(state.clone());
@@ -20,7 +22,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/v1/{*path}", axum::routing::any(proxy::anthropic_handler))
         .with_state(state.clone());
 
-    let admin_router = Router::new()
+    Router::new()
+        .nest("/openai", openai_router)
+        .nest("/anthropic", anthropic_router)
+}
+
+/// 构建管理路由（Admin API + Web 管理界面）
+pub fn create_admin_router(state: Arc<AppState>) -> Router {
+    let admin_api = Router::new()
         .route(
             "/providers",
             axum::routing::get(admin::list_providers).post(admin::create_provider),
@@ -46,7 +55,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/stats/overview", axum::routing::get(admin::stats_overview))
         .route("/stats/models", axum::routing::get(admin::stats_models))
         .route("/stats/daily", axum::routing::get(admin::stats_daily))
-        .with_state(state.clone());
+        .layer(middleware::from_fn_with_state(
+            state.db.clone(),
+            crate::middleware::auth::api_key_auth,
+        ))
+        .with_state(state);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -54,13 +67,40 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .allow_headers(Any);
 
     Router::new()
-        .nest("/openai", openai_router)
-        .nest("/anthropic", anthropic_router)
-        .nest("/api/admin", admin_router)
+        .nest("/api/admin", admin_api)
         .fallback(serve_ui)
         .layer(cors)
 }
 
-async fn serve_ui() -> Html<&'static str> {
-    Html(WEB_UI)
+async fn serve_ui(request: Request) -> Response {
+    // API 路径返回 JSON 404
+    if request.uri().path().starts_with("/api/") {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"not found"}"#,
+        )
+            .into_response();
+    }
+
+    let path = request.uri().path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    // 尝试在嵌入的静态资源目录中查找文件
+    if let Some(file) = WEB_UI_DIR.get_file(path) {
+        let content = file.contents_utf8().unwrap_or("");
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        return (
+            [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
+            content.to_owned(),
+        )
+            .into_response();
+    }
+
+    // 其他路径返回 SPA 的 index.html（支持前端路由）
+    if let Some(file) = WEB_UI_DIR.get_file("index.html") {
+        Html(file.contents_utf8().unwrap_or("")).into_response()
+    } else {
+        Html("<!DOCTYPE html><html><body>UI not found</body></html>").into_response()
+    }
 }

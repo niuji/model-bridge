@@ -13,7 +13,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     .fetch_all(&state.db)
     .await?;
 
-    let client = reqwest::Client::new();
     let mut openai_routes: HashMap<String, ProviderRoute> = HashMap::new();
     let mut anthropic_routes: HashMap<String, ProviderRoute> = HashMap::new();
 
@@ -21,13 +20,13 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         let route = ProviderRoute {
             provider_id: provider.id.clone(),
             provider_name: provider.name.clone(),
-            base_url: String::new(), // 按格式不同
+            base_url: String::new(),
             api_key: provider.api_key_encrypted.clone(),
         };
 
         // 探测 openai 格式
         if let Some(ref base_url) = provider.openai_base_url {
-            match probe_openai_models(&client, base_url, &provider.api_key_encrypted).await {
+            match probe_openai_models(&state.client, base_url, &provider.api_key_encrypted).await {
                 Ok(models) => {
                     for model_id in models {
                         let mut r = route.clone();
@@ -47,7 +46,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
 
         // 探测 anthropic 格式
         if let Some(ref base_url) = provider.anthropic_base_url {
-            match probe_anthropic_models(&client, base_url, &provider.api_key_encrypted).await {
+            match probe_anthropic_models(&state.client, base_url, &provider.api_key_encrypted).await {
                 Ok(models) => {
                     for model_id in models {
                         let mut r = route.clone();
@@ -158,18 +157,18 @@ async fn probe_anthropic_models(
 
 /// 检查 provider 配置的有效性
 pub async fn validate_provider(
+    client: &reqwest::Client,
     openai_base_url: Option<&str>,
     anthropic_base_url: Option<&str>,
     api_key: &str,
 ) -> (bool, bool) {
-    let client = reqwest::Client::new();
     let (mut openai_ok, mut anthropic_ok) = (false, false);
 
     if let Some(url) = openai_base_url {
-        openai_ok = probe_openai_models(&client, url, api_key).await.is_ok();
+        openai_ok = probe_openai_models(client, url, api_key).await.is_ok();
     }
     if let Some(url) = anthropic_base_url {
-        anthropic_ok = probe_anthropic_models(&client, url, api_key).await.is_ok();
+        anthropic_ok = probe_anthropic_models(client, url, api_key).await.is_ok();
     }
 
     (openai_ok, anthropic_ok)

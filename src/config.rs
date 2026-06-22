@@ -12,7 +12,8 @@ pub struct Cli {
 
 #[derive(Clone, Deserialize)]
 pub struct AppConfig {
-    pub server: ServerConfig,
+    pub proxy: ServerConfig,
+    pub admin: ServerConfig,
     pub database: DatabaseConfig,
     pub bridge: BridgeConfig,
 }
@@ -37,9 +38,13 @@ pub struct BridgeConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            server: ServerConfig {
+            proxy: ServerConfig {
                 host: "0.0.0.0".to_string(),
-                port: 8080,
+                port: 10010,
+            },
+            admin: ServerConfig {
+                host: "0.0.0.0".to_string(),
+                port: 10020,
             },
             database: DatabaseConfig {
                 path: "model-bridge.db".to_string(),

@@ -4,7 +4,7 @@
       <n-layout style="min-height: 100vh">
         <n-layout-header bordered>
           <div class="header">
-            <h1 class="title">Model Bridge</h1>
+            <h1 class="title">模型桥接</h1>
             <n-menu
               mode="horizontal"
               :options="menuOptions"
@@ -43,10 +43,10 @@ const route = useRoute()
 const currentRoute = computed(() => route.path)
 
 const menuOptions = [
-  { label: 'Dashboard', key: '/' },
-  { label: 'Providers', key: '/providers' },
-  { label: 'API Keys', key: '/api-keys' },
-  { label: 'Logs', key: '/logs' },
+  { label: '仪表盘', key: '/' },
+  { label: '供应商', key: '/providers' },
+  { label: 'API 密钥', key: '/api-keys' },
+  { label: '日志', key: '/logs' },
 ]
 
 function navigate(key: string) {

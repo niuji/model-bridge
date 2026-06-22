@@ -1,5 +1,5 @@
 use axum::{
-    extract::Request,
+    extract::State,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -7,9 +7,9 @@ use axum::{
 use sha2::Digest;
 
 /// 验证 Bearer token 是否匹配已注册的 API Key
-#[allow(dead_code)]
 pub async fn api_key_auth(
-    request: Request,
+    State(pool): State<sqlx::SqlitePool>,
+    request: axum::extract::Request,
     next: Next,
 ) -> Response {
     let auth_header = request
@@ -21,16 +21,8 @@ pub async fn api_key_auth(
     let Some(token) = auth_header else {
         return (
             StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
             r#"{"error":"missing Authorization header"}"#,
-        )
-            .into_response();
-    };
-
-    // 从 extension 获取 db pool
-    let Some(pool) = request.extensions().get::<sqlx::SqlitePool>() else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            r#"{"error":"internal error"}"#,
         )
             .into_response();
     };
@@ -41,7 +33,7 @@ pub async fn api_key_auth(
         "SELECT COUNT(*) FROM api_keys WHERE key_hash = ? AND is_enabled = 1",
     )
     .bind(&key_hash)
-    .fetch_one(pool)
+    .fetch_one(&pool)
     .await;
 
     match result {
@@ -51,6 +43,7 @@ pub async fn api_key_auth(
         }
         _ => (
             StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
             r#"{"error":"invalid api key"}"#,
         )
             .into_response(),

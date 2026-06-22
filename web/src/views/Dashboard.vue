@@ -1,27 +1,27 @@
 <template>
   <div>
-    <h2>Dashboard</h2>
+    <h2>仪表盘</h2>
 
     <!-- 概览卡片 -->
     <n-grid :cols="4" :x-gap="16" style="margin-bottom: 24px">
       <n-grid-item>
         <n-card :bordered="false" class="stat-card">
-          <n-statistic label="Total Requests" :value="overview.total_requests" />
+          <n-statistic label="总请求数" :value="overview.total_requests" />
         </n-card>
       </n-grid-item>
       <n-grid-item>
         <n-card :bordered="false" class="stat-card">
-          <n-statistic label="Input Tokens" :value="overview.total_input_tokens" />
+          <n-statistic label="输入 Token" :value="overview.total_input_tokens" />
         </n-card>
       </n-grid-item>
       <n-grid-item>
         <n-card :bordered="false" class="stat-card">
-          <n-statistic label="Output Tokens" :value="overview.total_output_tokens" />
+          <n-statistic label="输出 Token" :value="overview.total_output_tokens" />
         </n-card>
       </n-grid-item>
       <n-grid-item>
         <n-card :bordered="false" class="stat-card">
-          <n-statistic label="Avg Latency (ms)" :value="Math.round(overview.avg_latency_ms)" />
+          <n-statistic label="平均延迟 (ms)" :value="Math.round(overview.avg_latency_ms)" />
         </n-card>
       </n-grid-item>
     </n-grid>
@@ -29,12 +29,12 @@
     <!-- 图表 -->
     <n-grid :cols="2" :x-gap="16">
       <n-grid-item>
-        <n-card title="Daily Requests" :bordered="false">
+        <n-card title="每日请求" :bordered="false">
           <v-chart class="chart" :option="dailyOption" autoresize />
         </n-card>
       </n-grid-item>
       <n-grid-item>
-        <n-card title="Model Usage" :bordered="false">
+        <n-card title="模型用量" :bordered="false">
           <v-chart class="chart" :option="modelOption" autoresize />
         </n-card>
       </n-grid-item>
@@ -61,13 +61,13 @@ const modelData = ref<any[]>([])
 
 const dailyOption = ref({
   tooltip: { trigger: 'axis' },
-  legend: { data: ['Requests', 'Input Tokens', 'Output Tokens'] },
+  legend: { data: ['请求数', '输入 Token', '输出 Token'] },
   xAxis: { type: 'category', data: [] as string[] },
   yAxis: { type: 'value' },
   series: [
-    { name: 'Requests', type: 'line', data: [] as number[], smooth: true },
-    { name: 'Input Tokens', type: 'line', data: [] as number[], smooth: true },
-    { name: 'Output Tokens', type: 'line', data: [] as number[], smooth: true },
+    { name: '请求数', type: 'line', data: [] as number[], smooth: true },
+    { name: '输入 Token', type: 'line', data: [] as number[], smooth: true },
+    { name: '输出 Token', type: 'line', data: [] as number[], smooth: true },
   ],
 })
 
@@ -76,7 +76,7 @@ const modelOption = ref({
   legend: { orient: 'vertical', left: 'left' },
   series: [
     {
-      name: 'Model Usage',
+      name: '模型用量',
       type: 'pie',
       radius: '60%',
       data: [] as { name: string; value: number }[],
@@ -100,9 +100,9 @@ async function loadData() {
       ...dailyOption.value,
       xAxis: { type: 'category', data: dailyRes.map((d: any) => d.date) },
       series: [
-        { name: 'Requests', type: 'line', data: dailyRes.map((d: any) => d.request_count), smooth: true },
-        { name: 'Input Tokens', type: 'line', data: dailyRes.map((d: any) => d.input_tokens), smooth: true },
-        { name: 'Output Tokens', type: 'line', data: dailyRes.map((d: any) => d.output_tokens), smooth: true },
+        { name: '请求数', type: 'line', data: dailyRes.map((d: any) => d.request_count), smooth: true },
+        { name: '输入 Token', type: 'line', data: dailyRes.map((d: any) => d.input_tokens), smooth: true },
+        { name: '输出 Token', type: 'line', data: dailyRes.map((d: any) => d.output_tokens), smooth: true },
       ],
     }
 
@@ -112,7 +112,7 @@ async function loadData() {
       ...modelOption.value,
       series: [
         {
-          name: 'Model Usage',
+          name: '模型用量',
           type: 'pie',
           radius: '60%',
           data: modelsRes.map((m: any) => ({ name: m.model_id, value: m.request_count })),
@@ -120,7 +120,7 @@ async function loadData() {
       ],
     }
   } catch (e) {
-    console.error('Failed to load dashboard data:', e)
+    console.error('加载仪表盘数据失败:', e)
   }
 }
 

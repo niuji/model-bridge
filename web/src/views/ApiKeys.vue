@@ -1,32 +1,32 @@
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px">
-      <h2>API Keys</h2>
-      <n-button type="primary" @click="showCreate = true">Generate Key</n-button>
+      <h2>API 密钥</h2>
+      <n-button type="primary" @click="showCreate = true">生成密钥</n-button>
     </div>
 
     <n-data-table :columns="columns" :data="keys" :bordered="false" />
 
-    <n-modal v-model:show="showCreate" title="Generate API Key">
+    <n-modal v-model:show="showCreate" title="生成 API 密钥">
       <n-card style="width: 400px" :bordered="false">
         <n-form :model="form" label-placement="left" label-width="80px">
-          <n-form-item label="Name">
-            <n-input v-model:value="form.name" placeholder="Key name" />
+          <n-form-item label="名称">
+            <n-input v-model:value="form.name" placeholder="密钥名称" />
           </n-form-item>
         </n-form>
         <template #footer>
           <n-space justify="end">
-            <n-button @click="showCreate = false">Cancel</n-button>
-            <n-button type="primary" @click="handleCreate">Generate</n-button>
+            <n-button @click="showCreate = false">取消</n-button>
+            <n-button type="primary" @click="handleCreate">生成</n-button>
           </n-space>
         </template>
       </n-card>
     </n-modal>
 
     <!-- 显示 key 的弹窗 -->
-    <n-modal v-model:show="showKey" title="API Key Generated" :mask-closable="false">
+    <n-modal v-model:show="showKey" title="API 密钥已生成" :mask-closable="false">
       <n-card style="width: 500px" :bordered="false">
-        <n-alert type="warning" title="Copy this key now. It won't be shown again." style="margin-bottom: 12px" />
+        <n-alert type="warning" title="请立即复制此密钥，关闭后将不再显示。" style="margin-bottom: 12px" />
         <n-input v-model:value="newKey" readonly />
       </n-card>
     </n-modal>
@@ -47,15 +47,15 @@ const newKey = ref('')
 const form = ref({ name: '' })
 
 const columns = [
-  { title: 'Name', key: 'name', width: 200 },
-  { title: 'Created At', key: 'created_at', width: 200 },
-  { title: 'Enabled', key: 'is_enabled', width: 100, render: (row: any) => row.is_enabled ? '✅' : '❌' },
+  { title: '名称', key: 'name', width: 200 },
+  { title: '创建时间', key: 'created_at', width: 200 },
+  { title: '启用', key: 'is_enabled', width: 100, render: (row: any) => row.is_enabled ? '✅' : '❌' },
   {
-    title: 'Actions',
+    title: '操作',
     key: 'actions',
     width: 100,
     render: (row: any) =>
-      h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => 'Delete' }),
+      h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
   },
 ]
 
@@ -79,14 +79,14 @@ async function handleCreate() {
     loadKeys()
   } else {
     const err = await res.json()
-    message.error(err.error || 'Failed')
+    message.error(err.error || '操作失败')
   }
 }
 
 async function handleDelete(id: string) {
   await fetch(`${API_BASE}/api-keys/${id}`, { method: 'DELETE' })
   loadKeys()
-  message.success('Key deleted')
+  message.success('密钥已删除')
 }
 
 onMounted(loadKeys)

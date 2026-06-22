@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2>Logs</h2>
+    <h2>日志</h2>
     <n-data-table :columns="columns" :data="logs" :bordered="false" :loading="loading" />
     <div style="margin-top: 16px">
       <n-pagination
@@ -26,23 +26,23 @@ const pageSize = 50
 const total = ref(0)
 
 const columns = [
-  { title: 'Time', key: 'created_at', width: 180 },
-  { title: 'Model', key: 'model_id', width: 180 },
-  { title: 'Provider', key: 'provider_id', width: 180 },
+  { title: '时间', key: 'created_at', width: 180 },
+  { title: '模型', key: 'model_id', width: 180 },
+  { title: '供应商', key: 'provider_id', width: 180 },
   {
-    title: 'Tokens (In/Out)',
+    title: 'Token（输入/输出）',
     key: 'tokens',
     width: 140,
     render: (row: any) => `${row.input_tokens} / ${row.output_tokens}`,
   },
-  { title: 'Latency (ms)', key: 'latency_ms', width: 120 },
+  { title: '延迟 (ms)', key: 'latency_ms', width: 120 },
   {
-    title: 'Status',
+    title: '状态',
     key: 'status',
     width: 100,
     render: (row: any) => row.status === 'success' ? '✅' : '❌',
   },
-  { title: 'Error', key: 'error_msg', ellipsis: { tooltip: true } },
+  { title: '错误', key: 'error_msg', ellipsis: { tooltip: true } },
 ]
 
 async function loadLogs() {

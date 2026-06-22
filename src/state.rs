@@ -19,6 +19,8 @@ pub struct AppState {
     /// anthropic 格式的 model_id → ProviderRoute
     pub anthropic_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
     pub db: SqlitePool,
+    /// 共享 HTTP 客户端（复用连接池）
+    pub client: reqwest::Client,
 }
 
 /// OpenAI /v1/models 响应格式
@@ -52,33 +54,4 @@ pub struct AnthropicModelEntry {
     pub entry_type: String,
     pub display_name: String,
     pub created_at: String,
-}
-
-/// 模型自动发现的请求/响应
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-pub struct OpenAIModelsResponse {
-    pub data: Vec<OpenAIModelData>,
-}
-
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-pub struct OpenAIModelData {
-    pub id: String,
-    pub owned_by: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-pub struct AnthropicModelsResponse {
-    pub data: Vec<AnthropicModelData>,
-}
-
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-pub struct AnthropicModelData {
-    pub id: String,
-    pub display_name: Option<String>,
-    #[serde(rename = "type")]
-    pub data_type: Option<String>,
 }

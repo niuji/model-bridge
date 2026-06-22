@@ -92,21 +92,37 @@ async fn proxy_to_provider(
     let target_url = format!("{}/v1/{}", route.base_url.trim_end_matches('/'), path);
 
     // 4. 构造转发请求
-    let client = reqwest::Client::new();
-    let mut req = client
-        .request(method.clone(), &target_url)
-        .header("Authorization", format!("Bearer {}", route.api_key));
+    let mut req = state
+        .client
+        .request(method.clone(), &target_url);
 
-    // 5. 透传 Content-Type
-    if let Some(content_type) = headers.get("content-type") {
-        if let Ok(ct) = content_type.to_str() {
-            req = req.header("Content-Type", ct);
+    // 根据 API 格式设置认证头
+    match api_format {
+        "anthropic" => {
+            req = req.header("x-api-key", &route.api_key);
+        }
+        _ => {
+            req = req.header("Authorization", format!("Bearer {}", route.api_key));
         }
     }
 
-    // 6. 发送请求
+    // 5. 透传客户端关键请求头
+    for header_name in &["content-type", "anthropic-version"] {
+        if let Some(value) = headers.get(*header_name) {
+            if let Ok(v) = value.to_str() {
+                req = req.header(*header_name, v);
+            }
+        }
+    }
+
+    // 6. 发送请求（带超时）
     let start = std::time::Instant::now();
-    match req.body(body.to_vec()).send().await {
+    match req
+        .timeout(std::time::Duration::from_secs(120))
+        .body(body.to_vec())
+        .send()
+        .await
+    {
         Ok(resp) => {
             let is_stream = resp
                 .headers()
@@ -140,10 +156,19 @@ async fn proxy_to_provider(
                 Some(e.to_string()),
             ));
 
+            // 根据错误类型返回更具体的信息
+            let (status, detail) = if e.is_timeout() {
+                (StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
+            } else if e.is_connect() {
+                (StatusCode::BAD_GATEWAY, "upstream connection failed")
+            } else {
+                (StatusCode::BAD_GATEWAY, "upstream error")
+            };
+
             (
-                StatusCode::BAD_GATEWAY,
+                status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
-                serde_json::json!({"error": format!("upstream error: {}", e)}).to_string(),
+                serde_json::json!({"error": detail, "detail": e.to_string()}).to_string(),
             )
                 .into_response()
         }
@@ -177,10 +202,11 @@ async fn proxy_buffered_response(
                 None,
             ));
 
-            // 构造响应
+            // 构造响应，透传上游响应头（仅过滤 hop-by-hop 头）
             let mut response = Response::builder().status(status);
             for (key, value) in resp_headers.iter() {
-                if key != "transfer-encoding" && key != "content-encoding" {
+                // 只过滤 transfer-encoding（axum 会自行处理），保留 content-encoding
+                if key != "transfer-encoding" {
                     response = response.header(key, value);
                 }
             }
@@ -203,14 +229,14 @@ async fn proxy_buffered_response(
             (
                 StatusCode::BAD_GATEWAY,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
-                serde_json::json!({"error": format!("failed to read response: {}", e)}).to_string(),
+                serde_json::json!({"error": "failed to read response", "detail": e.to_string()}).to_string(),
             )
                 .into_response()
         }
     }
 }
 
-/// 处理 SSE 流式响应：逐块透传
+/// 处理 SSE 流式响应：逐块透传，流结束时从最后 chunk 提取 usage
 async fn proxy_streaming_response(
     state: Arc<AppState>,
     resp: reqwest::Response,
@@ -223,7 +249,7 @@ async fn proxy_streaming_response(
 
     // 构造流式 body
     let mut stream = resp.bytes_stream();
-    let (tx, rx) = tokio::sync::mpsc::channel::<std::result::Result<bytes::Bytes, axum::Error>>(32);
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::result::Result<bytes::Bytes, axum::Error>>(64);
 
     let state_final = state.clone();
     let model_final = model.clone();
@@ -231,14 +257,24 @@ async fn proxy_streaming_response(
     let start_clone = start;
 
     tokio::spawn(async move {
+        let mut has_error = false;
+        // 缓存最后一个 SSE data chunk，流结束时从中提取 usage
+        let mut last_data: Vec<u8> = Vec::new();
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
+                    // 尝试从 SSE data 帧中提取 usage 信息
+                    // 格式: data: {"choices":[...], "usage":{...}}
+                    // 或: data: {"type":"message_stop", "usage":{...}} (Anthropic SSE)
+                    if let Some(usage_bytes) = extract_sse_data(&bytes) {
+                        last_data = usage_bytes;
+                    }
                     if tx.send(Ok(bytes)).await.is_err() {
                         break; // client disconnected
                     }
                 }
                 Err(e) => {
+                    has_error = true;
                     let latency_ms = start_clone.elapsed().as_millis() as i64;
                     tokio::spawn(write_usage(
                         state_final.clone(),
@@ -255,33 +291,54 @@ async fn proxy_streaming_response(
             }
         }
         // 流结束时写入 usage
-        let latency_ms = start_clone.elapsed().as_millis() as i64;
-        tokio::spawn(write_usage(
-            state_final,
-            model_final,
-            provider_final,
-            0,
-            0,
-            latency_ms,
-            "success",
-            None,
-        ));
+        if !has_error {
+            let latency_ms = start_clone.elapsed().as_millis() as i64;
+            let usage = extract_usage_from_response(&last_data);
+            tokio::spawn(write_usage(
+                state_final,
+                model_final,
+                provider_final,
+                usage.0,
+                usage.1,
+                latency_ms,
+                "success",
+                None,
+            ));
+        }
     });
 
     let stream_body = Body::from_stream(
         tokio_stream::wrappers::ReceiverStream::new(rx),
     );
 
-    // 构造响应
+    // 构造响应，透传上游响应头
     let mut response = Response::builder().status(status);
     for (key, value) in resp_headers.iter() {
-        if key != "transfer-encoding" && key != "content-encoding" {
+        if key != "transfer-encoding" {
             response = response.header(key, value);
         }
     }
     response
         .body(stream_body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// 从 SSE 字节块中提取 data 行内容（去掉 "data: " 前缀）
+/// 返回用于后续 usage 提取的 JSON 字节
+fn extract_sse_data(chunk: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(chunk).ok()?;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("data: ") {
+            let json_str = &trimmed[6..];
+            // 跳过 [DONE] 标记
+            if json_str == "[DONE]" {
+                continue;
+            }
+            return Some(json_str.as_bytes().to_vec());
+        }
+    }
+    None
 }
 
 fn extract_model_from_body(body: &[u8]) -> Option<String> {
@@ -315,6 +372,7 @@ fn extract_usage_from_response(body: &[u8]) -> (i64, i64) {
     (0, 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_usage(
     state: Arc<AppState>,
     model_id: String,
@@ -325,7 +383,7 @@ async fn write_usage(
     status: &str,
     error_msg: Option<String>,
 ) {
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO usage_records (model_id, provider_id, input_tokens, output_tokens, latency_ms, status, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&model_id)
@@ -336,5 +394,8 @@ async fn write_usage(
     .bind(status)
     .bind(&error_msg)
     .execute(&state.db)
-    .await;
+    .await
+    {
+        tracing::error!("Failed to write usage record: {}", e);
+    }
 }

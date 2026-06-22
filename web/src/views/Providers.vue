@@ -1,33 +1,33 @@
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px">
-      <h2>Providers</h2>
-      <n-button type="primary" @click="showCreate = true">Add Provider</n-button>
+      <h2>供应商</h2>
+      <n-button type="primary" @click="showCreate = true">添加供应商</n-button>
     </div>
 
     <n-data-table :columns="columns" :data="providers" :bordered="false" />
 
     <!-- 创建/编辑弹窗 -->
-    <n-modal v-model:show="showCreate" title="Add Provider">
+    <n-modal v-model:show="showCreate" title="添加供应商">
       <n-card style="width: 560px" :bordered="false">
         <n-form :model="form" label-placement="left" label-width="160px">
-          <n-form-item label="Name">
-            <n-input v-model:value="form.name" placeholder="e.g. OpenAI, DeepSeek" />
+          <n-form-item label="名称">
+            <n-input v-model:value="form.name" placeholder="例如：OpenAI、DeepSeek" />
           </n-form-item>
-          <n-form-item label="OpenAI Base URL">
+          <n-form-item label="OpenAI 基础 URL">
             <n-input v-model:value="form.openai_base_url" placeholder="https://api.openai.com" />
           </n-form-item>
-          <n-form-item label="Anthropic Base URL">
+          <n-form-item label="Anthropic 基础 URL">
             <n-input v-model:value="form.anthropic_base_url" placeholder="https://api.anthropic.com" />
           </n-form-item>
-          <n-form-item label="API Key">
+          <n-form-item label="API 密钥">
             <n-input v-model:value="form.api_key" type="password" placeholder="sk-..." />
           </n-form-item>
         </n-form>
         <template #footer>
           <n-space justify="end">
-            <n-button @click="showCreate = false">Cancel</n-button>
-            <n-button type="primary" @click="handleCreate" :loading="submitting">Save</n-button>
+            <n-button @click="showCreate = false">取消</n-button>
+            <n-button type="primary" @click="handleCreate" :loading="submitting">保存</n-button>
           </n-space>
         </template>
       </n-card>
@@ -59,7 +59,7 @@ const submitting = ref(false)
 const form = ref({ name: '', openai_base_url: '', anthropic_base_url: '', api_key: '' })
 
 const columns = [
-  { title: 'Name', key: 'name', width: 160 },
+  { title: '名称', key: 'name', width: 160 },
   {
     title: 'OpenAI URL',
     key: 'openai_base_url',
@@ -73,19 +73,19 @@ const columns = [
     render: (row: Provider) => row.anthropic_base_url || '-',
   },
   {
-    title: 'Enabled',
+    title: '启用',
     key: 'is_enabled',
     width: 90,
     render: (row: Provider) => row.is_enabled ? '✅' : '❌',
   },
   {
-    title: 'Actions',
+    title: '操作',
     key: 'actions',
     width: 150,
     render: (row: Provider) =>
       h(NSpace, {}, [
-        h(NButton, { size: 'small', onClick: () => handleToggle(row) }, { default: () => row.is_enabled ? 'Disable' : 'Enable' }),
-        h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => 'Delete' }),
+        h(NButton, { size: 'small', onClick: () => handleToggle(row) }, { default: () => row.is_enabled ? '禁用' : '启用' }),
+        h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
       ]),
   },
 ]
@@ -107,13 +107,13 @@ async function handleCreate() {
       body: JSON.stringify(body),
     })
     if (res.ok) {
-      message.success('Provider created')
+      message.success('供应商创建成功')
       showCreate.value = false
       form.value = { name: '', openai_base_url: '', anthropic_base_url: '', api_key: '' }
       loadProviders()
     } else {
       const err = await res.json()
-      message.error(err.error || 'Failed to create provider')
+      message.error(err.error || '创建供应商失败')
     }
   } finally {
     submitting.value = false
@@ -135,14 +135,14 @@ async function handleToggle(provider: Provider) {
     })
     loadProviders()
   } catch (e) {
-    message.error('Failed to update provider')
+    message.error('更新供应商失败')
   }
 }
 
 async function handleDelete(id: string) {
   await fetch(`${API_BASE}/providers/${id}`, { method: 'DELETE' })
   loadProviders()
-  message.success('Provider deleted')
+  message.success('供应商已删除')
 }
 
 onMounted(loadProviders)

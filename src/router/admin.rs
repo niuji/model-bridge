@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::Digest;
 use std::sync::Arc;
 
@@ -63,6 +63,7 @@ pub async fn create_provider(
     }
 
     let (openai_ok, anthropic_ok) = provider_svc::validate_provider(
+        &state.client,
         req.openai_base_url.as_deref(),
         req.anthropic_base_url.as_deref(),
         &req.api_key,
@@ -123,6 +124,15 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
+    // 验证至少配置了一个 URL（与 create_provider 保持一致）
+    if req.openai_base_url.is_none() && req.anthropic_base_url.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "at least one of openai_base_url or anthropic_base_url is required"})),
+        )
+            .into_response();
+    }
+
     match provider_svc::update_provider(
         &state.db,
         &id,
@@ -179,24 +189,11 @@ pub async fn delete_provider(
 
 pub async fn refresh_provider(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> impl IntoResponse {
-    match provider_svc::get_provider(&state.db, &id).await {
-        Ok(Some(_)) => {
-            if let Err(e) = provider_svc::refresh_routes(&state).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-                    .into_response();
-            }
-            Json(serde_json::json!({"status": "ok"})).into_response()
-        }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "provider not found"})),
-        )
-            .into_response(),
+    // 刷新所有 provider 的路由表（_id 保留用于未来按需刷新单个 provider）
+    match provider_svc::refresh_routes(&state).await {
+        Ok(_) => Json(serde_json::json!({"status": "ok"})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -206,16 +203,6 @@ pub async fn refresh_provider(
 }
 
 // ===== API Key handlers =====
-
-#[derive(Serialize)]
-#[allow(dead_code)]
-pub struct ApiKeyResponse {
-    pub id: String,
-    pub name: String,
-    pub key: String,
-    pub is_enabled: bool,
-    pub created_at: String,
-}
 
 pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let keys = sqlx::query_as::<_, crate::db::models::ApiKey>(
