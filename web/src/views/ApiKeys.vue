@@ -35,7 +35,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
-import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NAlert, useMessage } from 'naive-ui'
+import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NAlert, NIcon, useMessage } from 'naive-ui'
 
 const message = useMessage()
 const API_BASE = '/api/admin'
@@ -46,19 +46,35 @@ const showKey = ref(false)
 const newKey = ref('')
 const form = ref({ name: '' })
 
+// 复制图标 SVG
+const CopyIcon = () =>
+  h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('rect', { x: '9', y: '9', width: '13', height: '13', rx: '2', ry: '2' }),
+    h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }),
+  ])
+
 const columns = [
-  { title: '名称', key: 'name', width: 200 },
-  { title: '创建时间', key: 'created_at', width: 200 },
-  { title: '启用', key: 'is_enabled', width: 80, render: (row: any) => row.is_enabled ? '✅' : '❌' },
+  { title: '名称', key: 'name', width: 160 },
+  {
+    title: '密钥',
+    key: 'key_preview',
+    ellipsis: { tooltip: true },
+    render: (row: any) =>
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [
+        h('code', { style: { fontSize: '13px' } }, row.key_preview || '-'),
+        h(NButton, { size: 'tiny', text: true, onClick: () => handleCopy(row.id) }, {
+          default: () => h(NIcon, { size: 16 }, { default: CopyIcon }),
+        }),
+      ]),
+  },
+  { title: '创建时间', key: 'created_at', width: 180 },
+  { title: '启用', key: 'is_enabled', width: 70, render: (row: any) => row.is_enabled ? '✅' : '❌' },
   {
     title: '操作',
     key: 'actions',
-    width: 160,
+    width: 80,
     render: (row: any) =>
-      h(NSpace, {}, [
-        h(NButton, { size: 'small', onClick: () => handleCopy(row.id) }, { default: () => '复制' }),
-        h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
-      ]),
+      h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
   },
 ]
 

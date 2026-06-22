@@ -205,22 +205,33 @@ pub async fn refresh_provider(
 // ===== API Key handlers =====
 
 pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let keys = sqlx::query_as::<_, crate::db::models::ApiKey>(
-        "SELECT id, key_hash, name, is_enabled, created_at FROM api_keys ORDER BY created_at DESC",
+    #[derive(sqlx::FromRow)]
+    struct ApiKeyRow {
+        id: String,
+        api_key: String,
+        name: Option<String>,
+        is_enabled: bool,
+        created_at: chrono::NaiveDateTime,
+    }
+
+    let rows = sqlx::query_as::<_, ApiKeyRow>(
+        "SELECT id, api_key, name, is_enabled, created_at FROM api_keys ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await;
 
-    match keys {
-        Ok(keys) => {
-            let result: Vec<serde_json::Value> = keys
+    match rows {
+        Ok(rows) => {
+            let result: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|k| {
+                    let key_preview = mask_key(&k.api_key);
                     serde_json::json!({
                         "id": k.id,
                         "name": k.name,
                         "is_enabled": k.is_enabled,
                         "created_at": k.created_at.to_string(),
+                        "key_preview": key_preview,
                     })
                 })
                 .collect();
@@ -232,6 +243,19 @@ pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoRespo
         )
             .into_response(),
     }
+}
+
+/// 脱敏显示密钥：mb-xxx...xxx（前3后4）
+fn mask_key(key: &str) -> String {
+    if key.len() <= 10 {
+        return key.to_string();
+    }
+    // 格式: mb-{uuid}，去掉 mb- 前缀后取前3后4
+    let body = if key.starts_with("mb-") { &key[3..] } else { key };
+    if body.len() <= 7 {
+        return key.to_string();
+    }
+    format!("mb-{}...{}", &body[..3], &body[body.len()-4..])
 }
 
 #[derive(Deserialize)]
