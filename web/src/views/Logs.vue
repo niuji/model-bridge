@@ -20,7 +20,7 @@ import { NDataTable, NPagination } from 'naive-ui'
 const API_BASE = '/api/admin'
 
 const logs = ref<any[]>([])
-const loading = ref(false)
+const loading = ref(true)
 const page = ref(1)
 const pageSize = 50
 const total = ref(0)

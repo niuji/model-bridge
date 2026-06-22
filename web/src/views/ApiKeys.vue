@@ -5,7 +5,7 @@
       <n-button type="primary" @click="showCreate = true">生成密钥</n-button>
     </div>
 
-    <n-data-table :columns="columns" :data="keys" :bordered="false" />
+    <n-data-table :columns="columns" :data="keys" :loading="loading" :bordered="false" />
 
     <n-modal v-model:show="showCreate" title="生成 API 密钥">
       <n-card style="width: 400px" :bordered="false">
@@ -22,28 +22,19 @@
         </template>
       </n-card>
     </n-modal>
-
-    <!-- 显示 key 的弹窗 -->
-    <n-modal v-model:show="showKey" title="API 密钥已生成" :mask-closable="false">
-      <n-card style="width: 500px" :bordered="false">
-        <n-alert type="warning" title="请立即复制此密钥，关闭后将不再显示。" style="margin-bottom: 12px" />
-        <n-input v-model:value="newKey" readonly />
-      </n-card>
-    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
-import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NAlert, NIcon, NSwitch, useMessage } from 'naive-ui'
+import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NIcon, NSwitch, useMessage } from 'naive-ui'
 
 const message = useMessage()
 const API_BASE = '/api/admin'
 
 const keys = ref<any[]>([])
+const loading = ref(true)
 const showCreate = ref(false)
-const showKey = ref(false)
-const newKey = ref('')
 const form = ref({ name: '' })
 
 // 复制图标 SVG
@@ -96,8 +87,13 @@ async function handleCopy(id: string) {
 }
 
 async function loadKeys() {
-  const res = await fetch(`${API_BASE}/api-keys`)
-  keys.value = await res.json()
+  loading.value = true
+  try {
+    const res = await fetch(`${API_BASE}/api-keys`)
+    keys.value = await res.json()
+  } finally {
+    loading.value = false
+  }
 }
 
 async function handleCreate() {
@@ -107,12 +103,10 @@ async function handleCreate() {
     body: JSON.stringify({ name: form.value.name }),
   })
   if (res.ok) {
-    const data = await res.json()
-    newKey.value = data.key
     showCreate.value = false
-    showKey.value = true
     form.value.name = ''
     loadKeys()
+    message.success('密钥已生成')
   } else {
     const err = await res.json()
     message.error(err.error || '操作失败')
