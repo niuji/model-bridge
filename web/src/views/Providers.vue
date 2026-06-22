@@ -75,18 +75,16 @@ const columns = [
   {
     title: '启用',
     key: 'is_enabled',
-    width: 90,
-    render: (row: Provider) => row.is_enabled ? '✅' : '❌',
+    width: 80,
+    render: (row: Provider) =>
+      h(NSwitch, { value: row.is_enabled, onUpdateValue: (v: boolean) => handleToggle(row, v) }),
   },
   {
     title: '操作',
     key: 'actions',
-    width: 150,
+    width: 80,
     render: (row: Provider) =>
-      h(NSpace, {}, [
-        h(NButton, { size: 'small', onClick: () => handleToggle(row) }, { default: () => row.is_enabled ? '禁用' : '启用' }),
-        h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
-      ]),
+      h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
   },
 ]
 
@@ -120,13 +118,13 @@ async function handleCreate() {
   }
 }
 
-async function handleToggle(provider: Provider) {
+async function handleToggle(provider: Provider, enabled: boolean) {
   try {
     const body: any = {
       name: provider.name,
       openai_base_url: provider.openai_base_url,
       anthropic_base_url: provider.anthropic_base_url,
-      is_enabled: !provider.is_enabled,
+      is_enabled: enabled,
     }
     await fetch(`${API_BASE}/providers/${provider.id}`, {
       method: 'PUT',

@@ -35,7 +35,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
-import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NAlert, NIcon, useMessage } from 'naive-ui'
+import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NAlert, NIcon, NSwitch, useMessage } from 'naive-ui'
 
 const message = useMessage()
 const API_BASE = '/api/admin'
@@ -68,7 +68,9 @@ const columns = [
       ]),
   },
   { title: '创建时间', key: 'created_at', width: 180 },
-  { title: '启用', key: 'is_enabled', width: 70, render: (row: any) => row.is_enabled ? '✅' : '❌' },
+  { title: '启用', key: 'is_enabled', width: 80, render: (row: any) =>
+    h(NSwitch, { value: row.is_enabled, onUpdateValue: (v: boolean) => handleToggle(row.id, v) }),
+  },
   {
     title: '操作',
     key: 'actions',
@@ -121,6 +123,19 @@ async function handleDelete(id: string) {
   await fetch(`${API_BASE}/api-keys/${id}`, { method: 'DELETE' })
   loadKeys()
   message.success('密钥已删除')
+}
+
+async function handleToggle(id: string, enabled: boolean) {
+  try {
+    await fetch(`${API_BASE}/api-keys/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_enabled: enabled }),
+    })
+    loadKeys()
+  } catch {
+    message.error('更新失败')
+  }
 }
 
 onMounted(loadKeys)

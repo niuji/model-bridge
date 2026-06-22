@@ -346,6 +346,36 @@ pub async fn get_api_key(
     }
 }
 
+#[derive(Deserialize)]
+pub struct ToggleApiKeyRequest {
+    pub is_enabled: bool,
+}
+
+pub async fn toggle_api_key(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<ToggleApiKeyRequest>,
+) -> impl IntoResponse {
+    match sqlx::query("UPDATE api_keys SET is_enabled = ? WHERE id = ?")
+        .bind(req.is_enabled)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+    {
+        Ok(result) if result.rows_affected() > 0 => Json(serde_json::json!({ "status": "ok" })).into_response(),
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "api key not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 // ===== Stats handlers =====
 
 pub async fn stats_overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
