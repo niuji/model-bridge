@@ -22,6 +22,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         CREATE TABLE IF NOT EXISTS api_keys (
             id TEXT PRIMARY KEY,
             key_hash TEXT UNIQUE NOT NULL,
+            api_key TEXT NOT NULL DEFAULT '',
             name TEXT,
             is_enabled INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -30,6 +31,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // 迁移：为旧表添加 api_key 列
+    sqlx::query("ALTER TABLE api_keys ADD COLUMN api_key TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok(); // 忽略 "duplicate column" 错误
 
     sqlx::query(
         r#"

@@ -49,15 +49,33 @@ const form = ref({ name: '' })
 const columns = [
   { title: '名称', key: 'name', width: 200 },
   { title: '创建时间', key: 'created_at', width: 200 },
-  { title: '启用', key: 'is_enabled', width: 100, render: (row: any) => row.is_enabled ? '✅' : '❌' },
+  { title: '启用', key: 'is_enabled', width: 80, render: (row: any) => row.is_enabled ? '✅' : '❌' },
   {
     title: '操作',
     key: 'actions',
-    width: 100,
+    width: 160,
     render: (row: any) =>
-      h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
+      h(NSpace, {}, [
+        h(NButton, { size: 'small', onClick: () => handleCopy(row.id) }, { default: () => '复制' }),
+        h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row.id) }, { default: () => '删除' }),
+      ]),
   },
 ]
+
+async function handleCopy(id: string) {
+  try {
+    const res = await fetch(`${API_BASE}/api-keys/${id}`)
+    if (res.ok) {
+      const data = await res.json()
+      await navigator.clipboard.writeText(data.key)
+      message.success('密钥已复制到剪贴板')
+    } else {
+      message.error('获取密钥失败')
+    }
+  } catch {
+    message.error('复制失败')
+  }
+}
 
 async function loadKeys() {
   const res = await fetch(`${API_BASE}/api-keys`)

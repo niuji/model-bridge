@@ -248,9 +248,10 @@ pub async fn create_api_key(
     let key_hash = sha2::Sha256::digest(raw_key.as_bytes());
     let key_hash_hex = format!("{:x}", key_hash);
 
-    let result = sqlx::query("INSERT INTO api_keys (id, key_hash, name) VALUES (?, ?, ?)")
+    let result = sqlx::query("INSERT INTO api_keys (id, key_hash, api_key, name) VALUES (?, ?, ?, ?)")
         .bind(&id)
         .bind(&key_hash_hex)
+        .bind(&raw_key)
         .bind(&req.name)
         .execute(&state.db)
         .await;
@@ -285,6 +286,30 @@ pub async fn delete_api_key(
     {
         Ok(result) if result.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
         Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "api key not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn get_api_key(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let result = sqlx::query_scalar::<_, String>("SELECT api_key FROM api_keys WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    match result {
+        Ok(Some(key)) => Json(serde_json::json!({ "key": key })).into_response(),
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "api key not found"})),
         )
