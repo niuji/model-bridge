@@ -23,6 +23,11 @@ pub async fn get_openai_models(state: Arc<AppState>) -> Response {
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
 
+    tracing::info!(
+        "GET /openai/v1/models → {} models",
+        models.len()
+    );
+
     let result = OpenAIModelsList {
         object: "list".to_string(),
         data: models,
@@ -46,6 +51,11 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
 
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
+
+    tracing::info!(
+        "GET /anthropic/v1/models → {} models",
+        models.len()
+    );
 
     let result = AnthropicModelsList {
         data: models,

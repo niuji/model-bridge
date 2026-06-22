@@ -115,11 +115,14 @@ async fn proxy_to_provider(
         }
     }
 
-    // 6. 发送请求（带超时）
+    // 6. 注入 stream_options（确保上游在流式响应中返回 usage）
+    let request_body = inject_stream_options(api_format, body);
+
+    // 7. 发送请求（带超时）
     let start = std::time::Instant::now();
     match req
         .timeout(std::time::Duration::from_secs(120))
-        .body(body.to_vec())
+        .body(request_body)
         .send()
         .await
     {
@@ -264,16 +267,19 @@ async fn proxy_streaming_response(
 
     tokio::spawn(async move {
         let mut has_error = false;
-        // 缓存最后一个 SSE data chunk，流结束时从中提取 usage
-        let mut last_data: Vec<u8> = Vec::new();
+        // 累积所有 SSE 事件中的 usage（不能只取最后一个，Anthropic 的
+        // input_tokens 在 message_start，output_tokens 在 message_delta）
+        let mut acc_usage = (0i64, 0i64, 0i64, 0i64); // (input, output, cache_read, cache_write)
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
-                    // 尝试从 SSE data 帧中提取 usage 信息
-                    // 格式: data: {"choices":[...], "usage":{...}}
-                    // 或: data: {"type":"message_stop", "usage":{...}} (Anthropic SSE)
-                    if let Some(usage_bytes) = extract_sse_data(&bytes) {
-                        last_data = usage_bytes;
+                    // 从每个 SSE data 帧提取并累积 usage
+                    if let Some(data_bytes) = extract_sse_data(&bytes) {
+                        let u = extract_usage_from_sse_event(&data_bytes);
+                        acc_usage.0 += u.0;
+                        acc_usage.1 += u.1;
+                        acc_usage.2 += u.2;
+                        acc_usage.3 += u.3;
                     }
                     if tx.send(Ok(bytes)).await.is_err() {
                         break; // client disconnected
@@ -298,18 +304,17 @@ async fn proxy_streaming_response(
                 }
             }
         }
-        // 流结束时写入 usage
+        // 流结束时写入累积的 usage
         if !has_error {
             let latency_ms = start_clone.elapsed().as_millis() as i64;
-            let usage = extract_usage_from_response(&last_data);
             tokio::spawn(write_usage(
                 state_final,
                 model_final,
                 provider_final,
-                usage.0,
-                usage.1,
-                usage.2,
-                usage.3,
+                acc_usage.0,
+                acc_usage.1,
+                acc_usage.2,
+                acc_usage.3,
                 latency_ms,
                 "success",
                 None,
@@ -351,6 +356,76 @@ fn extract_sse_data(chunk: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// 从单个 SSE 事件 JSON 中提取 usage，支持：
+/// - OpenAI SSE: {"usage": {"prompt_tokens":..., "completion_tokens":...}}
+/// - Anthropic message_start: {"message": {"usage": {"input_tokens":..., ...}}}
+/// - Anthropic message_delta: {"usage": {"output_tokens":...}}
+fn extract_usage_from_sse_event(data: &[u8]) -> (i64, i64, i64, i64) {
+    let v: serde_json::Value = match serde_json::from_slice(data) {
+        Ok(v) => v,
+        Err(_) => return (0, 0, 0, 0),
+    };
+
+    // 记录事件类型和原始 usage 数据，方便排查格式问题
+    let event_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    // Anthropic message_start: usage 在 message.usage 下
+    if event_type == "message_start" {
+        if let Some(msg_usage) = v.get("message").and_then(|m| m.get("usage")) {
+            let input = msg_usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache_read = msg_usage.get("cache_read_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache_write = msg_usage.get("cache_creation_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+            tracing::info!(
+                "SSE usage: type={}, input={}, output=0, cache_read={}, cache_write={}",
+                event_type, input, cache_read, cache_write
+            );
+            return (input, 0, cache_read, cache_write);
+        }
+        // message_start 但没有 usage — 记录原始数据
+        let preview = String::from_utf8_lossy(data);
+        tracing::info!("SSE message_start without usage: {}", preview.chars().take(512).collect::<String>());
+    }
+
+    // 通用: usage 在顶层
+    if let Some(usage) = v.get("usage") {
+        // OpenAI SSE: prompt_tokens, completion_tokens
+        let o_input = usage.get("prompt_tokens").and_then(|v| v.as_i64());
+        let o_output = usage.get("completion_tokens").and_then(|v| v.as_i64());
+        if o_input.is_some() || o_output.is_some() {
+            let cache_read = usage
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let result = (o_input.unwrap_or(0), o_output.unwrap_or(0), cache_read, 0);
+            tracing::info!(
+                "SSE usage: type={}, input={}, output={}, cache_read={}, (OpenAI path)",
+                event_type, result.0, result.1, result.2
+            );
+            return result;
+        }
+        // Anthropic message_delta / message_stop: input_tokens, output_tokens
+        let input = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+        let output = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+        let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+        let cache_write = usage.get("cache_creation_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+        let result = (input, output, cache_read, cache_write);
+        tracing::info!(
+            "SSE usage: type={}, input={}, output={}, cache_read={}, cache_write={} (Anthropic path)",
+            event_type, result.0, result.1, result.2, result.3
+        );
+        return result;
+    }
+
+    // 有 type 但没有 usage — 记录 unexpected 事件
+    if matches!(event_type, "message_delta" | "message_stop" | "content_block_stop" | "message_start") {
+        let preview = String::from_utf8_lossy(data);
+        tracing::info!("SSE event without usage: type={}, data={}", event_type, preview.chars().take(512).collect::<String>());
+    }
+
+    (0, 0, 0, 0)
+}
+
 fn extract_model_from_body(body: &[u8]) -> Option<String> {
     if body.is_empty() {
         return None;
@@ -358,6 +433,32 @@ fn extract_model_from_body(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("model")?.as_str().map(|s| s.to_string()))
+}
+
+/// 对于 OpenAI 格式的流式请求，注入 stream_options 确保上游返回完整 usage
+fn inject_stream_options(api_format: &str, body: &[u8]) -> Vec<u8> {
+    if api_format == "anthropic" || body.is_empty() {
+        return body.to_vec();
+    }
+
+    let mut v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return body.to_vec(),
+    };
+
+    // 只在 stream=true 时注入
+    let is_stream = v.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    if !is_stream {
+        return body.to_vec();
+    }
+
+    // 如果已有 stream_options 则不动
+    if v.get("stream_options").is_some() {
+        return body.to_vec();
+    }
+
+    v["stream_options"] = serde_json::json!({"include_usage": true});
+    serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())
 }
 
 fn extract_usage_from_response(body: &[u8]) -> (i64, i64, i64, i64) {

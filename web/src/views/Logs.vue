@@ -26,7 +26,7 @@ const columns = [
   { title: '状态', key: 'status', width: 90, align: 'center', render: (row: any) => { const ok = row.status === 'success'; return h('span', { class: `status-badge ${ok ? 'success' : 'error'}` }, [h('span', { class: 'status-dot-sm' }), h('span', { class: 'mono status-text' }, ok ? 'OK' : 'ERR')]) } },
   { title: '错误', key: 'error_msg', ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono error-cell' }, row.error_msg || '—') },
 ]
-async function loadLogs() { loading.value = true; try { const res = await fetch(`${API_BASE}/stats/daily?days=30`); const data = await res.json(); logs.value = data; total.value = data.length } finally { loading.value = false } }
+async function loadLogs() { loading.value = true; try { const res = await fetch(`${API_BASE}/logs?page=${page.value}&page_size=${pageSize}`); const data = await res.json(); logs.value = data.logs; total.value = data.total } finally { loading.value = false } }
 onMounted(loadLogs)
 </script>
 

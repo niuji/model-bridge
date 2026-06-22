@@ -31,6 +31,73 @@ pub struct DailyStats {
 }
 
 #[derive(Serialize)]
+pub struct LogEntry {
+    pub id: i64,
+    pub api_key_id: Option<String>,
+    pub model_id: String,
+    pub provider_id: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub latency_ms: i64,
+    pub status: String,
+    pub error_msg: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Serialize)]
+pub struct PaginatedLogs {
+    pub logs: Vec<LogEntry>,
+    pub total: i64,
+}
+
+pub async fn get_logs(pool: &SqlitePool, page: i64, page_size: i64) -> anyhow::Result<PaginatedLogs> {
+    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_records")
+        .fetch_one(pool)
+        .await?;
+
+    let offset = (page - 1).max(0) * page_size;
+    let rows = sqlx::query_as::<_, (i64, Option<String>, String, String, i64, i64, i64, i64, i64, String, Option<String>, String)>(
+        r#"
+        SELECT id, api_key_id, model_id, provider_id,
+               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+               latency_ms, status, error_msg,
+               strftime('%Y-%m-%d %H:%M:%S', created_at) as created_at
+        FROM usage_records
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        "#,
+    )
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    let logs = rows
+        .into_iter()
+        .map(|(id, api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, created_at)| {
+            LogEntry {
+                id,
+                api_key_id,
+                model_id,
+                provider_id,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                latency_ms,
+                status,
+                error_msg,
+                created_at,
+            }
+        })
+        .collect();
+
+    Ok(PaginatedLogs { logs, total: total.0 })
+}
+
+#[derive(Serialize)]
 pub struct HourlyStats {
     pub hour: String,
     pub total_tokens: i64,

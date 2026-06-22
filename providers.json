@@ -15,15 +15,19 @@
     "icon": "deepseek.svg",
     "models_endpoint": "https://api.deepseek.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.deepseek.com" }
+      { "type": "openai_chat", "base_url": "https://api.deepseek.com" },
+      { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic" }
     ]
   },
   {
     "id": "minimax",
     "name": "MiniMax",
     "icon": "minimax.ico",
+    "models_endpoint": "https://api.minimaxi.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.minimaxi.com" }
+      { "type": "openai_chat", "base_url": "https://api.minimaxi.com" },
+      { "type": "openai_responses", "base_url": "https://api.minimaxi.com" },
+      { "type": "anthropic", "base_url": "https://api.minimaxi.com/anthropic" }
     ]
   },
   {

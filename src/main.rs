@@ -1,7 +1,6 @@
 mod admin;
 mod config;
 mod db;
-mod middleware;
 mod router;
 mod state;
 

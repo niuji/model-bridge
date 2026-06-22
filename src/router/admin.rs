@@ -307,6 +307,33 @@ pub async fn toggle_api_key(
     }
 }
 
+// ===== Logs handlers =====
+
+#[derive(Deserialize, Default)]
+pub struct LogsQuery {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_page_size")]
+    pub page_size: i64,
+}
+
+fn default_page() -> i64 { 1 }
+fn default_page_size() -> i64 { 50 }
+
+pub async fn stats_logs(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<LogsQuery>,
+) -> impl IntoResponse {
+    match stats_svc::get_logs(&state.db, params.page, params.page_size).await {
+        Ok(data) => Json(data).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 // ===== Stats handlers =====
 
 pub async fn stats_overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
