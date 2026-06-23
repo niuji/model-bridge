@@ -103,29 +103,61 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         .fetch_all(&state.db)
         .await?;
 
-        for channel in &channels {
-            if !channel.is_enabled {
-                continue;
-            }
-            for model in &models {
+        // 分离启用的 anthropic channel 与 openai channel。
+        // openai_chat / openai_responses 同一 provider 下 base_url 相同，合并为一条 route，
+        // channels 字段记录该 provider 实际启用了哪些 openai channel type，供 proxy 按请求 path 过滤。
+        let enabled: Vec<&ChannelDetail> = channels.iter().filter(|c| c.is_enabled).collect();
+        let openai_channels: Vec<&ChannelDetail> = enabled
+            .iter()
+            .copied()
+            .filter(|c| c.channel_type != "anthropic")
+            .collect();
+        let anthropic_channels: Vec<&ChannelDetail> = enabled
+            .iter()
+            .copied()
+            .filter(|c| c.channel_type == "anthropic")
+            .collect();
+
+        let openai_channel_types: Vec<String> = openai_channels
+            .iter()
+            .map(|c| c.channel_type.clone())
+            .collect();
+
+        for model in &models {
+            // openai route：provider 至少启用一个 openai channel 才插入；base_url 取首个 openai channel
+            if let Some(first_openai) = openai_channels.first() {
                 let route = ProviderRoute {
                     provider_id: def.id.clone(),
                     provider_name: def.name.clone(),
                     model_id: model.model_id.clone(),
                     model_name: model.model_name.clone(),
-                    base_url: channel.base_url.clone(),
+                    base_url: first_openai.base_url.clone(),
                     api_key: api_key.clone(),
+                    channels: openai_channel_types.clone(),
                 };
-                // HashMap key 用小写，实现大小写不敏感匹配
-                let key = model.model_id.to_lowercase();
-                match channel.channel_type.as_str() {
-                    "anthropic" => {
-                        anthropic_routes.insert(key, route);
-                    }
-                    _ => {
-                        openai_routes.insert(key, route);
-                    }
-                }
+                openai_routes.insert(route.model_id.to_lowercase(), route);
+            }
+
+            // anthropic route：每个启用的 anthropic channel 各插一条（不同 channel 的 base_url 可能不同）
+            for ch in &anthropic_channels {
+                let route = ProviderRoute {
+                    provider_id: def.id.clone(),
+                    provider_name: def.name.clone(),
+                    model_id: model.model_id.clone(),
+                    model_name: model.model_name.clone(),
+                    base_url: ch.base_url.clone(),
+                    api_key: api_key.clone(),
+                    channels: Vec::new(),
+                };
+                // anthropic 路由表的检索 id 全小写；非 claude-/anthropic 开头的模型
+                // 补 claude- 前缀，使 Claude Code 等网关客户端能识别。
+                let lower = route.model_id.to_lowercase();
+                let key = if lower.starts_with("claude") || lower.starts_with("anthropic") {
+                    lower
+                } else {
+                    format!("claude-{}", lower)
+                };
+                anthropic_routes.insert(key, route);
             }
         }
     }

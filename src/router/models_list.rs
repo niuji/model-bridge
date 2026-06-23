@@ -9,7 +9,6 @@ pub async fn get_openai_models(state: Arc<AppState>) -> Response {
     let routes = state.openai_routes.read().await;
     let mut models: Vec<OpenAIModelEntry> = Vec::with_capacity(routes.len());
 
-    // 按 provider 分组去重
     for (_key, route) in routes.iter() {
         models.push(OpenAIModelEntry {
             id: route.model_id.clone(),
@@ -19,13 +18,14 @@ pub async fn get_openai_models(state: Arc<AppState>) -> Response {
         });
     }
 
-    // 排序
+    // 排序后去重
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
 
     tracing::info!(
-        "GET /openai/v1/models → {} models",
-        models.len()
+        "GET /openai/v1/models → {} models: {:?}",
+        models.len(),
+        models
     );
 
     let result = OpenAIModelsList {
@@ -40,9 +40,10 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
     let routes = state.anthropic_routes.read().await;
     let mut models: Vec<AnthropicModelEntry> = Vec::with_capacity(routes.len());
 
-    for (_key, route) in routes.iter() {
+    // 对外暴露的 id 用路由表 key（已补 claude- 前缀且全小写），route.model_id 是转发上游用的原始 id。
+    for (key, route) in routes.iter() {
         models.push(AnthropicModelEntry {
-            id: route.model_id.clone(),
+            id: key.clone(),
             entry_type: "model".to_string(),
             display_name: route.model_name.clone(),
             created_at: String::new(),
@@ -53,8 +54,9 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
     models.dedup_by(|a, b| a.id == b.id);
 
     tracing::info!(
-        "GET /anthropic/v1/models → {} models",
-        models.len()
+        "GET /anthropic/v1/models → {} models: {:?}",
+        models.len(),
+        models
     );
 
     let result = AnthropicModelsList {

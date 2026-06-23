@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use tokio_stream::StreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
@@ -56,8 +57,41 @@ async fn handle_request(
         };
     }
 
-    // 提取 model，查路由，转发
-    proxy_to_provider(state, api_format, method, &path, headers, &body, api_key_id).await
+    // openai 入口仅识别 chat/completions、responses、models 三个子 path（共用同一张路由表）；其余记日志并 404。
+    // required_channel：该 path 对应的 channel type，命中 route 后校验 route.channels 是否包含它，
+    // 不含则视为无可用 provider 返回 404（即 provider 未声明该 channel 时不转发上游）。
+    let (routes_lock, required_channel): (
+        Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>>,
+        Option<&str>,
+    ) = match api_format {
+        "openai" => match path.as_str() {
+            "chat/completions" => (state.openai_routes.clone(), Some("openai_chat")),
+            "responses" => (state.openai_routes.clone(), Some("openai_responses")),
+            other => {
+                tracing::warn!("unsupported openai path: /openai/v1/{}", other);
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    format!(r#"{{"error":"unsupported path '/openai/v1/{}'"}}"#, other),
+                )
+                    .into_response();
+            }
+        },
+        _ => (state.anthropic_routes.clone(), None),
+    };
+
+    proxy_to_provider(
+        state,
+        api_format,
+        method,
+        &path,
+        headers,
+        &body,
+        api_key_id,
+        routes_lock,
+        required_channel,
+    )
+    .await
 }
 
 async fn proxy_to_provider(
@@ -68,16 +102,15 @@ async fn proxy_to_provider(
     headers: HeaderMap,
     body: &[u8],
     api_key_id: Option<String>,
+    routes_lock: Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>>,
+    required_channel: Option<&str>,
 ) -> Response {
     // 1. 从请求体提取 model 名（转小写用于路由查找）
     let model = extract_model_from_body(body).unwrap_or_default();
     let model_lower = model.to_lowercase();
 
-    // 2. 查对应路由表
-    let routes = match api_format {
-        "openai" => state.openai_routes.read().await,
-        _ => state.anthropic_routes.read().await,
-    };
+    // 2. 查传入的路由表
+    let routes = routes_lock.read().await;
 
     let route = match routes.get(&model_lower) {
         Some(r) => r.clone(),
@@ -95,6 +128,26 @@ async fn proxy_to_provider(
     };
 
     drop(routes);
+
+    // 2.1 openai 请求按 path 校验 route 是否支持对应 channel：
+    // provider 未声明该 channel 时直接 404，不转发上游。
+    if let Some(ch) = required_channel {
+        if !route.channels.iter().any(|c| c == ch) {
+            tracing::info!(
+                "model '{}' on /{} endpoint: provider '{}' has no '{}' channel, 404",
+                model, api_format, route.provider_id, ch
+            );
+            return (
+                StatusCode::NOT_FOUND,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                format!(
+                    r#"{{"error":"model '{}' not available on /{} endpoint (provider '{}' has no '{}' channel)"}}"#,
+                    model, api_format, route.provider_id, ch
+                ),
+            )
+                .into_response();
+        }
+    }
 
     // 3. 构造目标 URL
     let target_url = format!("{}/v1/{}", route.base_url.trim_end_matches('/'), path);
