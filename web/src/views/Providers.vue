@@ -17,7 +17,6 @@
           </div>
           <div class="card-channels">
             <div v-for="ch in p.channels" :key="ch.channel_type" class="channel-tag" :class="{ off: !ch.is_enabled }">
-              <span class="channel-dot" :class="{ on: ch.is_enabled }" />
               <span class="channel-label mono">{{ channelLabel(ch.channel_type) }}</span>
             </div>
           </div>
@@ -95,8 +94,6 @@ onMounted(loadProviders)
 .card-channels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 .channel-tag { display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 4px 10px; background: #faf8f4; border: 1px solid #e0dcd5; border-radius: 8px; color: #787870; }
 .channel-tag.off { text-decoration: line-through; opacity: 0.5; }
-.channel-dot { width: 5px; height: 5px; border-radius: 50%; background: #d5d0c8; transition: background 0.2s; }
-.channel-dot.on { background: #2d6a4f; }
 .card-footer { display: flex; justify-content: space-between; align-items: center; }
 .model-count { font-size: 12px; color: #a0a098; }
 .card-arrow { font-size: 14px; color: #d5d0c8; transition: color 0.2s, transform 0.2s; }
