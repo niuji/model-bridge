@@ -28,6 +28,7 @@ pub struct DailyStats {
     pub request_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub total_tokens: i64,
 }
 
 #[derive(Serialize)]
@@ -178,46 +179,78 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
 }
 
 pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec<DailyStats>> {
-    let rows = sqlx::query_as::<_, (String, i64, i64, i64)>(
+    // Generate the complete daily series over the window and LEFT JOIN the
+    // aggregated usage onto it, so days with no requests still appear with zero
+    // tokens (consistent with the hourly view).
+    let bound = format!("-{}", days);
+    let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(
         r#"
-        SELECT
-            DATE(created_at) as date,
-            COUNT(*) as cnt,
-            COALESCE(SUM(input_tokens), 0),
-            COALESCE(SUM(output_tokens), 0)
-        FROM usage_records
-        WHERE created_at >= datetime('now', ? || ' days')
-        GROUP BY DATE(created_at)
-        ORDER BY date ASC
+        WITH RECURSIVE days(d) AS (
+            SELECT DATE(datetime('now', ? || ' days'))
+            UNION ALL
+            SELECT DATE(d, '+1 day')
+            FROM days
+            WHERE d < DATE('now')
+        ),
+        agg AS (
+            SELECT DATE(created_at) as d,
+                   COUNT(*) as cnt,
+                   SUM(input_tokens) as inp,
+                   SUM(output_tokens) as outp,
+                   SUM(input_tokens + output_tokens) as tot
+            FROM usage_records
+            WHERE created_at >= datetime('now', ? || ' days')
+            GROUP BY DATE(created_at)
+        )
+        SELECT dd.d, COALESCE(a.cnt, 0), COALESCE(a.inp, 0), COALESCE(a.outp, 0), COALESCE(a.tot, 0)
+        FROM days dd
+        LEFT JOIN agg a ON a.d = dd.d
+        ORDER BY dd.d ASC
         "#,
     )
-    .bind(format!("-{}", days))
+    .bind(&bound)
+    .bind(&bound)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .into_iter()
         .map(
-            |(date, request_count, input_tokens, output_tokens)| DailyStats {
+            |(date, request_count, input_tokens, output_tokens, total_tokens)| DailyStats {
                 date,
                 request_count,
                 input_tokens,
                 output_tokens,
+                total_tokens,
             },
         )
         .collect())
 }
 
 pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlyStats>> {
+    // Generate the complete hourly series over the last 7 days (UTC) and LEFT JOIN
+    // the aggregated usage onto it, so hours with no requests still appear on the
+    // chart with zero tokens instead of being silently dropped by the GROUP BY.
     let rows = sqlx::query_as::<_, (String, i64)>(
         r#"
-        SELECT
-            strftime('%Y-%m-%dT%H:00:00Z', created_at) as hour,
-            COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens
-        FROM usage_records
-        WHERE created_at >= datetime('now', '-7 days')
-        GROUP BY strftime('%Y-%m-%dT%H:00:00Z', created_at)
-        ORDER BY hour ASC
+        WITH RECURSIVE hours(hour) AS (
+            SELECT strftime('%Y-%m-%dT%H:00:00Z', datetime('now', '-7 days'))
+            UNION ALL
+            SELECT strftime('%Y-%m-%dT%H:00:00Z', datetime(hour, '+1 hour'))
+            FROM hours
+            WHERE hour < strftime('%Y-%m-%dT%H:00:00Z', datetime('now'))
+        ),
+        agg AS (
+            SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at) as hour,
+                   SUM(input_tokens + output_tokens) as total_tokens
+            FROM usage_records
+            WHERE created_at >= datetime('now', '-7 days')
+            GROUP BY strftime('%Y-%m-%dT%H:00:00Z', created_at)
+        )
+        SELECT h.hour, COALESCE(a.total_tokens, 0) as total_tokens
+        FROM hours h
+        LEFT JOIN agg a ON a.hour = h.hour
+        ORDER BY h.hour ASC
         "#,
     )
     .fetch_all(pool)
