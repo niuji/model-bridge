@@ -54,10 +54,11 @@ Note: the Dockerfile does not copy `providers.json` into the image — mount it 
 
 ### Provider Configuration: JSON Definitions + DB Overrides
 
-Providers are defined in two layers that merge at runtime:
+Providers are defined in three layers that merge at startup:
 
 1. **`providers.json`** (static definition) — id, name, icon, `models_endpoint` (optional), and `channels` array (each with `type` and `base_url`). These are loaded once at startup into `AppState.provider_defs`.
-2. **SQLite tables** (user overrides) — `provider_config` (api_key, is_enabled), `provider_channel_config` (per-channel base_url override, is_enabled), `provider_models` (model whitelist).
+2. **`~/.mb/providers.json`** (user-local overrides) — same schema as `providers.json`. Loaded and merged into layer 1 at startup: same `id` replaces the builtin entry, new `id` is appended. Parse failures are logged and skipped; the file is optional. Use this for private or corporate providers that shouldn't be committed to the repo.
+3. **SQLite tables** (runtime overrides) — `provider_config` (api_key, is_enabled), `provider_channel_config` (per-channel base_url override, is_enabled), `provider_models` (model whitelist).
 
 The merge happens in `provider_svc::merge_channels()` and `list_providers()`/`get_provider()`. User overrides take precedence over JSON defaults. The model list stored in `provider_models` is what gets routed — it is populated either manually via the admin UI or fetched from the provider's `/v1/models` endpoint via the `fetch-models` button. Each `provider_models` row stores both a `model_id` (the canonical identifier sent to the upstream, case preserved) and a `model_name` (display name shown in the `/v1/models` listing).
 
