@@ -22,13 +22,14 @@
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
 import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NSwitch, NIcon, useMessage } from 'naive-ui'
+import { formatLocalTime } from '../utils'
 const message = useMessage(); const API_BASE = '/api/admin'
 const keys = ref<any[]>([]); const loading = ref(true); const showCreate = ref(false); const form = ref({ name: '' })
 const CopyIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '15', height: '15', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [h('rect', { x: '9', y: '9', width: '13', height: '13', rx: '2', ry: '2' }), h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' })])
 const columns = [
   { title: '名称', key: 'name', width: 180, render: (row: any) => h('span', { class: 'key-name' }, row.name || '未命名') },
   { title: '密钥', key: 'key_preview', ellipsis: { tooltip: true }, render: (row: any) => h('div', { class: 'key-preview-cell' }, [h('code', { class: 'key-preview mono' }, row.key_preview || '—'), h(NButton, { size: 'tiny', text: true, onClick: (e: Event) => { e.stopPropagation(); handleCopy(row.id) }, class: 'copy-btn' }, { default: () => h(NIcon, { size: 15 }, { default: CopyIcon }) })]) },
-  { title: '创建时间', key: 'created_at', width: 180, render: (row: any) => h('span', { class: 'mono time-cell' }, row.created_at || '—') },
+  { title: '创建时间', key: 'created_at', width: 180, render: (row: any) => h('span', { class: 'mono time-cell' }, formatLocalTime(row.created_at) || '—') },
   { title: '状态', key: 'is_enabled', width: 80, render: (row: any) => h(NSwitch, { value: row.is_enabled, onUpdateValue: (v: boolean) => handleToggle(row.id, v), size: 'small' }) },
   { title: '操作', key: 'actions', width: 80, render: (row: any) => h(NButton, { size: 'small', type: 'error', text: true, onClick: () => handleDelete(row.id), class: 'delete-btn' }, { default: () => '删除' }) },
 ]

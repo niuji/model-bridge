@@ -200,7 +200,7 @@ pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoRespo
                         "id": k.id,
                         "name": k.name,
                         "is_enabled": k.is_enabled,
-                        "created_at": k.created_at.to_string(),
+                        "created_at": k.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
                         "key_preview": key_preview,
                     })
                 })

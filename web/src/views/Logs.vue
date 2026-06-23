@@ -15,10 +15,11 @@
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
 import { NDataTable, NPagination } from 'naive-ui'
+import { formatLocalTime } from '../utils'
 const API_BASE = '/api/admin'
 const logs = ref<any[]>([]); const loading = ref(true); const page = ref(1); const pageSize = 50; const total = ref(0)
 const columns = [
-  { title: '时间', key: 'created_at', width: 180, render: (row: any) => h('span', { class: 'mono time-cell' }, row.created_at || '—') },
+  { title: '时间', key: 'created_at', width: 180, render: (row: any) => h('span', { class: 'mono time-cell' }, formatLocalTime(row.created_at) || '—') },
   { title: 'API Key', key: 'api_key', width: 170, ellipsis: { tooltip: true }, render: (row: any) => {
       if (row.api_key_name) return h('span', { class: 'mono apikey-cell' }, row.api_key_name)
       if (row.api_key_preview) return h('span', { class: 'mono apikey-cell' }, row.api_key_preview)

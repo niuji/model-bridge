@@ -51,6 +51,7 @@
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
 import { NSpin, NDataTable } from 'naive-ui'
+import { formatLocalHour } from '../utils'
 import type { DataTableColumns } from 'naive-ui'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -93,7 +94,7 @@ async function loadData() {
       fetch(`${API_BASE}/stats/overview`).then(r => r.json()), fetch(`${API_BASE}/stats/hourly`).then(r => r.json()), fetch(`${API_BASE}/stats/models`).then(r => r.json()),
     ])
     overview.value = overviewRes
-    hourlyOption.value = { ...hourlyOption.value, xAxis: { ...hourlyOption.value.xAxis, data: hourlyRes.map((d: any) => d.hour) } as any, series: [{ ...hourlyOption.value.series[0], data: hourlyRes.map((d: any) => d.total_tokens) }] }
+    hourlyOption.value = { ...hourlyOption.value, xAxis: { ...hourlyOption.value.xAxis, data: hourlyRes.map((d: any) => formatLocalHour(d.hour)) } as any, series: [{ ...hourlyOption.value.series[0], data: hourlyRes.map((d: any) => d.total_tokens) }] }
     modelData.value = modelsRes
   } catch (e) { console.error('加载仪表盘数据失败:', e) } finally { loading.value = false }
 }

@@ -66,7 +66,7 @@ pub async fn get_logs(pool: &SqlitePool, page: i64, page_size: i64) -> anyhow::R
                u.model_id, u.provider_id,
                u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
                u.latency_ms, u.status, u.error_msg,
-               strftime('%Y-%m-%d %H:%M:%S', u.created_at) as created_at
+               strftime('%Y-%m-%dT%H:%M:%SZ', u.created_at) as created_at
         FROM usage_records u
         LEFT JOIN api_keys k ON u.api_key_id = k.id
         ORDER BY u.id DESC
@@ -212,11 +212,11 @@ pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlySta
     let rows = sqlx::query_as::<_, (String, i64)>(
         r#"
         SELECT
-            strftime('%Y-%m-%d %H:00', created_at) as hour,
+            strftime('%Y-%m-%dT%H:00:00Z', created_at) as hour,
             COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens
         FROM usage_records
         WHERE created_at >= datetime('now', '-7 days')
-        GROUP BY strftime('%Y-%m-%d %H:00', created_at)
+        GROUP BY strftime('%Y-%m-%dT%H:00:00Z', created_at)
         ORDER BY hour ASC
         "#,
     )
