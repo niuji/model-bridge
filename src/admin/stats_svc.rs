@@ -34,6 +34,8 @@ pub struct DailyStats {
 pub struct LogEntry {
     pub id: i64,
     pub api_key_id: Option<String>,
+    pub api_key_name: Option<String>,
+    pub api_key_preview: Option<String>,
     pub model_id: String,
     pub provider_id: String,
     pub input_tokens: i64,
@@ -58,14 +60,16 @@ pub async fn get_logs(pool: &SqlitePool, page: i64, page_size: i64) -> anyhow::R
         .await?;
 
     let offset = (page - 1).max(0) * page_size;
-    let rows = sqlx::query_as::<_, (i64, Option<String>, String, String, i64, i64, i64, i64, i64, String, Option<String>, String)>(
+    let rows = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<String>, String, String, i64, i64, i64, i64, i64, String, Option<String>, String)>(
         r#"
-        SELECT id, api_key_id, model_id, provider_id,
-               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-               latency_ms, status, error_msg,
-               strftime('%Y-%m-%d %H:%M:%S', created_at) as created_at
-        FROM usage_records
-        ORDER BY id DESC
+        SELECT u.id, u.api_key_id, k.name, k.api_key,
+               u.model_id, u.provider_id,
+               u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
+               u.latency_ms, u.status, u.error_msg,
+               strftime('%Y-%m-%d %H:%M:%S', u.created_at) as created_at
+        FROM usage_records u
+        LEFT JOIN api_keys k ON u.api_key_id = k.id
+        ORDER BY u.id DESC
         LIMIT ? OFFSET ?
         "#,
     )
@@ -76,10 +80,13 @@ pub async fn get_logs(pool: &SqlitePool, page: i64, page_size: i64) -> anyhow::R
 
     let logs = rows
         .into_iter()
-        .map(|(id, api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, created_at)| {
+        .map(|(id, api_key_id, api_key_name, api_key_raw, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, created_at)| {
+            let api_key_preview = api_key_raw.as_deref().map(crate::router::admin::mask_key);
             LogEntry {
                 id,
                 api_key_id,
+                api_key_name,
+                api_key_preview,
                 model_id,
                 provider_id,
                 input_tokens,

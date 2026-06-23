@@ -215,7 +215,7 @@ pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }
 }
 
-fn mask_key(key: &str) -> String {
+pub(crate) fn mask_key(key: &str) -> String {
     if key.len() <= 10 {
         return key.to_string();
     }

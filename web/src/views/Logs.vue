@@ -19,9 +19,32 @@ const API_BASE = '/api/admin'
 const logs = ref<any[]>([]); const loading = ref(true); const page = ref(1); const pageSize = 50; const total = ref(0)
 const columns = [
   { title: '时间', key: 'created_at', width: 180, render: (row: any) => h('span', { class: 'mono time-cell' }, row.created_at || '—') },
+  { title: 'API Key', key: 'api_key', width: 170, ellipsis: { tooltip: true }, render: (row: any) => {
+      if (row.api_key_name) return h('span', { class: 'mono apikey-cell' }, row.api_key_name)
+      if (row.api_key_preview) return h('span', { class: 'mono apikey-cell' }, row.api_key_preview)
+      if (row.api_key_id) return h('span', { class: 'apikey-deleted' }, '已删除')
+      return h('span', { class: 'mono apikey-cell' }, '—')
+    } },
   { title: '模型', key: 'model_id', width: 220, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono model-cell' }, row.model_id || '—') },
   { title: '供应商', key: 'provider_id', width: 180, render: (row: any) => h('span', { class: 'mono provider-cell' }, row.provider_id || '—') },
-  { title: 'Token（输入/输出）', key: 'tokens', width: 160, align: 'right', render: (row: any) => h('span', { class: 'mono token-info' }, [h('span', { class: 'token-in' }, row.input_tokens ?? '—'), h('span', { class: 'token-sep' }, ' / '), h('span', { class: 'token-out' }, row.output_tokens ?? '—')]) },
+  { title: 'Token（输入/输出/缓存）', key: 'tokens', width: 190, align: 'right', render: (row: any) => {
+      const cacheRead = row.cache_read_tokens ?? 0
+      const cacheWrite = row.cache_write_tokens ?? 0
+      const hasCache = cacheRead > 0 || cacheWrite > 0
+      return h('span', { class: 'mono token-info' }, [
+        h('div', { class: 'token-main' }, [
+          h('span', { class: 'token-in' }, row.input_tokens ?? '—'),
+          h('span', { class: 'token-sep' }, ' / '),
+          h('span', { class: 'token-out' }, row.output_tokens ?? '—'),
+        ]),
+        hasCache ? h('div', { class: 'token-cache' }, [
+          h('span', { class: 'cache-label' }, '缓存'),
+          h('span', { class: 'cache-read' }, `读 ${cacheRead}`),
+          h('span', { class: 'cache-sep' }, '·'),
+          h('span', { class: 'cache-write' }, `写 ${cacheWrite}`),
+        ]) : null,
+      ])
+    } },
   { title: '延迟', key: 'latency_ms', width: 110, align: 'right', render: (row: any) => h('span', { class: 'mono latency-cell' }, row.latency_ms != null ? `${row.latency_ms}ms` : '—') },
   { title: '状态', key: 'status', width: 90, align: 'center', render: (row: any) => { const ok = row.status === 'success'; return h('span', { class: `status-badge ${ok ? 'success' : 'error'}` }, [h('span', { class: 'status-dot-sm' }), h('span', { class: 'mono status-text' }, ok ? 'OK' : 'ERR')]) } },
   { title: '错误', key: 'error_msg', ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono error-cell' }, row.error_msg || '—') },
@@ -42,10 +65,18 @@ onMounted(loadLogs)
 .time-cell { font-size: 12px; color: #787870; }
 .model-cell { font-size: 12px; color: #52796f; }
 .provider-cell { font-size: 12px; color: #6b9080; }
-.token-info { font-size: 12px; }
+.apikey-cell { font-size: 12px; color: #5a5a52; }
+.apikey-deleted { font-size: 12px; color: #b8a89a; }
+.token-info { font-size: 12px; display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.token-main { line-height: 1.4; }
 .token-in { color: #52796f; }
 .token-sep { color: #d5d0c8; }
 .token-out { color: #40916c; }
+.token-cache { font-size: 11px; line-height: 1.3; white-space: nowrap; }
+.cache-label { color: #b8b3a8; margin-right: 5px; }
+.cache-read { color: #6b9080; }
+.cache-sep { color: #d5d0c8; margin: 0 5px; }
+.cache-write { color: #c9a84c; }
 .latency-cell { font-size: 12px; color: #c9a84c; }
 
 .status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 8px; }
