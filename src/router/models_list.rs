@@ -10,9 +10,9 @@ pub async fn get_openai_models(state: Arc<AppState>) -> Response {
     let mut models: Vec<OpenAIModelEntry> = Vec::with_capacity(routes.len());
 
     // 按 provider 分组去重
-    for (model_id, route) in routes.iter() {
+    for (_key, route) in routes.iter() {
         models.push(OpenAIModelEntry {
-            id: model_id.clone(),
+            id: route.model_id.clone(),
             object: "model".to_string(),
             created: 0,
             owned_by: route.provider_name.clone(),
@@ -40,11 +40,11 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
     let routes = state.anthropic_routes.read().await;
     let mut models: Vec<AnthropicModelEntry> = Vec::with_capacity(routes.len());
 
-    for (model_id, route) in routes.iter() {
+    for (_key, route) in routes.iter() {
         models.push(AnthropicModelEntry {
-            id: model_id.clone(),
+            id: route.model_id.clone(),
             entry_type: "model".to_string(),
-            display_name: format!("{} ({})", model_id, route.provider_name),
+            display_name: route.model_name.clone(),
             created_at: String::new(),
         });
     }

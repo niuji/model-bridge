@@ -50,11 +50,17 @@ pub struct UpdateProviderChannel {
 }
 
 #[derive(Deserialize)]
+pub struct UpdateProviderModel {
+    pub model_id: String,
+    pub model_name: String,
+}
+
+#[derive(Deserialize)]
 pub struct UpdateProviderRequest {
     pub api_key: String,
     pub is_enabled: bool,
     pub channels: Vec<UpdateProviderChannel>,
-    pub models: Vec<String>,
+    pub models: Vec<UpdateProviderModel>,
 }
 
 pub async fn update_provider(
@@ -68,13 +74,19 @@ pub async fn update_provider(
         .map(|c| (c.channel_type, c.base_url, c.is_enabled))
         .collect();
 
+    let models: Vec<(String, String)> = req
+        .models
+        .into_iter()
+        .map(|m| (m.model_id, m.model_name))
+        .collect();
+
     match provider_svc::update_provider(
         &state.db,
         &id,
         &req.api_key,
         req.is_enabled,
         &channels,
-        &req.models,
+        &models,
     )
     .await
     {
@@ -100,19 +112,44 @@ pub async fn update_provider(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct FetchModelsQuery {
+    pub api_key: Option<String>,
+}
+
 pub async fn fetch_provider_models(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<FetchModelsQuery>,
 ) -> impl IntoResponse {
+    let api_key = match &query.api_key {
+        Some(k) if !k.is_empty() => k.as_str(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "api_key is required"})),
+            )
+                .into_response();
+        }
+    };
     match provider_svc::fetch_models_from_api(
         &state.client,
         &state.db,
         &state.provider_defs,
         &id,
+        api_key,
     )
     .await
     {
-        Ok(models) => Json(serde_json::json!({ "models": models })).into_response(),
+        Ok(models) => {
+            let result: Vec<serde_json::Value> = models
+                .into_iter()
+                .map(|(model_id, model_name)| {
+                    serde_json::json!({ "model_id": model_id, "model_name": model_name })
+                })
+                .collect();
+            Json(serde_json::json!({ "models": result })).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -212,16 +249,19 @@ pub async fn create_api_key(
         .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": id,
-                "name": req.name,
-                "key": raw_key,
-                "is_enabled": true,
-            })),
-        )
-            .into_response(),
+        Ok(_) => {
+            crate::middleware::auth::refresh_api_key_cache(&state).await.ok();
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": id,
+                    "name": req.name,
+                    "key": raw_key,
+                    "is_enabled": true,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -239,7 +279,10 @@ pub async fn delete_api_key(
         .execute(&state.db)
         .await
     {
-        Ok(result) if result.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
+        Ok(result) if result.rows_affected() > 0 => {
+            crate::middleware::auth::refresh_api_key_cache(&state).await.ok();
+            StatusCode::NO_CONTENT.into_response()
+        },
         Ok(_) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "api key not found"})),
@@ -293,7 +336,10 @@ pub async fn toggle_api_key(
         .execute(&state.db)
         .await
     {
-        Ok(result) if result.rows_affected() > 0 => Json(serde_json::json!({ "status": "ok" })).into_response(),
+        Ok(result) if result.rows_affected() > 0 => {
+            crate::middleware::auth::refresh_api_key_cache(&state).await.ok();
+            Json(serde_json::json!({ "status": "ok" })).into_response()
+        },
         Ok(_) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "api key not found"})),

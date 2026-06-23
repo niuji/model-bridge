@@ -44,12 +44,19 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             id TEXT PRIMARY KEY,
             provider_id TEXT NOT NULL,
             model_id TEXT NOT NULL,
+            model_name TEXT NOT NULL DEFAULT '',
             UNIQUE(provider_id, model_id)
         )
         "#,
     )
     .execute(pool)
     .await?;
+
+    // 为旧表添加 model_name 列（兼容已存在的数据库）
+    sqlx::query("ALTER TABLE provider_models ADD COLUMN model_name TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
 
     sqlx::query(
         r#"

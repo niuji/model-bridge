@@ -1,6 +1,7 @@
 mod admin;
 mod config;
 mod db;
+mod middleware;
 mod router;
 mod state;
 
@@ -41,11 +42,17 @@ async fn main() -> anyhow::Result<()> {
         provider_defs,
         db: pool.clone(),
         client,
+        api_key_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
 
     // 首次加载路由表
     if let Err(e) = admin::provider_svc::refresh_routes(&state).await {
         tracing::warn!("Initial route refresh failed (no providers configured yet): {}", e);
+    }
+
+    // 首次加载 API Key 缓存
+    if let Err(e) = middleware::auth::refresh_api_key_cache(&state).await {
+        tracing::warn!("Initial API key cache refresh failed: {}", e);
     }
 
     // 启动后台定时刷新
@@ -59,6 +66,9 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             if let Err(e) = admin::provider_svc::refresh_routes(&refresh_state).await {
                 tracing::error!("Scheduled route refresh failed: {}", e);
+            }
+            if let Err(e) = middleware::auth::refresh_api_key_cache(&refresh_state).await {
+                tracing::error!("Scheduled API key cache refresh failed: {}", e);
             }
         }
     });

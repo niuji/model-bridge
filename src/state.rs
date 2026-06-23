@@ -10,6 +10,10 @@ use crate::config::ProviderDef;
 pub struct ProviderRoute {
     pub provider_id: String,
     pub provider_name: String,
+    /// 原始 model_id（保留大小写），用于上游请求
+    pub model_id: String,
+    /// 显示名称
+    pub model_name: String,
     pub base_url: String,
     pub api_key: String,
 }
@@ -25,6 +29,8 @@ pub struct AppState {
     pub db: SqlitePool,
     /// 共享 HTTP 客户端（复用连接池）
     pub client: reqwest::Client,
+    /// API Key 内存缓存: key_hash → api_key_id（仅存 is_enabled=1 的 key）
+    pub api_key_cache: Arc<RwLock<HashMap<String, String>>>,
 }
 
 /// OpenAI /v1/models 响应格式

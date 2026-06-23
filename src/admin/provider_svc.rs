@@ -59,7 +59,7 @@ pub async fn get_provider(
     let channels = merge_channels(&def.channels, &channel_configs);
 
     let models = sqlx::query_as::<_, ProviderModel>(
-        "SELECT id, provider_id, model_id FROM provider_models WHERE provider_id = ? ORDER BY model_id",
+        "SELECT id, provider_id, model_id, model_name FROM provider_models WHERE provider_id = ? ORDER BY model_id",
     )
     .bind(id)
     .fetch_all(pool)
@@ -97,7 +97,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         let channels = merge_channels(&def.channels, &channel_configs);
 
         let models = sqlx::query_as::<_, ProviderModel>(
-            "SELECT id, provider_id, model_id FROM provider_models WHERE provider_id = ?",
+            "SELECT id, provider_id, model_id, model_name FROM provider_models WHERE provider_id = ?",
         )
         .bind(&def.id)
         .fetch_all(&state.db)
@@ -107,19 +107,23 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             if !channel.is_enabled {
                 continue;
             }
-            let route = ProviderRoute {
-                provider_id: def.id.clone(),
-                provider_name: def.name.clone(),
-                base_url: channel.base_url.clone(),
-                api_key: api_key.clone(),
-            };
             for model in &models {
+                let route = ProviderRoute {
+                    provider_id: def.id.clone(),
+                    provider_name: def.name.clone(),
+                    model_id: model.model_id.clone(),
+                    model_name: model.model_name.clone(),
+                    base_url: channel.base_url.clone(),
+                    api_key: api_key.clone(),
+                };
+                // HashMap key 用小写，实现大小写不敏感匹配
+                let key = model.model_id.to_lowercase();
                 match channel.channel_type.as_str() {
                     "anthropic" => {
-                        anthropic_routes.insert(model.model_id.clone(), route.clone());
+                        anthropic_routes.insert(key, route);
                     }
                     _ => {
-                        openai_routes.insert(model.model_id.clone(), route.clone());
+                        openai_routes.insert(key, route);
                     }
                 }
             }
@@ -151,7 +155,7 @@ pub async fn update_provider(
     api_key: &str,
     is_enabled: bool,
     channels: &[(String, String, bool)], // (channel_type, base_url, is_enabled)
-    models: &[String],
+    models: &[(String, String)],          // (model_id, model_name)
 ) -> anyhow::Result<()> {
     // upsert provider_config
     sqlx::query(
@@ -189,29 +193,33 @@ pub async fn update_provider(
         .execute(pool)
         .await?;
 
-    for model_id in models {
+    for (model_id, model_name) in models {
         if model_id.is_empty() {
             continue;
         }
         let mid = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO provider_models (id, provider_id, model_id) VALUES (?, ?, ?)")
-            .bind(&mid)
-            .bind(id)
-            .bind(model_id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO provider_models (id, provider_id, model_id, model_name) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&mid)
+        .bind(id)
+        .bind(model_id)
+        .bind(model_name)
+        .execute(pool)
+        .await?;
     }
 
     Ok(())
 }
 
-/// 从 Provider 的 API 拉取模型列表（不写入 DB）
+/// 从 Provider 的 API 拉取模型列表（不写入 DB），使用前端传入的 api_key
 pub async fn fetch_models_from_api(
     client: &reqwest::Client,
     pool: &SqlitePool,
     defs: &[ProviderDef],
     provider_id: &str,
-) -> anyhow::Result<Vec<String>> {
+    ui_api_key: &str,
+) -> anyhow::Result<Vec<(String, String)>> {
     let Some(def) = defs.iter().find(|d| d.id == provider_id) else {
         anyhow::bail!("provider not found");
     };
@@ -221,11 +229,12 @@ pub async fn fetch_models_from_api(
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("models_endpoint not configured"))?;
 
-    let config = get_provider_config(pool, provider_id).await;
-    let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
-    if api_key.is_empty() {
+    // 使用前端传入的 key
+    let api_key = if ui_api_key.is_empty() {
         anyhow::bail!("api_key not configured");
-    }
+    } else {
+        ui_api_key.to_string()
+    };
 
     let channel_configs = get_channel_configs(pool, provider_id).await;
     let channels = merge_channels(&def.channels, &channel_configs);
@@ -257,11 +266,15 @@ pub async fn fetch_models_from_api(
     }
 
     let body: serde_json::Value = resp.json().await?;
-    let models: Vec<String> = body["data"]
+    let models: Vec<(String, String)> = body["data"]
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+                .map(|m| {
+                    let id = m["id"].as_str().unwrap_or("").to_string();
+                    let name = m["display_name"].as_str().unwrap_or(&id).to_string();
+                    (id, name)
+                })
                 .collect()
         })
         .unwrap_or_default();

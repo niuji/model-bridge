@@ -25,6 +25,7 @@ pub struct ProviderModel {
     pub id: String,
     pub provider_id: String,
     pub model_id: String,
+    pub model_name: String,
 }
 
 /// 合并后的 Provider 详情（配置定义 + 用户覆盖）

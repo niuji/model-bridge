@@ -2,7 +2,7 @@ pub mod admin;
 pub mod models_list;
 pub mod proxy;
 
-use axum::{extract::Request, response::{Html, IntoResponse, Response}, Router};
+use axum::{extract::Request, middleware, response::{Html, IntoResponse, Response}, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -12,15 +12,23 @@ use crate::state::AppState;
 static WEB_UI_DIR: include_dir::Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
-/// 构建代理路由（OpenAI + Anthropic 协议转发）
+/// 构建代理路由（OpenAI + Anthropic 协议转发，带 API Key 认证）
 pub fn create_proxy_router(state: Arc<AppState>) -> Router {
     let openai_router = Router::new()
         .route("/v1/{*path}", axum::routing::any(proxy::openai_handler))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ));
 
     let anthropic_router = Router::new()
         .route("/v1/{*path}", axum::routing::any(proxy::anthropic_handler))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ));
 
     Router::new()
         .nest("/openai", openai_router)

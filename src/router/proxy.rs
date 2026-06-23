@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -8,6 +8,7 @@ use tokio_stream::StreamExt;
 use std::sync::Arc;
 
 use crate::{
+    middleware::auth::AuthenticatedKey,
     router::models_list,
     state::AppState,
 };
@@ -17,10 +18,12 @@ pub async fn openai_handler(
     State(state): State<Arc<AppState>>,
     method: Method,
     Path(path): Path<String>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
+    request: Request,
 ) -> Response {
-    handle_request(state, "openai", method, path, headers, body).await
+    let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
+    let headers = request.headers().clone();
+    let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap_or_default();
+    handle_request(state, "openai", method, path, headers, body_bytes, api_key_id).await
 }
 
 /// Anthropic 格式入口: /anthropic/v1/{*path}
@@ -28,10 +31,12 @@ pub async fn anthropic_handler(
     State(state): State<Arc<AppState>>,
     method: Method,
     Path(path): Path<String>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
+    request: Request,
 ) -> Response {
-    handle_request(state, "anthropic", method, path, headers, body).await
+    let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
+    let headers = request.headers().clone();
+    let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap_or_default();
+    handle_request(state, "anthropic", method, path, headers, body_bytes, api_key_id).await
 }
 
 async fn handle_request(
@@ -41,6 +46,7 @@ async fn handle_request(
     path: String,
     headers: HeaderMap,
     body: axum::body::Bytes,
+    api_key_id: Option<String>,
 ) -> Response {
     // GET /v1/models → 返回内存中缓存的模型列表
     if method == Method::GET && path == "models" {
@@ -51,7 +57,7 @@ async fn handle_request(
     }
 
     // 提取 model，查路由，转发
-    proxy_to_provider(state, api_format, method, &path, headers, &body).await
+    proxy_to_provider(state, api_format, method, &path, headers, &body, api_key_id).await
 }
 
 async fn proxy_to_provider(
@@ -61,9 +67,11 @@ async fn proxy_to_provider(
     path: &str,
     headers: HeaderMap,
     body: &[u8],
+    api_key_id: Option<String>,
 ) -> Response {
-    // 1. 从请求体提取 model 名
+    // 1. 从请求体提取 model 名（转小写用于路由查找）
     let model = extract_model_from_body(body).unwrap_or_default();
+    let model_lower = model.to_lowercase();
 
     // 2. 查对应路由表
     let routes = match api_format {
@@ -71,7 +79,7 @@ async fn proxy_to_provider(
         _ => state.anthropic_routes.read().await,
     };
 
-    let route = match routes.get(&model) {
+    let route = match routes.get(&model_lower) {
         Some(r) => r.clone(),
         None => {
             return (
@@ -116,7 +124,8 @@ async fn proxy_to_provider(
     }
 
     // 6. 注入 stream_options（确保上游在流式响应中返回 usage）
-    let request_body = inject_stream_options(api_format, body);
+    let body = replace_model_in_body(body, &route.model_id);
+    let request_body = inject_stream_options(api_format, &body);
 
     // 7. 发送请求（带超时）
     let start = std::time::Instant::now();
@@ -136,12 +145,12 @@ async fn proxy_to_provider(
 
             if is_stream {
                 proxy_streaming_response(
-                    state, resp, model, route.provider_id, start,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id,
                 )
                 .await
             } else {
                 proxy_buffered_response(
-                    state, resp, model, route.provider_id, start,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id,
                 )
                 .await
             }
@@ -150,7 +159,7 @@ async fn proxy_to_provider(
             let latency_ms = start.elapsed().as_millis() as i64;
             tokio::spawn(write_usage(
                 state.clone(),
-                model,
+                route.model_id.clone(),
                 route.provider_id,
                 0,
                 0,
@@ -159,6 +168,7 @@ async fn proxy_to_provider(
                 latency_ms,
                 "error",
                 Some(e.to_string()),
+                api_key_id,
             ));
 
             // 根据错误类型返回更具体的信息
@@ -184,9 +194,10 @@ async fn proxy_to_provider(
 async fn proxy_buffered_response(
     state: Arc<AppState>,
     resp: reqwest::Response,
-    model: String,
-    provider_id: String,
+    model: &str,
+    provider_id: &str,
     start: std::time::Instant,
+    api_key_id: Option<String>,
 ) -> Response {
     let status = resp.status();
     let resp_headers = resp.headers().clone();
@@ -198,8 +209,8 @@ async fn proxy_buffered_response(
             let usage = extract_usage_from_response(&body_bytes);
             tokio::spawn(write_usage(
                 state.clone(),
-                model,
-                provider_id,
+                model.to_string(),
+                provider_id.to_string(),
                 usage.0,
                 usage.1,
                 usage.2,
@@ -207,6 +218,7 @@ async fn proxy_buffered_response(
                 latency_ms,
                 if status.is_success() { "success" } else { "error" },
                 None,
+                api_key_id,
             ));
 
             // 构造响应，透传上游响应头（仅过滤 hop-by-hop 头）
@@ -224,8 +236,8 @@ async fn proxy_buffered_response(
         Err(e) => {
             tokio::spawn(write_usage(
                 state.clone(),
-                model,
-                provider_id,
+                model.to_string(),
+                provider_id.to_string(),
                 0,
                 0,
                 0,
@@ -233,6 +245,7 @@ async fn proxy_buffered_response(
                 latency_ms,
                 "error",
                 Some(e.to_string()),
+                api_key_id,
             ));
 
             (
@@ -249,9 +262,10 @@ async fn proxy_buffered_response(
 async fn proxy_streaming_response(
     state: Arc<AppState>,
     resp: reqwest::Response,
-    model: String,
-    provider_id: String,
+    model: &str,
+    provider_id: &str,
     start: std::time::Instant,
+    api_key_id: Option<String>,
 ) -> Response {
     let status = resp.status();
     let resp_headers = resp.headers().clone();
@@ -261,8 +275,9 @@ async fn proxy_streaming_response(
     let (tx, rx) = tokio::sync::mpsc::channel::<std::result::Result<bytes::Bytes, axum::Error>>(64);
 
     let state_final = state.clone();
-    let model_final = model.clone();
-    let provider_final = provider_id.clone();
+    let model_final = model.to_string();
+    let provider_final = provider_id.to_string();
+    let api_key_id_final = api_key_id.clone();
     let start_clone = start;
 
     tokio::spawn(async move {
@@ -299,6 +314,7 @@ async fn proxy_streaming_response(
                         latency_ms,
                         "error",
                         Some(e.to_string()),
+                        api_key_id_final.clone(),
                     ));
                     break;
                 }
@@ -318,6 +334,7 @@ async fn proxy_streaming_response(
                 latency_ms,
                 "success",
                 None,
+                api_key_id_final,
             ));
         }
     });
@@ -435,6 +452,21 @@ fn extract_model_from_body(body: &[u8]) -> Option<String> {
         .and_then(|v| v.get("model")?.as_str().map(|s| s.to_string()))
 }
 
+/// 将请求体中的 model 字段替换为路由表中存储的原始大小写
+fn replace_model_in_body(body: &[u8], canonical_model: &str) -> Vec<u8> {
+    if body.is_empty() {
+        return body.to_vec();
+    }
+    let mut v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return body.to_vec(),
+    };
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("model".to_string(), serde_json::Value::String(canonical_model.to_string()));
+    }
+    serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())
+}
+
 /// 对于 OpenAI 格式的流式请求，注入 stream_options 确保上游返回完整 usage
 fn inject_stream_options(api_format: &str, body: &[u8]) -> Vec<u8> {
     if api_format == "anthropic" || body.is_empty() {
@@ -511,10 +543,12 @@ async fn write_usage(
     latency_ms: i64,
     status: &str,
     error_msg: Option<String>,
+    api_key_id: Option<String>,
 ) {
     if let Err(e) = sqlx::query(
-        "INSERT INTO usage_records (model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
+    .bind(&api_key_id)
     .bind(&model_id)
     .bind(&provider_id)
     .bind(input_tokens)
