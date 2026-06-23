@@ -94,9 +94,37 @@ pub fn load_config(cli: &Cli) -> anyhow::Result<AppConfig> {
     Ok(config)
 }
 
-/// 从 JSON 文件加载 Provider 定义
+/// 从 JSON 文件加载 Provider 定义，并合并 ~/.mb/*.json 中的用户自定义 Provider（同名优先）
 pub fn load_providers(path: &str) -> anyhow::Result<Vec<ProviderDef>> {
     let content = std::fs::read_to_string(path)?;
-    let providers: Vec<ProviderDef> = serde_json::from_str(&content)?;
+    let mut providers: Vec<ProviderDef> = serde_json::from_str(&content)?;
+
+    let user_file = dirs::home_dir().map(|h| h.join(".mb").join("providers.json"));
+    if let Some(file_path) = user_file.filter(|p| p.exists()) {
+        let raw = match std::fs::read_to_string(&file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("failed to read user provider file {:?}: {}", file_path, e);
+                return Ok(providers);
+            }
+        };
+        let user_defs: Vec<ProviderDef> = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("failed to parse user provider file {:?}: {}", file_path, e);
+                return Ok(providers);
+            }
+        };
+        for user_def in user_defs {
+            if let Some(existing) = providers.iter_mut().find(|p| p.id == user_def.id) {
+                tracing::info!("user provider '{}' overrides builtin definition", user_def.id);
+                *existing = user_def;
+            } else {
+                tracing::info!("user provider '{}' added from ~/.mb/providers.json", user_def.id);
+                providers.push(user_def);
+            }
+        }
+    }
+
     Ok(providers)
 }

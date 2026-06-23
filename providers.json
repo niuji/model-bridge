@@ -38,14 +38,5 @@
     "channels": [
       { "type": "anthropic", "base_url": "https://api.anthropic.com" }
     ]
-  },
-  {
-    "id": "trip",
-    "name": "Trip",
-    "icon": "trip.png",
-    "models_endpoint": "http://ada-cli-golang.ctripcorp.com/coding-plan/v1/models",
-    "channels": [
-      { "type": "anthropic", "base_url": "http://ada-cli-golang.ctripcorp.com/coding-plan" }
-    ]
   }
 ]
