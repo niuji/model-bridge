@@ -31,6 +31,16 @@
     ]
   },
   {
+    "id": "bigmodel",
+    "name": "BigModel",
+    "icon": "https://mintcdn.com/zhipu-ef7018ed/xv_hHcvqdMWFzOdX/resource/favicon.ico?fit=max&auto=format&n=xv_hHcvqdMWFzOdX&q=85&s=752e7e554a7c529c60c7a2408d9b0308",
+    "models_endpoint": "https://open.bigmodel.cn/api/paas/v4/models",
+    "channels": [
+      { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic" },
+      { "type": "openai_chat", "base_url": "https://open.bigmodel.cn/api/paas/v4/" }
+    ]
+  },
+  {
     "id": "anthropic",
     "name": "Anthropic",
     "icon": "anthropic.svg",
