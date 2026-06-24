@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "model-bridge")]
+#[command(name = "model-bridge", version)]
 pub struct Cli {
     /// 配置文件路径
     #[arg(short, long, default_value = "model-bridge.toml")]

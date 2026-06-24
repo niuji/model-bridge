@@ -45,6 +45,18 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # tag 触发时把 Cargo.toml 版本写成 tag 名并同步 Cargo.lock，使发布二进制的
+      # --version 与 tag 一致；本地无需手动 bump。dispatch（无 tag）跳过，按仓库
+      # 现状构建。sed 只匹配 [package] 下以 version = 开头的行（依赖行以 crate 名开头）。
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          cargo update -p model-bridge --precise "$VERSION"
+          echo "Building model-bridge $VERSION"
+
       # 二进制在编译期通过 include_dir! 嵌入 web/dist，必须先构建前端。
       - name: Build frontend
         working-directory: web

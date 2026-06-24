@@ -75,6 +75,8 @@ Notes:
 
 Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds prebuilt binaries for `x86_64-unknown-linux-musl` (static Linux, no dynamic deps) and `x86_64-pc-windows-msvc` (Windows) and attaches them to a GitHub Release with auto-generated notes. Because the binary embeds `web/dist/` at compile time, the workflow runs `npm ci && npm run build` in `web/` before `cargo build`. Manual dispatch from the Actions tab runs the build only (no release). Each archive also bundles `model-bridge.toml.example` (a commented config template; users copy it to `model-bridge.toml` to set `encryption_key` — the binary runs fine without it via built-in defaults, but the template is the only way to ship the per-deployment encryption key, which must not be baked into the binary).
 
+The **tag is the source of truth for the version** — do not manually bump `Cargo.toml` per release. On a tag push the workflow's `Set version from tag` step writes the tag name (minus `v`) into `Cargo.toml` and runs `cargo update -p model-bridge --precise <version>` to sync `Cargo.lock`, so the built binary's `--version` (sourced from `CARGO_PKG_VERSION` via clap) matches the tag. The committed `Cargo.toml` on `main` may lag behind the latest tag; that's expected. `model-bridge --version` / `-V` prints the version.
+
 ```bash
 git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
