@@ -66,12 +66,14 @@ jobs:
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
-        run: tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release model-bridge
+        # -C 切换目录后按叶子名归档，故二进制与模板都落在归档根目录。
+        run: tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release model-bridge -C "$GITHUB_WORKSPACE" model-bridge.toml.example
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
         shell: pwsh
-        run: Compress-Archive -Path target/${{ matrix.target }}/release/model-bridge.exe -DestinationPath ${{ matrix.asset }}.zip
+        # Compress-Archive 按叶子名扁平归档，两文件均落在 zip 根目录。
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/model-bridge.exe, model-bridge.toml.example -DestinationPath ${{ matrix.asset }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

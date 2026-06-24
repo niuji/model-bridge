@@ -108,7 +108,25 @@ pub fn load_config(cli: &Cli) -> anyhow::Result<AppConfig> {
 
 /// 从 JSON 文件加载 Provider 定义，并合并 ~/.mb/*.json 中的用户自定义 Provider（同名优先）
 pub fn load_providers(path: &str) -> anyhow::Result<Vec<ProviderDef>> {
-    let content = std::fs::read_to_string(path)?;
+    // 优先读磁盘上的 providers_file（dev / 自定义部署，便于本地编辑后立即生效）；
+    // 磁盘缺失则回退到编译期嵌入的内置定义，使发布二进制（zip 仅含 exe）开箱即用。
+    let content = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(
+                "providers file '{}' not found on disk, using embedded builtin providers",
+                path
+            );
+            include_str!("../providers.json").to_string()
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "failed to read providers file '{}': {}",
+                path,
+                e
+            ));
+        }
+    };
     let mut providers: Vec<ProviderDef> = serde_json::from_str(&content)?;
 
     let user_file = dirs::home_dir().map(|h| h.join(".mb").join("providers.json"));

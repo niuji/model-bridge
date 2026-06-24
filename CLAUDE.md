@@ -73,7 +73,7 @@ Notes:
 
 ### Releases
 
-Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds prebuilt binaries for `x86_64-unknown-linux-musl` (static Linux, no dynamic deps) and `x86_64-pc-windows-msvc` (Windows) and attaches them to a GitHub Release with auto-generated notes. Because the binary embeds `web/dist/` at compile time, the workflow runs `npm ci && npm run build` in `web/` before `cargo build`. Manual dispatch from the Actions tab runs the build only (no release).
+Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds prebuilt binaries for `x86_64-unknown-linux-musl` (static Linux, no dynamic deps) and `x86_64-pc-windows-msvc` (Windows) and attaches them to a GitHub Release with auto-generated notes. Because the binary embeds `web/dist/` at compile time, the workflow runs `npm ci && npm run build` in `web/` before `cargo build`. Manual dispatch from the Actions tab runs the build only (no release). Each archive also bundles `model-bridge.toml.example` (a commented config template; users copy it to `model-bridge.toml` to set `encryption_key` — the binary runs fine without it via built-in defaults, but the template is the only way to ship the per-deployment encryption key, which must not be baked into the binary).
 
 ```bash
 git tag -a v0.1.0 -m "v0.1.0"
@@ -86,7 +86,7 @@ git push origin v0.1.0
 
 Providers are defined in three layers that merge at startup:
 
-1. **`providers.json`** (static definition) — id, name, icon, `models_endpoint` (optional), and `channels` array (each with `type` and `base_url`). These are loaded once at startup into `AppState.provider_defs`.
+1. **`providers.json`** (static definition) — id, name, icon, `models_endpoint` (optional), and `channels` array (each with `type` and `base_url`). These are loaded once at startup into `AppState.provider_defs`. The file is also embedded into the binary via `include_str!` (`src/config.rs::load_providers`): if the on-disk `providers_file` is missing, the embedded builtin definition is used as a fallback, so a release build (which ships the binary alone) starts without any extra files. A present on-disk file always wins, for local editing.
 2. **`~/.mb/providers.json`** (user-local overrides) — same schema as `providers.json`. Loaded and merged into layer 1 at startup: same `id` replaces the builtin entry, new `id` is appended. Parse failures are logged and skipped; the file is optional. Use this for private or corporate providers that shouldn't be committed to the repo.
 3. **SQLite tables** (runtime overrides) — `provider_config` (api_key, is_enabled), `provider_channel_config` (per-channel base_url override, is_enabled), `provider_models` (model whitelist).
 
