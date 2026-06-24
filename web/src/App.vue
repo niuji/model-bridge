@@ -20,7 +20,7 @@
                   <circle cx="20" cy="14" r="1.2" fill="currentColor" />
                 </svg>
               </div>
-              <span class="brand-text serif">模型桥接</span>
+              <span class="brand-text serif">Model Bridge</span>
             </div>
             <n-menu
               :options="menuOptions"
