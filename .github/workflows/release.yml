@@ -1,0 +1,92 @@
+name: release
+
+# 推送 v* tag 触发：构建预编译二进制并挂到对应 tag 的 GitHub Release。
+# 也可在 Actions 页面手动 dispatch 来测试构建（不会发 release）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 静态 Linux 二进制（rustls + 自带 SQLite，无动态依赖，适合容器/通用）
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            archive: tar.gz
+            asset: model-bridge-linux-amd64
+          # Windows
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: zip
+            asset: model-bridge-windows-amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # 二进制在编译期通过 include_dir! 嵌入 web/dist，必须先构建前端。
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release model-bridge
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/model-bridge.exe -DestinationPath ${{ matrix.asset }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.${{ matrix.archive }}
+
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip

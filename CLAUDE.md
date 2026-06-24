@@ -71,6 +71,15 @@ Notes:
 - **Auth is unaffected**: proxy auth uses `key_hash` (SHA-256 in-memory lookup), not the encrypted column.
 - **Out of scope**: this only encrypts client `mb-` keys. Upstream provider keys (`provider_config.api_key`) remain plaintext and are used directly when forwarding upstream.
 
+### Releases
+
+Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds prebuilt binaries for `x86_64-unknown-linux-musl` (static Linux, no dynamic deps) and `x86_64-pc-windows-msvc` (Windows) and attaches them to a GitHub Release with auto-generated notes. Because the binary embeds `web/dist/` at compile time, the workflow runs `npm ci && npm run build` in `web/` before `cargo build`. Manual dispatch from the Actions tab runs the build only (no release).
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
 ## Architecture
 
 ### Provider Configuration: JSON Definitions + DB Overrides
