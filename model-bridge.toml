@@ -3,11 +3,15 @@ host = "0.0.0.0"
 port = 10010
 
 [admin]
-host = "0.0.0.0"
+# 默认仅绑定 loopback：admin API 无应用层鉴权，避免直接暴露。
+host = "127.0.0.1"
 port = 10020
 
 [database]
 path = "model-bridge.db"
+# 客户端 mb- API key 静态加密密钥（base64 编码的 32 字节，可用 `openssl rand -base64 32` 生成）。
+# 留空则明文存储（仅适用于 admin 仅暴露在 loopback 的场景）。
+encryption_key = ""
 
 [bridge]
 # 后台自动刷新模型列表间隔（分钟）

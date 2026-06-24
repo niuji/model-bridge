@@ -22,7 +22,7 @@ pub async fn get_openai_models(state: Arc<AppState>) -> Response {
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
 
-    tracing::info!(
+    tracing::debug!(
         "GET /openai/v1/models → {} models: {:?}",
         models.len(),
         models
@@ -53,7 +53,7 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
 
-    tracing::info!(
+    tracing::debug!(
         "GET /anthropic/v1/models → {} models: {:?}",
         models.len(),
         models

@@ -35,6 +35,8 @@ pub struct AppState {
     pub client: reqwest::Client,
     /// API Key 内存缓存: key_hash → api_key_id（仅存 is_enabled=1 的 key）
     pub api_key_cache: Arc<RwLock<HashMap<String, String>>>,
+    /// 客户端 mb- API key 的 AES-256-GCM 密钥（None 表示明文存储）。
+    pub encryption_key: Option<[u8; 32]>,
 }
 
 /// OpenAI /v1/models 响应格式

@@ -14,6 +14,9 @@ use crate::{
     state::AppState,
 };
 
+/// 单个代理请求体上限（字节）。超出返回 413，避免超大请求耗尽内存。
+const MAX_PROXY_BODY: usize = 64 * 1024 * 1024; // 64 MiB
+
 /// OpenAI 格式入口: /openai/v1/{*path}
 pub async fn openai_handler(
     State(state): State<Arc<AppState>>,
@@ -23,7 +26,17 @@ pub async fn openai_handler(
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
     let headers = request.headers().clone();
-    let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap_or_default();
+    let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_PROXY_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                r#"{"error":"request body too large"}"#,
+            )
+                .into_response();
+        }
+    };
     handle_request(state, "openai", method, path, headers, body_bytes, api_key_id).await
 }
 
@@ -36,7 +49,17 @@ pub async fn anthropic_handler(
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
     let headers = request.headers().clone();
-    let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap_or_default();
+    let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_PROXY_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                r#"{"error":"request body too large"}"#,
+            )
+                .into_response();
+        }
+    };
     handle_request(state, "anthropic", method, path, headers, body_bytes, api_key_id).await
 }
 
@@ -72,7 +95,7 @@ async fn handle_request(
                 return (
                     StatusCode::NOT_FOUND,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    format!(r#"{{"error":"unsupported path '/openai/v1/{}'"}}"#, other),
+                    serde_json::json!({ "error": format!("unsupported path '/openai/v1/{}'", other) }).to_string(),
                 )
                     .into_response();
             }
@@ -118,10 +141,10 @@ async fn proxy_to_provider(
             return (
                 StatusCode::NOT_FOUND,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
-                format!(
-                    r#"{{"error":"model '{}' not found on /{} endpoint"}}"#,
-                    model, api_format
-                ),
+                serde_json::json!({
+                    "error": format!("model '{}' not found on /{} endpoint", model, api_format)
+                })
+                .to_string(),
             )
                 .into_response();
         }
@@ -140,10 +163,13 @@ async fn proxy_to_provider(
             return (
                 StatusCode::NOT_FOUND,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
-                format!(
-                    r#"{{"error":"model '{}' not available on /{} endpoint (provider '{}' has no '{}' channel)"}}"#,
-                    model, api_format, route.provider_id, ch
-                ),
+                serde_json::json!({
+                    "error": format!(
+                        "model '{}' not available on /{} endpoint (provider '{}' has no '{}' channel)",
+                        model, api_format, route.provider_id, ch
+                    )
+                })
+                .to_string(),
             )
                 .into_response();
         }
@@ -178,7 +204,7 @@ async fn proxy_to_provider(
 
     // 6. 注入 stream_options（确保上游在流式响应中返回 usage）
     let body = replace_model_in_body(body, &route.model_id);
-    let request_body = inject_stream_options(api_format, &body);
+    let request_body = inject_stream_options(api_format, path, &body);
 
     // 7. 发送请求（带超时）
     let start = std::time::Instant::now();
@@ -338,19 +364,27 @@ async fn proxy_streaming_response(
 
     tokio::spawn(async move {
         let mut has_error = false;
+        // bytes_stream 的分块边界与 SSE 事件不对齐：一个事件可能横跨多个分块，
+        // 一个分块也可能包含多个事件。因此按完整行（以 \n 切分）解析 data: 负载，
+        // 不完整的行留在缓冲区等下一块，避免漏提或解析半截 JSON。
+        let mut line_buf: Vec<u8> = Vec::new();
         // 累积所有 SSE 事件中的 usage（不能只取最后一个，Anthropic 的
         // input_tokens 在 message_start，output_tokens 在 message_delta）
         let mut acc_usage = (0i64, 0i64, 0i64, 0i64); // (input, output, cache_read, cache_write)
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
-                    // 从每个 SSE data 帧提取并累积 usage
-                    if let Some(data_bytes) = extract_sse_data(&bytes) {
-                        let u = extract_usage_from_sse_event(&data_bytes, &api_format_final);
-                        acc_usage.0 += u.0;
-                        acc_usage.1 += u.1;
-                        acc_usage.2 += u.2;
-                        acc_usage.3 += u.3;
+                    line_buf.extend_from_slice(&bytes);
+                    while let Some(nl) = line_buf.iter().position(|&b| b == b'\n') {
+                        // drain(..=nl) 移除该行内容连同结尾的 \n
+                        let drained: Vec<u8> = line_buf.drain(..=nl).collect();
+                        if let Some(payload) = parse_data_line(&drained) {
+                            let u = extract_usage_from_sse_event(&payload, &api_format_final);
+                            acc_usage.0 += u.0;
+                            acc_usage.1 += u.1;
+                            acc_usage.2 += u.2;
+                            acc_usage.3 += u.3;
+                        }
                     }
                     if tx.send(Ok(bytes)).await.is_err() {
                         break; // client disconnected
@@ -379,7 +413,7 @@ async fn proxy_streaming_response(
         // 流结束时写入累积的 usage
         if !has_error {
             let latency_ms = start_clone.elapsed().as_millis() as i64;
-            tracing::info!(
+            tracing::debug!(
                 "STREAM acc usage: model={}, input={}, output={}, cache_read={}, cache_write={}",
                 model_final, acc_usage.0, acc_usage.1, acc_usage.2, acc_usage.3
             );
@@ -415,22 +449,20 @@ async fn proxy_streaming_response(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// 从 SSE 字节块中提取 data 行内容（去掉 "data: " 前缀）
-/// 返回用于后续 usage 提取的 JSON 字节
-fn extract_sse_data(chunk: &[u8]) -> Option<Vec<u8>> {
-    let text = std::str::from_utf8(chunk).ok()?;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("data: ") {
-            let json_str = &trimmed[6..];
-            // 跳过 [DONE] 标记
-            if json_str == "[DONE]" {
-                continue;
-            }
-            return Some(json_str.as_bytes().to_vec());
-        }
+/// 从一条完整 SSE 行（可能含尾部 \r/\n）提取 data 负载。
+/// 支持 "data:" 与 "data: " 两种前缀；跳过 [DONE] 及非 data 行。返回 JSON 字节。
+fn parse_data_line(line: &[u8]) -> Option<Vec<u8>> {
+    // 去掉行尾的 \r / \n
+    let mut end = line.len();
+    while end > 0 && matches!(line[end - 1], b'\r' | b'\n') {
+        end -= 1;
     }
-    None
+    let rest = line[..end].strip_prefix(b"data:")?;
+    let rest = rest.strip_prefix(b" ").unwrap_or(rest);
+    if rest == b"[DONE]" {
+        return None;
+    }
+    Some(rest.to_vec())
 }
 
 /// 从单个 SSE 事件 JSON 中提取 usage，支持：
@@ -452,7 +484,7 @@ fn extract_usage_from_sse_event(data: &[u8], api_format: &str) -> (i64, i64, i64
     if event_type == "message_start" {
         if let Some(msg_usage) = v.get("message").and_then(|m| m.get("usage")) {
             let r = extract_usage(msg_usage, api_format);
-            tracing::info!(
+            tracing::debug!(
                 "SSE usage: type={}, input={}, output={}, cache_read={}, cache_write={}",
                 event_type, r.0, r.1, r.2, r.3
             );
@@ -460,7 +492,7 @@ fn extract_usage_from_sse_event(data: &[u8], api_format: &str) -> (i64, i64, i64
         }
         // message_start 但没有 usage — 记录原始数据
         let preview = String::from_utf8_lossy(data);
-        tracing::info!("SSE message_start without usage: {}", preview.chars().take(512).collect::<String>());
+        tracing::debug!("SSE message_start without usage: {}", preview.chars().take(512).collect::<String>());
     }
 
     // 通用: usage 在顶层（OpenAI 末尾 chunk / Anthropic message_delta）
@@ -476,7 +508,7 @@ fn extract_usage_from_sse_event(data: &[u8], api_format: &str) -> (i64, i64, i64
     // 有 type 但没有 usage — 记录 unexpected 事件
     if matches!(event_type, "message_delta" | "message_stop" | "content_block_stop" | "message_start") {
         let preview = String::from_utf8_lossy(data);
-        tracing::info!("SSE event without usage: type={}, data={}", event_type, preview.chars().take(512).collect::<String>());
+        tracing::debug!("SSE event without usage: type={}, data={}", event_type, preview.chars().take(512).collect::<String>());
     }
 
     (0, 0, 0, 0)
@@ -506,9 +538,10 @@ fn replace_model_in_body(body: &[u8], canonical_model: &str) -> Vec<u8> {
     serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())
 }
 
-/// 对于 OpenAI 格式的流式请求，注入 stream_options 确保上游返回完整 usage
-fn inject_stream_options(api_format: &str, body: &[u8]) -> Vec<u8> {
-    if api_format == "anthropic" || body.is_empty() {
+/// 对于 OpenAI /v1/chat/completions 流式请求，注入 stream_options 确保上游返回完整 usage。
+/// （Responses API 不使用 stream_options，故仅对 chat/completions 注入。）
+fn inject_stream_options(api_format: &str, path: &str, body: &[u8]) -> Vec<u8> {
+    if api_format == "anthropic" || body.is_empty() || path != "chat/completions" {
         return body.to_vec();
     }
 
@@ -567,11 +600,11 @@ fn extract_usage_from_response(body: &[u8], api_format: &str) -> (i64, i64, i64,
     };
 
     if let Some(usage) = v.get("usage") {
-        tracing::info!("BUFFERED raw usage: {}", usage);
+        tracing::debug!("BUFFERED raw usage: {}", usage);
         return extract_usage(usage, api_format);
     }
 
-    tracing::info!("BUFFERED response without usage: {}", String::from_utf8_lossy(body).chars().take(300).collect::<String>());
+    tracing::debug!("BUFFERED response without usage: {}", String::from_utf8_lossy(body).chars().take(300).collect::<String>());
     (0, 0, 0, 0)
 }
 
@@ -589,7 +622,7 @@ async fn write_usage(
     error_msg: Option<String>,
     api_key_id: Option<String>,
 ) {
-    tracing::info!(
+    tracing::debug!(
         "WRITE usage: provider={}, model={}, input={}, output={}, cache_read={}, cache_write={}, latency_ms={}, status={}",
         provider_id, model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status
     );

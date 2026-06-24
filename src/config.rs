@@ -30,6 +30,10 @@ pub struct ServerConfig {
 #[derive(Clone, Deserialize)]
 pub struct DatabaseConfig {
     pub path: String,
+    /// 客户端 mb- API key 的静态加密密钥（base64 编码的 32 字节）。
+    /// 未配置时按明文存储（仅适用于 admin 仅暴露在 loopback 的受限场景）。
+    #[serde(default)]
+    pub encryption_key: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -77,11 +81,12 @@ impl Default for AppConfig {
                 port: 10010,
             },
             admin: ServerConfig {
-                host: "0.0.0.0".to_string(),
+                host: "127.0.0.1".to_string(),
                 port: 10020,
             },
             database: DatabaseConfig {
                 path: "model-bridge.db".to_string(),
+                encryption_key: None,
             },
             bridge: BridgeConfig {
                 refresh_interval_min: 10,

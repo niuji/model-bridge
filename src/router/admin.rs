@@ -194,7 +194,7 @@ pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoRespo
             let result: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|k| {
-                    let key_preview = mask_key(&k.api_key);
+                    let key_preview = mask_key(&crate::crypto::reveal(state.encryption_key.as_ref(), &k.api_key));
                     serde_json::json!({
                         "id": k.id,
                         "name": k.name,
@@ -218,11 +218,11 @@ pub(crate) fn mask_key(key: &str) -> String {
     if key.len() <= 10 {
         return key.to_string();
     }
-    let body = if key.starts_with("mb-") { &key[3..] } else { key };
+    let body = key.strip_prefix("mb-").unwrap_or(key);
     if body.len() <= 7 {
         return key.to_string();
     }
-    format!("mb-{}...{}", &body[..3], &body[body.len()-4..])
+    format!("mb-{}...{}", &body[..3], &body[body.len() - 4..])
 }
 
 #[derive(Deserialize)]
@@ -239,10 +239,13 @@ pub async fn create_api_key(
     let key_hash = sha2::Sha256::digest(raw_key.as_bytes());
     let key_hash_hex = format!("{:x}", key_hash);
 
+    // 明文仅在创建时返回一次；落库的是加密后的密文（无 key 时退化为明文）。
+    let sealed = crate::crypto::seal(state.encryption_key.as_ref(), &raw_key);
+
     let result = sqlx::query("INSERT INTO api_keys (id, key_hash, api_key, name) VALUES (?, ?, ?, ?)")
         .bind(&id)
         .bind(&key_hash_hex)
-        .bind(&raw_key)
+        .bind(&sealed)
         .bind(&req.name)
         .execute(&state.db)
         .await;
@@ -305,7 +308,7 @@ pub async fn get_api_key(
         .await;
 
     match result {
-        Ok(Some(key)) => Json(serde_json::json!({ "key": key })).into_response(),
+        Ok(Some(key)) => Json(serde_json::json!({ "key": crate::crypto::reveal(state.encryption_key.as_ref(), &key) })).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "api key not found"})),
@@ -369,7 +372,7 @@ pub async fn stats_logs(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<LogsQuery>,
 ) -> impl IntoResponse {
-    match stats_svc::get_logs(&state.db, params.page, params.page_size).await {
+    match stats_svc::get_logs(&state.db, params.page, params.page_size, state.encryption_key.as_ref()).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

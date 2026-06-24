@@ -55,12 +55,20 @@ pub struct PaginatedLogs {
     pub total: i64,
 }
 
-pub async fn get_logs(pool: &SqlitePool, page: i64, page_size: i64) -> anyhow::Result<PaginatedLogs> {
+pub async fn get_logs(
+    pool: &SqlitePool,
+    page: i64,
+    page_size: i64,
+    enc_key: Option<&[u8; 32]>,
+) -> anyhow::Result<PaginatedLogs> {
+    let page_size = page_size.clamp(1, 500);
+    let page = page.max(1);
+
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_records")
         .fetch_one(pool)
         .await?;
 
-    let offset = (page - 1).max(0) * page_size;
+    let offset = (page - 1) * page_size;
     let rows = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<String>, String, String, i64, i64, i64, i64, i64, String, Option<String>, String)>(
         r#"
         SELECT u.id, u.api_key_id, k.name, k.api_key,
@@ -82,7 +90,9 @@ pub async fn get_logs(pool: &SqlitePool, page: i64, page_size: i64) -> anyhow::R
     let logs = rows
         .into_iter()
         .map(|(id, api_key_id, api_key_name, api_key_raw, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, created_at)| {
-            let api_key_preview = api_key_raw.as_deref().map(crate::router::admin::mask_key);
+            let api_key_preview = api_key_raw
+                .as_deref()
+                .map(|k| crate::router::admin::mask_key(&crate::crypto::reveal(enc_key, k)));
             LogEntry {
                 id,
                 api_key_id,
@@ -182,6 +192,7 @@ pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec
     // Generate the complete daily series over the window and LEFT JOIN the
     // aggregated usage onto it, so days with no requests still appear with zero
     // tokens (consistent with the hourly view).
+    let days = days.clamp(1, 365);
     let bound = format!("-{}", days);
     let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(
         r#"

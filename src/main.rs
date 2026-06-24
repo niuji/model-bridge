@@ -1,5 +1,6 @@
 mod admin;
 mod config;
+mod crypto;
 mod db;
 mod middleware;
 mod router;
@@ -23,16 +24,52 @@ async fn main() -> anyhow::Result<()> {
     use sqlx::sqlite::SqliteConnectOptions;
     use std::str::FromStr;
     let options = SqliteConnectOptions::from_str(&app_config.database.path)?
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(5));
     let pool = sqlx::SqlitePool::connect_with(options).await?;
 
     // 执行迁移
     db::schema::run_migrations(&pool).await?;
 
-    // 创建共享 HTTP 客户端（复用连接池）
+    // 创建共享 HTTP 客户端（复用连接池）。禁用重定向：上游或被篡改的
+    // base_url 不得通过 3xx 把请求导向内网地址（SSF 防护）。
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(20)
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
+
+    // 解析客户端 API key 的静态加密密钥（可选）
+    let enc_raw = app_config
+        .database
+        .encryption_key
+        .as_deref()
+        .filter(|s| !s.trim().is_empty());
+    let encryption_key = match enc_raw {
+        Some(raw) => match crypto::parse_key(raw) {
+            Some(key) => Some(key),
+            None => {
+                tracing::warn!(
+                    "database.encryption_key is set but invalid (expected base64 of 32 bytes); client API keys will be stored in plaintext"
+                );
+                None
+            }
+        },
+        None => {
+            tracing::warn!(
+                "database.encryption_key not set; client API keys are stored in plaintext. Set it to encrypt at rest."
+            );
+            None
+        }
+    };
+
+    // admin 服务默认应绑定 loopback（admin API 无应用层鉴权）。若被显式放开则告警。
+    if !matches!(app_config.admin.host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        tracing::warn!(
+            "admin server bound to '{}' — the admin API is unauthenticated. Bind to 127.0.0.1 unless you accept the risk.",
+            app_config.admin.host
+        );
+    }
 
     // 构建应用状态
     let provider_defs = config::load_providers(&app_config.providers_file)?;
@@ -43,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         db: pool.clone(),
         client,
         api_key_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        encryption_key,
     });
 
     // 首次加载路由表
@@ -57,7 +95,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 启动后台定时刷新
     let refresh_state = state.clone();
-    let interval_min = app_config.bridge.refresh_interval_min;
+    // 至少 1 分钟，避免配置为 0 时退化为忙循环。
+    let interval_min = app_config.bridge.refresh_interval_min.max(1);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(
             interval_min * 60,

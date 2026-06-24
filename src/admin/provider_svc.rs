@@ -106,7 +106,20 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         // 分离启用的 anthropic channel 与 openai channel。
         // openai_chat / openai_responses 同一 provider 下 base_url 相同，合并为一条 route，
         // channels 字段记录该 provider 实际启用了哪些 openai channel type，供 proxy 按请求 path 过滤。
-        let enabled: Vec<&ChannelDetail> = channels.iter().filter(|c| c.is_enabled).collect();
+        // 拒绝非 http(s) 的 base_url（file:// 等），避免被导向本地资源
+        for c in channels
+            .iter()
+            .filter(|c| c.is_enabled && !is_safe_base_url(&c.base_url))
+        {
+            tracing::warn!(
+                "provider '{}' channel '{}' base_url '{}' is not http(s), excluded from routing",
+                def.id, c.channel_type, c.base_url
+            );
+        }
+        let enabled: Vec<&ChannelDetail> = channels
+            .iter()
+            .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
+            .collect();
         let openai_channels: Vec<&ChannelDetail> = enabled
             .iter()
             .copied()
@@ -357,4 +370,9 @@ fn merge_channels(
             }
         })
         .collect()
+}
+
+/// 仅允许 http(s) 的 base_url，拒绝 file:// 等本地协议及非 URL 字符串。
+fn is_safe_base_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
