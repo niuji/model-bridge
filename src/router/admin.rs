@@ -134,7 +134,6 @@ pub async fn fetch_provider_models(
     };
     match provider_svc::fetch_models_from_api(
         &state.client,
-        &state.db,
         &state.provider_defs,
         &id,
         api_key,

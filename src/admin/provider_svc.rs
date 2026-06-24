@@ -247,7 +247,6 @@ pub async fn update_provider(
 /// 从 Provider 的 API 拉取模型列表（不写入 DB），使用前端传入的 api_key
 pub async fn fetch_models_from_api(
     client: &reqwest::Client,
-    pool: &SqlitePool,
     defs: &[ProviderDef],
     provider_id: &str,
     ui_api_key: &str,
@@ -268,20 +267,14 @@ pub async fn fetch_models_from_api(
         ui_api_key.to_string()
     };
 
-    let channel_configs = get_channel_configs(pool, provider_id).await;
-    let channels = merge_channels(&def.channels, &channel_configs);
-
-    let Some(channel) = channels.iter().find(|c| c.is_enabled) else {
-        anyhow::bail!("no enabled channel found");
-    };
-
     let url = endpoint;
     let mut req = client
         .get(url)
         .timeout(std::time::Duration::from_secs(10));
 
-    match channel.channel_type.as_str() {
-        "anthropic" => {
+    // 根据 provider 定义的 models_endpoint_auth 决定认证头格式，默认 bearer
+    match def.models_endpoint_auth.as_str() {
+        "x-api-key" => {
             req = req
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01");
