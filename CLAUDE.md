@@ -41,14 +41,35 @@ cd web && npm run build
 
 After `npm run build`, rebuild the Rust binary to embed the updated frontend — the binary embeds `web/dist/` at compile time via `include_dir!`. The admin server serves this embedded UI at all non-`/api/` paths.
 
-### Docker
+### Client API key encryption (`encryption_key`, optional)
+
+The client `mb-xxx` gateway keys are stored twice in the `api_keys` table: as a SHA-256 `key_hash` (used by `auth_middleware` for proxy auth) **and** as `api_key` (so the admin UI can reveal the full key later). Without encryption that second copy is plaintext, which defeats the hashing — a DB read yields every live key. `[database] encryption_key` encrypts the `api_key` copy at rest with AES-256-GCM.
+
+Generate a key (base64 of 32 bytes) and set it in `model-bridge.toml`:
 
 ```bash
-docker build -t model-bridge .
-docker run -p 10010:10010 -p 10020:10020 -v $(pwd)/data:/data model-bridge
+openssl rand -base64 32
 ```
 
-Note: the Dockerfile does not copy `providers.json` into the image — mount it or bake it in if customizing.
+```toml
+[database]
+path = "model-bridge.db"
+encryption_key = "<output of openssl rand -base64 32>"
+```
+
+Behavior:
+
+| `encryption_key` | Result |
+|---|---|
+| unset / empty | Plaintext storage; logs a startup warning. Only acceptable while the admin server is loopback-bound. |
+| set but malformed | Treated as unset (warning + plaintext). Must be base64 decoding to exactly 32 bytes. |
+| set correctly | `mb-xxx` keys are sealed before insert (`crypto::seal`), decrypted on read (`crypto::reveal`). |
+
+Notes:
+- **Backward compatible**: decryption failure (legacy plaintext rows, or a rotated key) returns the raw stored value, so existing keys need no migration.
+- **Rotating the key** invalidates previously-sealed keys — they will no longer decrypt. Re-issue those keys via the admin UI.
+- **Auth is unaffected**: proxy auth uses `key_hash` (SHA-256 in-memory lookup), not the encrypted column.
+- **Out of scope**: this only encrypts client `mb-` keys. Upstream provider keys (`provider_config.api_key`) remain plaintext and are used directly when forwarding upstream.
 
 ## Architecture
 
