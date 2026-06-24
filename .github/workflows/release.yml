@@ -52,7 +52,16 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install musl toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Build binary
+        env:
+          # ring / libsqlite3 的 C 代码用 musl-gcc 编译：cc-rs 默认找
+          # x86_64-linux-musl-gcc，runner 上没有该名字，故显式指向 musl-gcc。
+          # 链接走 rustc 默认的 self-contained musl（rust-lld + 内置 musl CRT）。
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (tar.gz)
