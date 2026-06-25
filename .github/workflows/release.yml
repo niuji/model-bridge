@@ -101,6 +101,35 @@ jobs:
     permissions:
       contents: write
     steps:
+      # tag 版本回写 main：让本地 cargo build 的 --version 与最新发布一致。
+      # 基于 main HEAD 改动后 fast-forward 推送；tag 落后于 main HEAD 也只改版本行，无冲突。
+      # 用 GITHUB_TOKEN（bot）push，GitHub 不会再触发任何 workflow，无循环。失败不阻塞已发布的 Release。
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync Cargo.toml/Cargo.lock version to main
+        continue-on-error: true
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          cargo update -p model-bridge --precise "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add Cargo.toml Cargo.lock
+            git commit -m "chore(release): bump version to $VERSION [skip ci]"
+            git push origin HEAD:main
+            echo "Synced version $VERSION to main"
+          else
+            echo "Cargo.toml already at $VERSION; nothing to push"
+          fi
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
