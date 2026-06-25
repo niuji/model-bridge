@@ -22,13 +22,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
-    // Channel 用户配置（base_url 为 NULL 表示使用配置文件默认值）
+    // Channel 用户配置：base_url 一律以配置文件为准、不入库（仅存 channel 启用状态）
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS provider_channel_config (
             provider_id TEXT NOT NULL,
             channel_type TEXT NOT NULL,
-            base_url TEXT,
             is_enabled INTEGER DEFAULT 1,
             PRIMARY KEY (provider_id, channel_type)
         )
@@ -36,6 +35,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // 旧库可能仍残留 base_url 列，迁移时删掉（列已不存在则忽略错误）
+    sqlx::query("ALTER TABLE provider_channel_config DROP COLUMN base_url")
+        .execute(pool)
+        .await
+        .ok();
 
     // 模型列表（用户配置的数据）
     sqlx::query(

@@ -16,7 +16,6 @@ pub struct ProviderConfigRow {
 pub struct ProviderChannelConfigRow {
     pub provider_id: String,
     pub channel_type: String,
-    pub base_url: Option<String>,
     pub is_enabled: bool,
 }
 

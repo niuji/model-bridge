@@ -34,7 +34,7 @@
         <div class="form-section"><div class="section-label">通道配置</div>
           <div v-for="(ch, i) in form.channels" :key="ch.channel_type" class="channel-row">
             <span class="channel-type-label mono">{{ channelLabel(ch.channel_type) }}</span>
-            <n-input v-model:value="form.channels[i].base_url" size="small" class="mono channel-url-input" /><n-switch v-model:value="form.channels[i].is_enabled" size="small" />
+            <n-input v-model:value="form.channels[i].base_url" size="small" readonly class="mono channel-url-input" title="base_url 由配置文件决定，不可在此修改" /><n-switch v-model:value="form.channels[i].is_enabled" size="small" />
           </div>
         </div>
         <div class="form-section"><div class="section-label">模型列表

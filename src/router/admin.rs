@@ -45,7 +45,6 @@ pub async fn get_provider(
 #[derive(Deserialize)]
 pub struct UpdateProviderChannel {
     pub channel_type: String,
-    pub base_url: String,
     pub is_enabled: bool,
 }
 
@@ -68,10 +67,10 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
-    let channels: Vec<(String, String, bool)> = req
+    let channels: Vec<(String, bool)> = req
         .channels
         .into_iter()
-        .map(|c| (c.channel_type, c.base_url, c.is_enabled))
+        .map(|c| (c.channel_type, c.is_enabled))
         .collect();
 
     let models: Vec<(String, String)> = req

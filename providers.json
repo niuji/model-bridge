@@ -5,8 +5,8 @@
     "icon": "openai.svg",
     "models_endpoint": "https://api.openai.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.openai.com" },
-      { "type": "openai_responses", "base_url": "https://api.openai.com" }
+      { "type": "openai_chat", "base_url": "https://api.openai.com/v1" },
+      { "type": "openai_responses", "base_url": "https://api.openai.com/v1" }
     ]
   },
   {
@@ -15,8 +15,8 @@
     "icon": "deepseek.svg",
     "models_endpoint": "https://api.deepseek.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.deepseek.com" },
-      { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic" }
+      { "type": "openai_chat", "base_url": "https://api.deepseek.com/v1" },
+      { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic/v1" }
     ]
   },
   {
@@ -25,19 +25,19 @@
     "icon": "minimax.ico",
     "models_endpoint": "https://api.minimaxi.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.minimaxi.com" },
-      { "type": "openai_responses", "base_url": "https://api.minimaxi.com" },
-      { "type": "anthropic", "base_url": "https://api.minimaxi.com/anthropic" }
+      { "type": "openai_chat", "base_url": "https://api.minimaxi.com/v1" },
+      { "type": "openai_responses", "base_url": "https://api.minimaxi.com/v1" },
+      { "type": "anthropic", "base_url": "https://api.minimaxi.com/anthropic/v1" }
     ]
   },
   {
     "id": "bigmodel",
     "name": "BigModel",
-    "icon": "https://mintcdn.com/zhipu-ef7018ed/xv_hHcvqdMWFzOdX/resource/favicon.ico?fit=max&auto=format&n=xv_hHcvqdMWFzOdX&q=85&s=752e7e554a7c529c60c7a2408d9b0308",
+    "icon": "bigmodel.ico",
     "models_endpoint": "https://open.bigmodel.cn/api/paas/v4/models",
     "channels": [
-      { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic" },
-      { "type": "openai_chat", "base_url": "https://open.bigmodel.cn/api/paas/v4/" }
+      { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic/v1" },
+      { "type": "openai_chat", "base_url": "https://open.bigmodel.cn/api/paas/v4" }
     ]
   },
   {
@@ -47,7 +47,7 @@
     "models_endpoint": "https://api.anthropic.com/v1/models",
     "models_endpoint_auth": "x-api-key",
     "channels": [
-      { "type": "anthropic", "base_url": "https://api.anthropic.com" }
+      { "type": "anthropic", "base_url": "https://api.anthropic.com/v1" }
     ]
   }
 ]

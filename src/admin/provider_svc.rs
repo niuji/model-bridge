@@ -199,7 +199,7 @@ pub async fn update_provider(
     id: &str,
     api_key: &str,
     is_enabled: bool,
-    channels: &[(String, String, bool)], // (channel_type, base_url, is_enabled)
+    channels: &[(String, bool)], // (channel_type, is_enabled)
     models: &[(String, String)],          // (model_id, model_name)
 ) -> anyhow::Result<()> {
     // upsert provider_config
@@ -213,20 +213,14 @@ pub async fn update_provider(
     .execute(pool)
     .await?;
 
-    // upsert channel_configs
-    for (channel_type, base_url, enabled) in channels {
-        let base_url_opt: Option<&str> = if base_url.is_empty() {
-            None
-        } else {
-            Some(base_url)
-        };
+    // upsert channel_configs：base_url 以配置文件为准、不持久化，仅存 channel 启用状态
+    for (channel_type, enabled) in channels {
         sqlx::query(
-            "INSERT INTO provider_channel_config (provider_id, channel_type, base_url, is_enabled) VALUES (?, ?, ?, ?)
-             ON CONFLICT(provider_id, channel_type) DO UPDATE SET base_url = excluded.base_url, is_enabled = excluded.is_enabled",
+            "INSERT INTO provider_channel_config (provider_id, channel_type, is_enabled) VALUES (?, ?, ?)
+             ON CONFLICT(provider_id, channel_type) DO UPDATE SET is_enabled = excluded.is_enabled",
         )
         .bind(id)
         .bind(channel_type)
-        .bind(base_url_opt)
         .bind(*enabled as i32)
         .execute(pool)
         .await?;
@@ -342,7 +336,7 @@ async fn get_channel_configs(
     provider_id: &str,
 ) -> Vec<ProviderChannelConfigRow> {
     sqlx::query_as::<_, ProviderChannelConfigRow>(
-        "SELECT provider_id, channel_type, base_url, is_enabled FROM provider_channel_config WHERE provider_id = ?",
+        "SELECT provider_id, channel_type, is_enabled FROM provider_channel_config WHERE provider_id = ?",
     )
     .bind(provider_id)
     .fetch_all(pool)
@@ -350,22 +344,22 @@ async fn get_channel_configs(
     .unwrap_or_default()
 }
 
-/// 合并配置定义与用户覆盖：用户覆盖的 base_url 优先，否则用配置默认值
+/// 合并配置定义与 DB 覆盖：base_url 一律以配置文件定义为准（不允许 DB 自定义），
+/// 仅 is_enabled 取 DB 覆盖值。
 fn merge_channels(
     defs: &[ChannelDef],
     configs: &[ProviderChannelConfigRow],
 ) -> Vec<ChannelDetail> {
     defs.iter()
         .map(|def| {
-            let cfg = configs.iter().find(|c| c.channel_type == def.channel_type);
-            let base_url = cfg
-                .and_then(|c| c.base_url.as_deref())
-                .unwrap_or(&def.base_url)
-                .to_string();
-            let is_enabled = cfg.map(|c| c.is_enabled).unwrap_or(true);
+            let is_enabled = configs
+                .iter()
+                .find(|c| c.channel_type == def.channel_type)
+                .map(|c| c.is_enabled)
+                .unwrap_or(true);
             ChannelDetail {
                 channel_type: def.channel_type.clone(),
-                base_url,
+                base_url: def.base_url.clone(),
                 is_enabled,
             }
         })

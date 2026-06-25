@@ -175,8 +175,13 @@ async fn proxy_to_provider(
         }
     }
 
-    // 3. 构造目标 URL
-    let target_url = format!("{}/v1/{}", route.base_url.trim_end_matches('/'), path);
+    // 3. 构造目标 URL：base_url 自带完整版本前缀（如 .../v1 或 .../api/paas/v4），
+    // 仅拼接 path，并去除两侧多余斜杠，避免出现 // 或重复 /v1。
+    let target_url = format!(
+        "{}/{}",
+        route.base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
 
     // 4. 构造转发请求
     let mut req = state
