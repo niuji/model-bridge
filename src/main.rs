@@ -73,6 +73,14 @@ async fn main() -> anyhow::Result<()> {
 
     // 构建应用状态
     let provider_defs = config::load_providers(&app_config.providers_file)?;
+
+    // 代理服务对外的 base URL（供管理 UI「接入指南」使用）：host 归一为 localhost，scheme 取 http。
+    let proxy_host = match app_config.proxy.host.as_str() {
+        "0.0.0.0" | "::" | "" => "localhost",
+        h => h,
+    };
+    let proxy_base_url = format!("http://{}:{}", proxy_host, app_config.proxy.port);
+
     let state = Arc::new(AppState {
         openai_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         anthropic_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -81,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         client,
         api_key_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         encryption_key,
+        proxy_base_url,
     });
 
     // 首次加载路由表

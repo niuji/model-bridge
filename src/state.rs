@@ -37,6 +37,9 @@ pub struct AppState {
     pub api_key_cache: Arc<RwLock<HashMap<String, String>>>,
     /// 客户端 mb- API key 的 AES-256-GCM 密钥（None 表示明文存储）。
     pub encryption_key: Option<[u8; 32]>,
+    /// 代理服务对外的 base URL（http://{host}:{port}；host 0.0.0.0/::/空 → localhost），
+    /// 供管理 UI「接入指南」展示客户端接入地址。
+    pub proxy_base_url: String,
 }
 
 /// OpenAI /v1/models 响应格式

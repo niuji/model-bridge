@@ -157,7 +157,7 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 | `src/db/schema.rs` | SQLite migrations: `provider_config`, `provider_channel_config`, `provider_models`, `api_keys`, `usage_records` |
 | `src/db/models.rs` | SQLx `FromRow` structs and merge-result DTOs (`ProviderDetail`, `ProviderSummary`, `ChannelDetail`) |
 | `src/middleware/mod.rs` + `auth.rs` | API key auth: `auth_middleware` (wired onto the proxy router), `refresh_api_key_cache()`, `AuthenticatedKey` extension type |
-| `web/src/` | Vue 3 SPA: `Dashboard.vue`, `Providers.vue`, `ApiKeys.vue`, `Logs.vue`. Naive UI components, ECharts charts |
+| `web/src/` | Vue 3 SPA: `Dashboard.vue`, `Providers.vue`, `ApiKeys.vue`, `Logs.vue`, `Help.vue` (接入指南). Naive UI components, ECharts charts |
 | `web/dist/` | Built frontend assets; embedded into the Rust binary via `include_dir!` |
 
 ## Admin API Endpoints
@@ -176,3 +176,4 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 - `GET /api/admin/stats/models` — per-model usage breakdown (last 7 days)
 - `GET /api/admin/stats/daily?days=7` — daily usage for last N days
 - `GET /api/admin/stats/hourly` — hourly token usage (last 7 days)
+- `GET /api/admin/settings` — return `{"proxy_base_url":"http://<host>:<port>"}` (proxy `host` normalized to `localhost` when bound to `0.0.0.0`/`::`); consumed by the「接入指南」help page to render copy-paste-ready client config snippets

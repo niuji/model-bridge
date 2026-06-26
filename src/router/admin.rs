@@ -23,6 +23,13 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
     }
 }
 
+// ===== Settings =====
+
+/// 返回代理服务对外的 base URL，供管理 UI「接入指南」展示客户端接入地址。
+pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({"proxy_base_url": state.proxy_base_url})).into_response()
+}
+
 pub async fn get_provider(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

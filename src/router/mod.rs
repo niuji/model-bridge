@@ -65,6 +65,7 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
                 .put(admin::toggle_api_key)
                 .delete(admin::delete_api_key),
         )
+        .route("/settings", axum::routing::get(admin::get_settings))
         .route("/logs", axum::routing::get(admin::stats_logs))
         .route("/stats/overview", axum::routing::get(admin::stats_overview))
         .route("/stats/models", axum::routing::get(admin::stats_models))

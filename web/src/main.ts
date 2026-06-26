@@ -6,12 +6,14 @@ import Dashboard from './views/Dashboard.vue'
 import Providers from './views/Providers.vue'
 import ApiKeys from './views/ApiKeys.vue'
 import Logs from './views/Logs.vue'
+import Help from './views/Help.vue'
 
 const routes = [
   { path: '/', component: Dashboard },
   { path: '/providers', component: Providers },
   { path: '/api-keys', component: ApiKeys },
   { path: '/logs', component: Logs },
+  { path: '/help', component: Help },
 ]
 
 const router = createRouter({
