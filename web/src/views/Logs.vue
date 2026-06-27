@@ -56,43 +56,43 @@ onMounted(loadLogs)
 
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
-.page-title { font-size: 28px; font-weight: 600; color: #2d2d2a; margin: 0; letter-spacing: -0.02em; }
-.page-subtitle { margin: 6px 0 0; color: #a0a098; font-size: 13px; }
-.record-count { font-size: 12px; color: #a0a098; padding: 5px 12px; background: #ffffff; border: 1px solid #e0dcd5; border-radius: 10px; }
+.page-title { font-size: 28px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; }
+.page-subtitle { margin: 6px 0 0; color: #a89e8c; font-size: 13px; }
+.record-count { font-size: 12px; color: #a89e8c; padding: 5px 12px; background: #ffffff; border: 1px solid #d9cfbf; border-radius: 999px; }
 
-.table-container { background: #ffffff; border: 1px solid #e0dcd5; border-radius: 16px; overflow: hidden; }
-.logs-table { --n-td-color: #ffffff; --n-th-color: #faf8f4; }
+.table-container { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; overflow: hidden; }
+.logs-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; }
 
-.time-cell { font-size: 12px; color: #787870; }
-.model-cell { font-size: 12px; color: #52796f; }
-.provider-cell { font-size: 12px; color: #6b9080; }
-.apikey-cell { font-size: 12px; color: #5a5a52; }
-.apikey-deleted { font-size: 12px; color: #b8a89a; }
+.time-cell { font-size: 12px; color: #74695a; }
+.model-cell { font-size: 12px; color: #74695a; }
+.provider-cell { font-size: 12px; color: #0d6e6b; }
+.apikey-cell { font-size: 12px; color: #74695a; }
+.apikey-deleted { font-size: 12px; color: #a89e8c; }
 .token-info { font-size: 12px; display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .token-main { line-height: 1.4; }
-.token-in { color: #52796f; }
-.token-sep { color: #d5d0c8; }
-.token-out { color: #40916c; }
+.token-in { color: #9c6c00; }
+.token-sep { color: #c9c0b0; }
+.token-out { color: #0d6e6b; }
 .token-cache { font-size: 11px; line-height: 1.3; white-space: nowrap; }
-.cache-label { color: #b8b3a8; margin-right: 5px; }
-.cache-read { color: #6b9080; }
-.cache-sep { color: #d5d0c8; margin: 0 5px; }
-.cache-write { color: #c9a84c; }
-.latency-cell { font-size: 12px; color: #c9a84c; }
+.cache-label { color: #a89e8c; margin-right: 5px; }
+.cache-read { color: #0d6e6b; }
+.cache-sep { color: #c9c0b0; margin: 0 5px; }
+.cache-write { color: #b5842b; }
+.latency-cell { font-size: 12px; color: #b5842b; }
 
-.status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 8px; }
-.status-badge.success { background: rgba(45, 106, 79, 0.06); border: 1px solid rgba(45, 106, 79, 0.15); }
-.status-badge.error { background: rgba(196, 115, 110, 0.06); border: 1px solid rgba(196, 115, 110, 0.15); }
+.status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; }
+.status-badge.success { background: rgba(46, 168, 106, 0.08); border: 1px solid rgba(46, 168, 106, 0.2); }
+.status-badge.error { background: rgba(179, 38, 30, 0.08); border: 1px solid rgba(179, 38, 30, 0.2); }
 .status-dot-sm { width: 5px; height: 5px; border-radius: 50%; }
-.status-badge.success .status-dot-sm { background: #2d6a4f; }
-.status-badge.error .status-dot-sm { background: #c4736e; }
+.status-badge.success .status-dot-sm { background: #2ea86a; }
+.status-badge.error .status-dot-sm { background: #b3261e; }
 .status-text { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; }
-.status-badge.success .status-text { color: #2d6a4f; }
-.status-badge.error .status-text { color: #c4736e; }
-.error-cell { font-size: 12px; color: #c4736e; }
+.status-badge.success .status-text { color: #1d7a4c; }
+.status-badge.error .status-text { color: #b3261e; }
+.error-cell { font-size: 12px; color: #b3261e; }
 
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; text-align: center; }
-.empty-text { margin: 0; font-size: 16px; font-weight: 500; color: #787870; }
-.empty-hint { margin: 6px 0 0; font-size: 13px; color: #a0a098; }
+.empty-text { margin: 0; font-size: 16px; font-weight: 500; color: #74695a; }
+.empty-hint { margin: 6px 0 0; font-size: 13px; color: #a89e8c; }
 </style>
