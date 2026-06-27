@@ -7,28 +7,28 @@
 
     <div class="stat-grid">
       <div class="stat-card">
-        <div class="stat-icon">
+        <div class="stat-icon ico-g">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12" /></svg>
         </div>
         <div class="stat-label">总请求数</div>
         <div class="stat-value mono">{{ formatNum(overview.total_requests) }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon">
+        <div class="stat-icon ico-a">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15,14 20,9 15,4" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
         </div>
         <div class="stat-label">输入 Token</div>
         <div class="stat-value mono">{{ formatNum(overview.total_input_tokens) }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon">
+        <div class="stat-icon ico-t">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9,10 4,15 9,20" /><path d="M20 4v7a4 4 0 0 1-4 4H4" /></svg>
         </div>
         <div class="stat-label">输出 Token</div>
         <div class="stat-value mono">{{ formatNum(overview.total_output_tokens) }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon">
+        <div class="stat-icon ico-g">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12,6 12,12 16,14" /></svg>
         </div>
         <div class="stat-label">平均延迟</div>
@@ -81,19 +81,19 @@ const modelData = ref<ModelRow[]>([])
 
 const hourlyOption = ref({
   backgroundColor: 'transparent',
-  tooltip: { trigger: 'axis' as const, backgroundColor: '#ffffff', borderColor: '#e0dcd5', textStyle: { color: '#2d2d2a', fontFamily: 'Source Code Pro, monospace', fontSize: 12 }, extraCssText: 'border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.06);' },
-  grid: { left: 85, right: 24, bottom: 90, top: 30, borderColor: '#e0dcd5' },
-  xAxis: { type: 'category' as const, data: [] as string[], axisLabel: { rotate: 45, fontSize: 10, fontFamily: 'Source Code Pro, monospace', color: '#787870' }, axisLine: { lineStyle: { color: '#e0dcd5' } }, axisTick: { lineStyle: { color: '#e0dcd5' } } },
-  yAxis: { type: 'value' as const, name: 'Token', nameLocation: 'middle' as const, nameGap: 40, nameTextStyle: { color: '#787870', fontFamily: 'Figtree, sans-serif', fontSize: 11 }, axisLabel: { fontFamily: 'Source Code Pro, monospace', fontSize: 10, color: '#787870', formatter: (v: number) => formatNum(v) }, splitLine: { lineStyle: { color: '#f0ece5', type: 'dashed' as const } } },
-  dataZoom: [{ type: 'slider' as const, start: 0, end: 100, height: 20, bottom: 12, backgroundColor: '#faf8f4', borderColor: '#e0dcd5', borderRadius: 8, dataBackground: { lineStyle: { color: '#2d6a4f', opacity: 0.15 }, areaStyle: { color: '#2d6a4f', opacity: 0.04 } }, selectedDataBackground: { lineStyle: { color: '#2d6a4f' }, areaStyle: { color: '#2d6a4f', opacity: 0.08 } }, handleStyle: { color: '#2d6a4f', borderRadius: 4 }, textStyle: { color: '#787870', fontFamily: 'Source Code Pro, monospace', fontSize: 10 } }],
-  series: [{ name: 'Token 用量', type: 'bar' as const, data: [] as number[], barWidth: '60%', itemStyle: { borderRadius: [6, 6, 0, 0], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#2d6a4f' }, { offset: 1, color: '#95d5b2' }]) }, emphasis: { itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#1b4332' }, { offset: 1, color: '#52b788' }]) } } }],
+  tooltip: { trigger: 'axis' as const, backgroundColor: '#ffffff', borderColor: '#d9cfbf', textStyle: { color: '#17140f', fontFamily: 'IBM Plex Mono, monospace', fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(23,20,15,0.06);' },
+  grid: { left: 85, right: 24, bottom: 90, top: 30, borderColor: '#d9cfbf' },
+  xAxis: { type: 'category' as const, data: [] as string[], axisLabel: { rotate: 45, fontSize: 10, fontFamily: 'IBM Plex Mono, monospace', color: '#74695a' }, axisLine: { lineStyle: { color: '#d9cfbf' } }, axisTick: { lineStyle: { color: '#d9cfbf' } } },
+  yAxis: { type: 'value' as const, name: 'Token', nameLocation: 'middle' as const, nameGap: 40, nameTextStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 }, axisLabel: { fontFamily: 'IBM Plex Mono, monospace', fontSize: 10, color: '#74695a', formatter: (v: number) => formatNum(v) }, splitLine: { lineStyle: { color: '#ece6da', type: 'dashed' as const } } },
+  dataZoom: [{ type: 'slider' as const, start: 0, end: 100, height: 20, bottom: 12, backgroundColor: '#f4efe3', borderColor: '#d9cfbf', borderRadius: 8, dataBackground: { lineStyle: { color: '#2ea86a', opacity: 0.15 }, areaStyle: { color: '#2ea86a', opacity: 0.04 } }, selectedDataBackground: { lineStyle: { color: '#2ea86a' }, areaStyle: { color: '#2ea86a', opacity: 0.08 } }, handleStyle: { color: '#2ea86a', borderRadius: 4 }, textStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 10 } }],
+  series: [{ name: 'Token 用量', type: 'bar' as const, data: [] as number[], barWidth: '60%', itemStyle: { borderRadius: [4, 4, 0, 0], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#2ea86a' }, { offset: 1, color: '#8dd8ae' }]) }, emphasis: { itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#1d7a4c' }, { offset: 1, color: '#2ea86a' }]) } } }],
 })
 
 const heatmapOption = ref({
   backgroundColor: 'transparent',
-  tooltip: { formatter: (p: any) => `${p.value[0]}<br/>Token: <b>${formatNum(p.value[1] as number)}</b>`, backgroundColor: '#ffffff', borderColor: '#e0dcd5', textStyle: { color: '#2d2d2a', fontFamily: 'Source Code Pro, monospace', fontSize: 12 }, extraCssText: 'border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.06);' },
-  visualMap: { min: 0, max: 1, type: 'continuous' as const, orient: 'vertical' as const, right: 10, top: 'middle', itemWidth: 10, itemHeight: 90, inRange: { color: ['#f0ece5', '#b7e4c7', '#52b788', '#2d6a4f'] }, textStyle: { color: '#787870', fontFamily: 'Source Code Pro, monospace', fontSize: 9 } },
-  calendar: { range: ['2026-01-01', '2026-01-31'], cellSize: [13, 13], left: 36, right: 56, top: 24, bottom: 8, orient: 'horizontal', itemStyle: { borderWidth: 2, borderColor: '#fff', color: '#faf8f4' }, yearLabel: { show: false }, monthLabel: { nameMap: 'cn', color: '#787870', fontFamily: 'Figtree, sans-serif', fontSize: 11, margin: 8 }, dayLabel: { firstDay: 1, nameMap: 'cn', color: '#a0a098', fontFamily: 'Source Code Pro, monospace', fontSize: 10 }, splitLine: { show: false } },
+  tooltip: { formatter: (p: any) => `${p.value[0]}<br/>Token: <b>${formatNum(p.value[1] as number)}</b>`, backgroundColor: '#ffffff', borderColor: '#d9cfbf', textStyle: { color: '#17140f', fontFamily: 'IBM Plex Mono, monospace', fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(23,20,15,0.06);' },
+  visualMap: { min: 0, max: 1, type: 'continuous' as const, orient: 'vertical' as const, right: 10, top: 'middle', itemWidth: 10, itemHeight: 90, inRange: { color: ['#ece6da', '#bfe6cf', '#5bbf8a', '#2ea86a', '#1d7a4c'] }, textStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 9 } },
+  calendar: { range: ['2026-01-01', '2026-01-31'], cellSize: [13, 13], left: 36, right: 56, top: 24, bottom: 8, orient: 'horizontal', itemStyle: { borderWidth: 2, borderColor: '#fff', color: '#faf7f0' }, yearLabel: { show: false }, monthLabel: { nameMap: 'cn', color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, margin: 8 }, dayLabel: { firstDay: 1, nameMap: 'cn', color: '#a89e8c', fontFamily: 'IBM Plex Mono, monospace', fontSize: 10 }, splitLine: { show: false } },
   series: [{ type: 'heatmap' as const, coordinateSystem: 'calendar', data: [] as any[] }],
 })
 import * as echarts from 'echarts/core'
@@ -106,7 +106,7 @@ const modelColumns: DataTableColumns<ModelRow> = [
   { title: '输出', key: 'total_output_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.total_output_tokens)) },
   { title: '缓存读取', key: 'cache_read_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.cache_read_tokens)) },
   { title: '缓存写入', key: 'cache_write_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.cache_write_tokens)) },
-  { title: '命中率', key: 'cache_hit_rate', width: 90, align: 'right', render: (row) => h('span', { class: 'mono', style: { color: row.cache_hit_rate > 0 ? '#2d6a4f' : '#a0a098', fontWeight: row.cache_hit_rate > 0 ? '600' : '400' } }, `${row.cache_hit_rate}%`) },
+  { title: '命中率', key: 'cache_hit_rate', width: 90, align: 'right', render: (row) => h('span', { class: 'mono', style: { color: row.cache_hit_rate > 0 ? '#1d7a4c' : '#a89e8c', fontWeight: row.cache_hit_rate > 0 ? '600' : '400' } }, `${row.cache_hit_rate}%`) },
 ]
 function formatNum(n: number): string { if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'; if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'; return String(n) }
 const byHour = ref(true)
@@ -142,30 +142,34 @@ onMounted(loadData)
 <style scoped>
 .dashboard { display: flex; flex-direction: column; gap: 20px; }
 .page-header { margin-bottom: 4px; }
-.page-title { font-size: 28px; font-weight: 600; color: #2d2d2a; margin: 0; letter-spacing: -0.02em; }
-.page-subtitle { margin: 6px 0 0; color: #a0a098; font-size: 13px; }
+.page-title { font-size: 28px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; }
+.page-subtitle { margin: 6px 0 0; color: #a89e8c; font-size: 13px; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.stat-card { background: #ffffff; border: 1px solid #e0dcd5; border-radius: 16px; padding: 22px; transition: box-shadow 0.2s; }
-.stat-card:hover { box-shadow: 0 4px 24px rgba(0,0,0,0.05); }
-.stat-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; background: rgba(45, 106, 79, 0.08); color: #2d6a4f; }
-.stat-label { font-size: 12px; font-weight: 500; color: #a0a098; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-.stat-value { font-size: 28px; font-weight: 600; color: #2d2d2a; line-height: 1; }
-.stat-unit { font-size: 16px; color: #a0a098; font-weight: 400; margin-left: 3px; }
+.stat-card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; padding: 22px; transition: box-shadow 0.2s, transform 0.2s; }
+.stat-card:hover { box-shadow: 0 6px 22px rgba(23,20,15,0.06); transform: translateY(-1px); }
+.stat-icon { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
+.stat-icon svg { width: 20px; height: 20px; }
+.stat-icon.ico-g { background: #bfe6cf; color: #1d7a4c; }
+.stat-icon.ico-a { background: #f6e6b6; color: #9c6c00; }
+.stat-icon.ico-t { background: #c2e8e6; color: #0d6e6b; }
+.stat-label { font-size: 12px; font-weight: 500; color: #a89e8c; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.stat-value { font-size: 28px; font-weight: 600; color: #17140f; line-height: 1; }
+.stat-unit { font-size: 16px; color: #a89e8c; font-weight: 400; margin-left: 3px; }
 
-.card { background: #ffffff; border: 1px solid #e0dcd5; border-radius: 16px; overflow: hidden; }
-.card-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #f0ece5; }
+.card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; overflow: hidden; }
+.card-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #ece6da; }
 .chart-header-right { display: flex; align-items: center; gap: 12px; }
-.card-title { margin: 0; font-family: 'Newsreader', 'Georgia', serif; font-size: 17px; font-weight: 600; color: #2d2d2a; letter-spacing: -0.01em; }
-.card-badge { font-size: 11px; color: #a0a098; padding: 4px 10px; background: #faf8f4; border: 1px solid #e0dcd5; border-radius: 8px; }
+.card-title { margin: 0; font-family: 'Fraunces', 'Georgia', serif; font-size: 17px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; }
+.card-badge { font-size: 11px; color: #74695a; padding: 4px 10px; background: #f4efe3; border: 1px solid #d9cfbf; border-radius: 999px; }
 .card-body { padding: 24px; }
 
 .chart { height: 320px; }
 .chart-bar { height: 380px; }
 .chart-heatmap { height: 170px; }
-.dashboard-table { --n-td-color: #ffffff; --n-th-color: #faf8f4; }
-.model-id-cell { font-size: 12px; color: #52796f; }
-.token-cell { color: #2d6a4f; font-weight: 500; }
+.dashboard-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; }
+.model-id-cell { font-size: 12px; color: #74695a; }
+.token-cell { color: #1d7a4c; font-weight: 500; }
 
 @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .stat-grid { grid-template-columns: 1fr; } .content { padding: 16px; } }
