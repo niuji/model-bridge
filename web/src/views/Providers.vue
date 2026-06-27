@@ -111,7 +111,7 @@ onMounted(loadProviders)
 .provider-card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; padding: 22px; cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s; }
 .provider-card:hover { border-color: rgba(46, 168, 106, 0.3); box-shadow: 0 6px 22px rgba(23,20,15,0.06); transform: translateY(-1px); }
 .provider-card.disabled { opacity: 0.55; }
-.provider-card.disabled:hover { border-color: rgba(179, 38, 30, 0.25); box-shadow: 0 4px 24px rgba(179, 38, 30, 0.06); }
+.provider-card.disabled:hover { border-color: rgba(181, 132, 43, 0.25); box-shadow: 0 4px 24px rgba(181, 132, 43, 0.06); }
 .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
 .card-name { display: flex; align-items: center; gap: 10px; }
 .card-icon { width: 24px; height: 24px; object-fit: contain; flex-shrink: 0; }
