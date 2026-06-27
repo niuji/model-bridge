@@ -94,61 +94,63 @@ const menuOptions = [
 ]
 function navigate(key: string) { router.push(key) }
 
-// --- Soft Laboratory theme ---
+// --- Editorial Ink + Fresh Data theme ---
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    fontFamily: "'Figtree', -apple-system, BlinkMacSystemFont, sans-serif",
-    fontFamilyMono: "'Source Code Pro', 'Fira Code', monospace",
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontFamilyMono: "'IBM Plex Mono', monospace",
     fontSize: '14px',
-    primaryColor: '#2d6a4f',
-    primaryColorHover: '#40916c',
-    primaryColorPressed: '#1b4332',
-    primaryColorSuppl: '#2d6a4f',
-    infoColor: '#52796f',
-    infoColorHover: '#6b9080',
-    successColor: '#2d6a4f',
-    warningColor: '#e6b85c',
-    errorColor: '#c4736e',
-    bodyColor: '#f5f1eb',
-    baseColor: '#f5f1eb',
+    primaryColor: '#17140f',
+    primaryColorHover: '#2a2620',
+    primaryColorPressed: '#000000',
+    primaryColorSuppl: '#17140f',
+    infoColor: '#159b96',
+    infoColorHover: '#1aab9f',
+    successColor: '#2ea86a',
+    successColorHover: '#36bb78',
+    warningColor: '#b5842b',
+    errorColor: '#b3261e',
+    bodyColor: '#faf7f0',
+    baseColor: '#faf7f0',
     cardColor: '#ffffff',
     modalColor: '#ffffff',
     popoverColor: '#ffffff',
     tableColor: '#ffffff',
-    borderColor: '#e0dcd5',
-    dividerColor: '#e0dcd5',
-    textColorBase: '#2d2d2a',
-    textColor1: '#2d2d2a',
-    textColor2: '#787870',
-    textColor3: '#a0a098',
-    inputColor: '#faf8f4',
-    hoverColor: 'rgba(45, 106, 79, 0.04)',
-    boxShadow1: '0 1px 3px rgba(0,0,0,0.04)',
-    boxShadow2: '0 4px 20px rgba(0,0,0,0.06)',
-    boxShadow3: '0 10px 40px rgba(0,0,0,0.08)',
-    borderRadius: '12px',
+    borderColor: '#d9cfbf',
+    dividerColor: '#ece6da',
+    textColorBase: '#17140f',
+    textColor1: '#17140f',
+    textColor2: '#74695a',
+    textColor3: '#a89e8c',
+    inputColor: '#ffffff',
+    hoverColor: 'rgba(23, 20, 15, 0.04)',
+    boxShadow1: '0 1px 2px rgba(23,20,15,0.05)',
+    boxShadow2: '0 4px 16px rgba(23,20,15,0.06)',
+    boxShadow3: '0 12px 40px rgba(23,20,15,0.08)',
+    borderRadius: '10px',
     heightSmall: '30px',
     heightMedium: '34px',
     heightLarge: '40px',
   },
-  Layout: { siderColor: '#f0ebe0', headerColor: '#f0ebe0', footerColor: '#f0ebe0' },
+  Layout: { siderColor: '#f4efe3', headerColor: '#faf7f0', footerColor: '#f4efe3' },
   Menu: {
-    itemTextColor: '#787870', itemTextColorHover: '#2d6a4f', itemTextColorActive: '#2d6a4f',
-    itemIconColor: '#a0a098', itemIconColorHover: '#2d6a4f', itemIconColorActive: '#2d6a4f',
-    itemColorHover: 'rgba(45, 106, 79, 0.06)', itemColorActive: 'rgba(45, 106, 79, 0.08)', itemColorActiveHover: 'rgba(45, 106, 79, 0.1)',
-    borderRadius: '10px',
+    itemTextColor: '#74695a', itemTextColorHover: '#17140f', itemTextColorActive: '#1d7a4c',
+    itemIconColor: '#a89e8c', itemIconColorHover: '#17140f', itemIconColorActive: '#1d7a4c',
+    itemColorHover: 'rgba(23,20,15,0.04)',
+    itemColorActive: 'rgba(46,168,106,0.10)', itemColorActiveHover: 'rgba(46,168,106,0.14)',
+    borderRadius: '8px',
   },
-  Card: { borderRadius: '16px', borderColor: '#e0dcd5', paddingMedium: '24px', titleTextColor: '#2d2d2a', titleFontSize: '15px', titleFontWeight: '600' },
-  Button: { borderRadiusSmall: '8px', borderRadiusMedium: '10px', borderRadiusLarge: '12px' },
-  Input: { borderRadius: '10px', border: '1px solid #e0dcd5', borderFocus: '1px solid #2d6a4f', borderHover: '1px solid #c5c0b8', boxShadowFocus: '0 0 0 3px rgba(45, 106, 79, 0.1)' },
-  Switch: { railColorActive: '#2d6a4f', railHeight: '22px', railWidth: '40px', buttonWidth: '18px', buttonHeight: '18px', borderRadius: '11px' },
-  Table: { tdColor: '#ffffff', thColor: '#faf8f4', thTextColor: '#787870', tdTextColor: '#2d2d2a', borderColor: '#e0dcd5', thFontWeight: '600', thFontSize: '12px', fontSizeSmall: '13px', borderRadius: '12px' },
-  DataTable: { tdColor: '#ffffff', thColor: '#faf8f4', thTextColor: '#787870', tdTextColor: '#2d2d2a', borderColor: '#e0dcd5' },
-  Modal: { borderRadius: '16px', textColor: '#2d2d2a' },
-  Tag: { borderRadius: '8px' },
-  Pagination: { itemColor: '#ffffff', itemColorActive: 'rgba(45, 106, 79, 0.08)', itemTextColorActive: '#2d6a4f', itemBorder: '1px solid #e0dcd5', itemBorderActive: '1px solid rgba(45, 106, 79, 0.25)', itemBorderRadius: '8px' },
-  Slider: { fillColor: '#2d6a4f', fillColorHover: '#40916c' },
-  Spin: { color: '#2d6a4f' },
+  Card: { borderRadius: '12px', borderColor: '#d9cfbf', paddingMedium: '22px', titleTextColor: '#17140f', titleFontSize: '16px', titleFontWeight: '600', titleFontFamily: "'Fraunces', serif" },
+  Button: { borderRadiusSmall: '8px', borderRadiusMedium: '8px', borderRadiusLarge: '10px' },
+  Input: { borderRadius: '8px', border: '1px solid #d9cfbf', borderFocus: '1px solid #2ea86a', borderHover: '1px solid #bfb29a', boxShadowFocus: '0 0 0 3px rgba(46,168,106,0.12)' },
+  Switch: { railColorActive: '#2ea86a' },
+  Table: { tdColor: '#ffffff', thColor: '#f4efe3', thTextColor: '#74695a', tdTextColor: '#17140f', borderColor: '#ece6da', thFontWeight: '600', thFontSize: '11px', fontSizeSmall: '13px', borderRadius: '12px' },
+  DataTable: { tdColor: '#ffffff', thColor: '#f4efe3', thTextColor: '#74695a', tdTextColor: '#17140f', borderColor: '#ece6da' },
+  Modal: { borderRadius: '14px', textColor: '#17140f' },
+  Tag: { borderRadius: '999px' },
+  Pagination: { itemColor: '#ffffff', itemColorActive: 'rgba(23,20,15,0.06)', itemTextColorActive: '#17140f', itemBorder: '1px solid #d9cfbf', itemBorderActive: '1px solid #17140f', itemBorderRadius: '8px' },
+  Slider: { fillColor: '#17140f', fillColorHover: '#2a2620', handleColor: '#17140f' },
+  Spin: { color: '#1d7a4c' },
 }
 </script>
 
@@ -157,45 +159,38 @@ const themeOverrides: GlobalThemeOverrides = {
 
 body {
   margin: 0; padding: 0;
-  background: #ebe5d9;
-  color: #2d2d2a;
-  font-family: 'Figtree', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #e7e3d7;
+  color: #17140f;
+  font-family: 'IBM Plex Mono', -apple-system, BlinkMacSystemFont, monospace;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
-}
-
-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(45, 106, 79, 0.006) 2px, rgba(45, 106, 79, 0.006) 4px);
-  pointer-events: none; z-index: 0;
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #d5d0c8; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #2d6a4f; }
+::-webkit-scrollbar-thumb { background: #c9c0b0; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #1d7a4c; }
 
 .app-wrapper {
   max-width: 1440px; margin: 0 auto;
-  background: #f5f1eb; min-height: 100vh;
+  background: #faf7f0; min-height: 100vh;
   position: relative; z-index: 1;
-  box-shadow: 0 0 60px rgba(0,0,0,0.04);
+  box-shadow: 0 0 60px rgba(23,20,15,0.06);
 }
 .app-shell { height: 100vh; position: relative; z-index: 1; }
 .main-area { background: transparent !important; overflow-y: auto; }
 
-.sidebar { background: #f0ebe0 !important; border-right: 1px solid #e0dcd5 !important; position: relative; }
-.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 22px 18px; border-bottom: 1px solid #e0dcd5; }
-.brand-icon { color: #2d6a4f; display: flex; align-items: center; flex-shrink: 0; }
-.brand-text { font-size: 18px; font-weight: 600; color: #2d2d2a; letter-spacing: -0.01em; white-space: nowrap; }
+.sidebar { background: #f4efe3 !important; border-right: 1px solid #d9cfbf !important; position: relative; }
+.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 22px 18px; border-bottom: 1px solid #d9cfbf; }
+.brand-icon { color: #17140f; display: flex; align-items: center; flex-shrink: 0; }
+.brand-text { font-size: 18px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; white-space: nowrap; }
 .sidebar-menu { padding: 8px 8px 48px 8px; background: transparent !important; }
-.sidebar-menu .n-menu-item-content { font-family: 'Figtree', sans-serif; font-size: 13px; font-weight: 500; }
-.sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid #e0dcd5; background: #f0ebe0; }
-.footer-version { font-size: 11px; color: #a0a098; letter-spacing: 0.02em; }
+.sidebar-menu .n-menu-item-content { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 500; }
+.sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid #d9cfbf; background: #f4efe3; }
+.footer-version { font-size: 11px; color: #a89e8c; letter-spacing: 0.02em; }
 .status-indicator { display: flex; align-items: center; gap: 6px; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #2d6a4f; box-shadow: 0 0 6px rgba(45, 106, 79, 0.3); animation: status-pulse 3s ease-in-out infinite; }
-@keyframes status-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(45, 106, 79, 0.3); } 50% { box-shadow: 0 0 12px rgba(45, 106, 79, 0.5); } }
-.status-label { font-size: 12px; color: #a0a098; letter-spacing: 0.02em; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #2ea86a; box-shadow: 0 0 6px rgba(46,168,106,0.4); animation: status-pulse 3s ease-in-out infinite; }
+@keyframes status-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(46,168,106,0.4); } 50% { box-shadow: 0 0 12px rgba(46,168,106,0.6); } }
+.status-label { font-size: 12px; color: #a89e8c; letter-spacing: 0.02em; }
 
 .content { padding: 28px 32px; max-width: 1280px; position: relative; z-index: 1; }
 
@@ -204,9 +199,7 @@ body::before {
 .page-enter-from { opacity: 0; transform: translateY(8px); }
 .page-leave-to { opacity: 0; transform: translateY(-8px); }
 
-.mono { font-family: 'Source Code Pro', monospace; }
-.serif { font-family: 'Newsreader', 'Georgia', serif; }
-.n-layout-sider-scroll-container {
-  height: 100%;
-}
+.mono { font-family: 'IBM Plex Mono', monospace; }
+.serif { font-family: 'Fraunces', 'Georgia', serif; }
+.n-layout-sider-scroll-container { height: 100%; }
 </style>
