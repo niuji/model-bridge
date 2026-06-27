@@ -108,7 +108,7 @@ onMounted(loadProviders)
 .page-subtitle { margin: 6px 0 0; color: #a89e8c; font-size: 13px; }
 
 .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
-.provider-card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; padding: 22px; cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform: 0.15s; }
+.provider-card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; padding: 22px; cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s; }
 .provider-card:hover { border-color: rgba(46, 168, 106, 0.3); box-shadow: 0 6px 22px rgba(23,20,15,0.06); transform: translateY(-1px); }
 .provider-card.disabled { opacity: 0.55; }
 .provider-card.disabled:hover { border-color: rgba(179, 38, 30, 0.25); box-shadow: 0 4px 24px rgba(179, 38, 30, 0.06); }
