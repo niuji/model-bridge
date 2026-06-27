@@ -168,8 +168,9 @@ onMounted(loadData)
 .chart-bar { height: 380px; }
 .chart-heatmap { height: 170px; }
 .dashboard-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; }
-.model-id-cell { font-size: 12px; color: #74695a; }
-.token-cell { color: #1d7a4c; font-weight: 500; }
+/* column.render 产生的 VNode 不带本组件 scoped id，plain scoped 命中不到，必须 :deep（同 Logs.vue） */
+.dashboard :deep(.model-id-cell) { font-size: 12px; color: #74695a; }
+.dashboard :deep(.token-cell) { color: #1d7a4c; font-weight: 500; }
 
 @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .stat-grid { grid-template-columns: 1fr; } .content { padding: 16px; } }
