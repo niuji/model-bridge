@@ -29,7 +29,7 @@
               class="sidebar-menu"
             />
             <div class="sidebar-footer">
-              <span class="footer-version mono">v0.1.0</span>
+              <span class="footer-version mono">v{{ appVersion }}</span>
               <div class="status-indicator">
                 <span class="status-dot" />
               </div>
@@ -61,6 +61,12 @@ import {
   zhCN, dateZhCN, NIcon,
 } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
+
+// Build-time version (Vite `define`, sourced from Cargo.toml). Must be bound
+// here in <script setup>, not referenced directly in the template — the SFC
+// compiler rewrites bare template identifiers into render-context property
+// accesses (e.g. h.__APP_VERSION__), which Vite's define cannot replace.
+const appVersion = __APP_VERSION__
 
 const router = useRouter(); const route = useRoute()
 const currentRoute = computed(() => route.path)
