@@ -373,9 +373,12 @@ async fn proxy_streaming_response(
         // 一个分块也可能包含多个事件。因此按完整行（以 \n 切分）解析 data: 负载，
         // 不完整的行留在缓冲区等下一块，避免漏提或解析半截 JSON。
         let mut line_buf: Vec<u8> = Vec::new();
-        // 累积所有 SSE 事件中的 usage（不能只取最后一个，Anthropic 的
-        // input_tokens 在 message_start，output_tokens 在 message_delta）
-        let mut acc_usage = (0i64, 0i64, 0i64, 0i64); // (input, output, cache_read, cache_write)
+        // usage 各字段（input/output/cache_read/cache_write）在 SSE 事件中是累计终值而非
+        // 增量，取「最后一个非零值」而非求和：message_delta 携带最终值、覆盖 message_start
+        // 的初始/stub 值；标准 Anthropic 的 message_delta 无 input/cache 字段时则保留
+        // message_start 的值。求和会让 glm-5.2 这类「start 与 delta 都带非平凡
+        // input_tokens」的模型把 input 算两遍。
+        let mut last_usage = (0i64, 0i64, 0i64, 0i64); // (input, output, cache_read, cache_write)
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
@@ -385,10 +388,11 @@ async fn proxy_streaming_response(
                         let drained: Vec<u8> = line_buf.drain(..=nl).collect();
                         if let Some(payload) = parse_data_line(&drained) {
                             let u = extract_usage_from_sse_event(&payload, &api_format_final);
-                            acc_usage.0 += u.0;
-                            acc_usage.1 += u.1;
-                            acc_usage.2 += u.2;
-                            acc_usage.3 += u.3;
+                            // 逐字段覆盖：仅当新值非零时更新（0 表示该事件未提供此字段）
+                            if u.0 > 0 { last_usage.0 = u.0; }
+                            if u.1 > 0 { last_usage.1 = u.1; }
+                            if u.2 > 0 { last_usage.2 = u.2; }
+                            if u.3 > 0 { last_usage.3 = u.3; }
                         }
                     }
                     if tx.send(Ok(bytes)).await.is_err() {
@@ -422,10 +426,10 @@ async fn proxy_streaming_response(
                 state_final,
                 model_final,
                 provider_final,
-                acc_usage.0,
-                acc_usage.1,
-                acc_usage.2,
-                acc_usage.3,
+                last_usage.0,
+                last_usage.1,
+                last_usage.2,
+                last_usage.3,
                 latency_ms,
                 "success",
                 None,
