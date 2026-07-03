@@ -214,7 +214,7 @@ async fn proxy_to_provider(
     // 7. 发送请求（带超时）
     let start = std::time::Instant::now();
     match req
-        .timeout(std::time::Duration::from_secs(300))
+        .timeout(std::time::Duration::from_secs(480))
         .body(request_body)
         .send()
         .await
