@@ -418,10 +418,6 @@ async fn proxy_streaming_response(
         // 流结束时写入累积的 usage
         if !has_error {
             let latency_ms = start_clone.elapsed().as_millis() as i64;
-            tracing::debug!(
-                "STREAM acc usage: model={}, input={}, output={}, cache_read={}, cache_write={}",
-                model_final, acc_usage.0, acc_usage.1, acc_usage.2, acc_usage.3
-            );
             tokio::spawn(write_usage(
                 state_final,
                 model_final,
@@ -482,38 +478,18 @@ fn extract_usage_from_sse_event(data: &[u8], api_format: &str) -> (i64, i64, i64
         Err(_) => return (0, 0, 0, 0),
     };
 
-    // 记录事件类型和原始 usage 数据，方便排查格式问题
     let event_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     // Anthropic message_start: usage 在 message.usage 下
     if event_type == "message_start" {
         if let Some(msg_usage) = v.get("message").and_then(|m| m.get("usage")) {
-            let r = extract_usage(msg_usage, api_format);
-            tracing::debug!(
-                "SSE usage: type={}, input={}, output={}, cache_read={}, cache_write={}",
-                event_type, r.0, r.1, r.2, r.3
-            );
-            return r;
+            return extract_usage(msg_usage, api_format);
         }
-        // message_start 但没有 usage — 记录原始数据
-        let preview = String::from_utf8_lossy(data);
-        tracing::debug!("SSE message_start without usage: {}", preview.chars().take(512).collect::<String>());
     }
 
     // 通用: usage 在顶层（OpenAI 末尾 chunk / Anthropic message_delta）
     if let Some(usage) = v.get("usage") {
-        let r = extract_usage(usage, api_format);
-        tracing::info!(
-            "SSE usage: type={}, input={}, output={}, cache_read={}, cache_write={}",
-            event_type, r.0, r.1, r.2, r.3
-        );
-        return r;
-    }
-
-    // 有 type 但没有 usage — 记录 unexpected 事件
-    if matches!(event_type, "message_delta" | "message_stop" | "content_block_stop" | "message_start") {
-        let preview = String::from_utf8_lossy(data);
-        tracing::debug!("SSE event without usage: type={}, data={}", event_type, preview.chars().take(512).collect::<String>());
+        return extract_usage(usage, api_format);
     }
 
     (0, 0, 0, 0)
