@@ -133,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
     // 启动管理服务
     let admin_addr = format!("{}:{}", app_config.admin.host, app_config.admin.port);
     let admin_listener = tokio::net::TcpListener::bind(&admin_addr).await?;
-    tracing::info!("admin service starting on {}", admin_addr);
+    tracing::info!("admin service starting on http://{}", admin_addr);
 
     // 并行运行两个服务，任一退出则整体退出
     let proxy_svc = axum::serve(proxy_listener, proxy_router)
