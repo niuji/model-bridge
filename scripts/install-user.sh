@@ -6,6 +6,7 @@
 #
 # 用法：
 #   bash scripts/install-user.sh                  # 自动取 target/release，否则下载最新 release
+#   bash scripts/install-user.sh --build          # 先 npm run build + cargo build --release 再装（版本变更时用）
 #   bash scripts/install-user.sh --binary /path/to/model-bridge
 #   bash scripts/install-user.sh --uninstall
 #
@@ -28,13 +29,15 @@ BIN_PATH="$BIN_DIR/model-bridge"
 CFG_PATH="$CFG_DIR/model-bridge.toml"
 
 BINARY=""
+BUILD=0
 UNINSTALL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --build) BUILD=1; shift ;;
     --binary) BINARY="$2"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
@@ -49,7 +52,28 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
   exit 0
 fi
 
-# --- 定位二进制：--binary > 本地编译产物 > 下载最新 release ---
+# --- --build：从源码构建（npm + cargo）再继续安装 ---
+# 版本号在 vite build 时从 Cargo.toml 烘进前端 bundle，所以 Cargo.toml 版本一变就必须重跑
+# npm run build，否则侧边栏版本会滞后于二进制 --version。
+if [[ "$BUILD" -eq 1 ]]; then
+  if [[ -n "$BINARY" ]]; then
+    echo "--build 与 --binary 互斥" >&2
+    exit 2
+  fi
+  [[ -f ./Cargo.toml && -f ./web/package.json ]] || { echo "--build 需在仓库根目录运行（需有 Cargo.toml 和 web/）" >&2; exit 1; }
+  command -v npm >/dev/null 2>&1 || { echo "--build 需要 npm" >&2; exit 1; }
+  command -v cargo >/dev/null 2>&1 || { echo "--build 需要 cargo" >&2; exit 1; }
+  if [[ ! -d ./web/node_modules ]]; then
+    echo ">> web/node_modules 缺失，先 npm install..."
+    (cd web && npm install) || { echo "npm install 失败" >&2; exit 1; }
+  fi
+  echo ">> npm run build（前端版本从 Cargo.toml 烘入 bundle）"
+  (cd web && npm run build) || { echo "npm run build 失败" >&2; exit 1; }
+  echo ">> cargo build --release"
+  cargo build --release || { echo "cargo build 失败" >&2; exit 1; }
+fi
+
+# --- 定位二进制：--binary > 本地编译产物(--build 后存在) > 下载最新 release ---
 if [[ -n "$BINARY" ]]; then
   :
 elif [[ -x "./target/release/model-bridge" ]]; then
