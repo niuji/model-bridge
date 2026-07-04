@@ -88,9 +88,9 @@ git push origin v0.1.0
 
 Providers are defined in three layers that merge at startup:
 
-1. **`providers.json`** (static definition) — id, name, icon, `models_endpoint` (optional), and `channels` array (each with `type` and `base_url`). These are loaded once at startup into `AppState.provider_defs`. The file is also embedded into the binary via `include_str!` (`src/config.rs::load_providers`): if the on-disk `providers_file` is missing, the embedded builtin definition is used as a fallback, so a release build (which ships the binary alone) starts without any extra files. A present on-disk file always wins, for local editing.
+1. **`providers.json`** (static definition) — id, name, icon, `models_endpoint` (optional), `models_endpoint_auth` (optional, `"bearer"` default or `"x-api-key"`), and `channels` array (each with `type` and `base_url`). These are loaded once at startup into `AppState.provider_defs`. The file is also embedded into the binary via `include_str!` (`src/config.rs::load_providers`): if the on-disk `providers_file` is missing, the embedded builtin definition is used as a fallback, so a release build (which ships the binary alone) starts without any extra files. A present on-disk file always wins, for local editing.
 2. **`~/.mb/providers.json`** (user-local overrides) — same schema as `providers.json`. Loaded and merged into layer 1 at startup: same `id` replaces the builtin entry, new `id` is appended. Parse failures are logged and skipped; the file is optional. Use this for private or corporate providers that shouldn't be committed to the repo.
-3. **SQLite tables** (runtime overrides) — `provider_config` (api_key, is_enabled), `provider_channel_config` (per-channel base_url override, is_enabled), `provider_models` (model whitelist).
+3. **SQLite tables** (runtime overrides) — `provider_config` (api_key, is_enabled), `provider_channel_config` (per-channel is_enabled; base_url is always sourced from the JSON definition, not overridable), `provider_models` (model whitelist).
 
 The merge happens in `provider_svc::merge_channels()` and `list_providers()`/`get_provider()`. User overrides take precedence over JSON defaults. The model list stored in `provider_models` is what gets routed — it is populated either manually via the admin UI or fetched from the provider's `/v1/models` endpoint via the `fetch-models` button. Each `provider_models` row stores both a `model_id` (the canonical identifier sent to the upstream, case preserved) and a `model_name` (display name shown in the `/v1/models` listing).
 
@@ -118,6 +118,47 @@ Auth header format is set per API format: Bearer token for OpenAI, `x-api-key` f
 
 Route table `HashMap` keys are lowercased (`model.model_id.to_lowercase()`), so a client request with any-case `model` matches. The route stores the original `model_id`, and `replace_model_in_body()` rewrites the request body's `model` field back to that canonical value before forwarding upstream — so the upstream always sees the exact case stored in `provider_models`.
 
+### Channel-Type Gating (OpenAI Paths)
+
+OpenAI requests are gated by the sub-path within `/openai/v1/`:
+
+| Path | Required channel | Behavior |
+|------|-----------------|----------|
+| `chat/completions` | `openai_chat` | Route must have `openai_chat` in its `channels` list |
+| `responses` | `openai_responses` | Route must have `openai_responses` in its `channels` list |
+| anything else | — | 404 (unsupported path) |
+
+A model under a provider that only declares `openai_chat` (no `openai_responses` channel) will 404 on `/openai/v1/responses` even if the model exists in the route table. This prevents proxying to an endpoint the provider doesn't support.
+
+Anthropic requests have no such gating — all models in the `anthropic_routes` table are served at `/anthropic/v1/messages`.
+
+### SSE Streaming & Usage Extraction
+
+Upstream SSE responses (`content-type: text/event-stream`) are proxied through a tokio mpsc channel. Bytes are buffered and split on `\n` to extract `data:` payloads, handling the fact that SSE events can span multiple TCP chunks and a single chunk can contain multiple events.
+
+Usage is accumulated across all SSE events using a **"last non-zero value"** strategy (not summation): each field (input, output, cache_read, cache_write) is overwritten when a new non-zero value arrives. This is because SSE usage events carry cumulative totals, not increments — `message_delta` in Anthropic carries the final values and should replace `message_start`'s initial/stub values. Summation would double-count providers like glm-5.2 where both `message_start` and `message_delta` carry non-trivial `input_tokens`.
+
+### Usage Normalization Across Protocols
+
+The `input_tokens` column in `usage_records` is normalized differently per protocol so that it always represents the **total input including cache tokens**:
+
+- **OpenAI protocol**: `prompt_tokens` already includes cache tokens, so it's stored as-is. `cache_read_tokens` is extracted from `prompt_tokens_details.cached_tokens` (with fallbacks to `cached_tokens` / `prompt_cache_hit_tokens`).
+- **Anthropic protocol**: `input_tokens` excludes cache tokens, so the stored value is `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. This makes `cache_hit_rate = cache_read / input` bounded and consistent across protocols.
+
+### Proxy Request Modifications
+
+Before forwarding, the proxy makes these modifications to the client's request:
+
+1. **Model name canonicalization**: `model` in the JSON body is rewritten to the exact case stored in `provider_models`.
+2. **`stream_options` injection**: For OpenAI `chat/completions` requests with `stream: true` and no existing `stream_options`, the proxy injects `{"stream_options": {"include_usage": true}}` to ensure the upstream returns token usage in its SSE stream.
+3. **Auth header rewrite**: The client's `mb-xxx` key is replaced with the upstream provider's API key, formatted as `Bearer` (OpenAI-style upstreams) or `x-api-key` (Anthropic-style upstreams).
+4. **Header passthrough**: Only `content-type` and `anthropic-version` are forwarded from the client; all other client headers are dropped.
+
+Upstream request timeout is **480 seconds**. Error responses from the proxy:
+- **413** — request body exceeds 64 MiB
+- **502** — upstream connection failed or generic upstream error
+- **504** — upstream request timed out
+
 ### Route Table Refresh
 
 Routes are rebuilt by `provider_svc::refresh_routes()`, which:
@@ -136,7 +177,8 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 - **Two HTTP servers.** The proxy and admin servers run on separate ports (default 10010/10020) in a `tokio::select!` — if either exits, both shut down.
 - **Proxy auth via API-key cache.** The proxy router is wrapped in `auth_middleware`. Client API keys (`mb-{uuid}`, created in the admin UI) are SHA-256 hashed and matched against `AppState.api_key_cache` (`HashMap<key_hash, api_key_id>`, enabled keys only). The cache is refreshed on startup, on the periodic timer, and after any api-key create/delete/toggle. A matched key injects `AuthenticatedKey(id)` into request extensions; `proxy.rs` threads that `api_key_id` into every `usage_records` insert. The admin API has no app-level auth (loopback-bound by default).
 - **API key at rest.** The upstream provider API key (`provider_config.api_key`) is stored in plaintext. Client-facing `mb-xxx` keys are stored **twice** in `api_keys`: as a SHA-256 `key_hash` (used by `auth_middleware` for proxy auth) and, to support the "reveal key later" UI feature, as `api_key`. When `[database] encryption_key` is set (base64 of 32 bytes), `api_key` is encrypted at rest via AES-256-GCM (`crypto::seal`/`reveal`); decryption falls back to returning the raw value for legacy plaintext rows. Without a key configured, `api_key` is stored in plaintext (acceptable only while admin is loopback-bound).
-- **SSE streaming support.** Upstream responses with `content-type: text/event-stream` are proxied as streaming byte streams via a tokio mpsc channel. Bytes are buffered and split on `\n` so usage is accumulated across all SSE `data:` frames (handles events split across chunk boundaries, and multiple events per chunk). Buffered responses are parsed for `usage` blocks (OpenAI and Anthropic formats) to extract token counts, including cache read/write tokens.
+- **SSE streaming support.** Upstream SSE responses are proxied through a tokio mpsc channel with line-buffered parsing. Usage is accumulated via "last non-zero value" (not summation) to handle providers where multiple SSE events carry cumulative totals. See [SSE Streaming & Usage Extraction](#sse-streaming--usage-extraction) above for details.
+- **SSRF hardening.** HTTP redirects are disabled on the shared `reqwest::Client`. `refresh_routes()` skips channels whose `base_url` is not `http(s)` (`is_safe_base_url` check), logging a warning — this prevents `file://` or other local-protocol URLs from being used as upstream targets.
 - **No tests.** The project currently has no unit or integration tests.
 
 ## Source Structure
@@ -144,7 +186,7 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 | Path | Purpose |
 |------|---------|
 | `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh interval, providers file path |
-| `providers.json` | Static provider definitions (id, name, icon, channels, models_endpoint) |
+| `providers.json` | Static provider definitions (id, name, icon, channels, models_endpoint, models_endpoint_auth) |
 | `src/main.rs` | Entry point: config loading, DB init, route table init, background refresh spawn, dual-server launch |
 | `src/config.rs` | CLI args (clap), TOML config parsing, `providers.json` loading, `ProviderDef`/`ChannelDef` types |
 | `src/state.rs` | `AppState` (in-memory route tables, provider defs, DB pool, HTTP client), model list response types |
