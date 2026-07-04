@@ -124,6 +124,31 @@ function alertIcon(color: string) {
   ])
 }
 
+// 终端图标：客户端列首行小图标，暗示 CLI / 客户端程序。
+function clientIcon(color: string) {
+  return h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'cell-icon' }, [
+    h('rect', { x: 2, y: 3, width: 20, height: 18, rx: 2 }),
+    h('polyline', { points: '6 8 9 12 6 16' }),
+    h('line', { x1: 12, y1: 16, x2: 16, y2: 16 }),
+  ])
+}
+
+// 拆 user-agent 为 { product, version }：取首个空白前的 token，再按 '/' 分产品 / 版本。
+// 例：'claude-cli/2.1.201 (external, cli)' -> { product: 'claude-cli', version: '2.1.201' }
+function parseClient(ua: any): { product: string; version: string | null } | null {
+  if (!ua) return null
+  const s = String(ua).trim()
+  if (!s) return null
+  const sp = s.search(/\s/)
+  const head = sp >= 0 ? s.slice(0, sp) : s
+  const slash = head.indexOf('/')
+  if (slash < 0) return { product: head, version: null }
+  const product = head.slice(0, slash)
+  const version = head.slice(slash + 1)
+  if (!product) return { product: head, version: null }
+  return { product, version: version || null }
+}
+
 const columns = [
   { title: '时间', key: 'created_at', width: 150, render: (row: any) => {
       const ts = formatLocalTime(row.created_at)
@@ -144,7 +169,19 @@ const columns = [
       if (row.api_key_id) return h('span', { class: 'apikey-cell' }, [keyIcon('#b3261e'), h('span', { class: 'mono apikey-deleted' }, '已删除')])
       return h('span', { class: 'apikey-cell' }, [keyIcon('#c9c0b0'), h('span', { class: 'mono apikey-text apikey-na' }, '—')])
     } },
-  { title: '客户端', key: 'client', width: 170, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono client-cell' }, row.client || '—') },
+  { title: '客户端', key: 'client', width: 150, render: (row: any) => {
+      const parsed = parseClient(row.client)
+      if (!parsed) return h('span', { class: 'mono client-na' }, '—')
+      const cell = h('div', { class: 'client-cell' }, [
+        clientIcon('#9c8d76'),
+        h('div', { class: 'client-text' }, [
+          h('span', { class: 'mono client-product' }, parsed.product),
+          parsed.version ? h('span', { class: 'mono client-version' }, parsed.version) : null,
+        ]),
+      ])
+      // tooltip 悬停展示完整原始 user-agent（含 (external, cli) 等注释段）
+      return h(NTooltip, { placement: 'top' }, { trigger: () => cell, default: () => row.client })
+    } },
   { title: '模型', key: 'model_id', width: 190, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono model-cell' }, row.model_id || '—') },
   { title: '供应商', key: 'provider_id', width: 76, align: 'center' as const, titleAlign: 'center' as const, render: (row: any) => {
       const p = providerMap.value[row.provider_id]
@@ -293,7 +330,11 @@ onMounted(init)
 .logs :deep(.model-cell) { font-size: 12px; color: #74695a; }
 
 /* 客户端 */
-.logs :deep(.client-cell) { font-size: 12px; color: #74695a; }
+.logs :deep(.client-cell) { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; }
+.logs :deep(.client-text) { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; min-width: 0; }
+.logs :deep(.client-product) { font-size: 12px; color: #17140f; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.logs :deep(.client-version) { font-size: 11px; color: #a89e8c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.logs :deep(.client-na) { font-size: 12px; color: #a89e8c; }
 
 /* 供应商图标 */
 .logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: #faf7f0; border: 1px solid #ece6da; transition: border-color 0.15s, background 0.15s; }
