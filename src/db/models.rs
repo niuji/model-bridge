@@ -87,5 +87,6 @@ pub struct UsageRecord {
     pub latency_ms: i64,
     pub status: String,
     pub error_msg: Option<String>,
+    pub client: Option<String>,
     pub created_at: NaiveDateTime,
 }

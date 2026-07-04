@@ -104,6 +104,10 @@ async fn handle_request(
         _ => (state.anthropic_routes.clone(), None),
     };
 
+    let client = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     proxy_to_provider(
         state,
         api_format,
@@ -112,6 +116,7 @@ async fn handle_request(
         headers,
         &body,
         api_key_id,
+        client,
         routes_lock,
         required_channel,
     )
@@ -126,6 +131,7 @@ async fn proxy_to_provider(
     headers: HeaderMap,
     body: &[u8],
     api_key_id: Option<String>,
+    client: Option<String>,
     routes_lock: Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>>,
     required_channel: Option<&str>,
 ) -> Response {
@@ -238,12 +244,12 @@ async fn proxy_to_provider(
 
             if is_stream {
                 proxy_streaming_response(
-                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, api_format,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format,
                 )
                 .await
             } else {
                 proxy_buffered_response(
-                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, api_format,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format,
                 )
                 .await
             }
@@ -262,6 +268,7 @@ async fn proxy_to_provider(
                 "error",
                 Some(e.to_string()),
                 api_key_id,
+                client,
             ));
 
             // 根据错误类型返回更具体的信息
@@ -291,6 +298,7 @@ async fn proxy_buffered_response(
     provider_id: &str,
     start: std::time::Instant,
     api_key_id: Option<String>,
+    client: Option<String>,
     api_format: &str,
 ) -> Response {
     let status = resp.status();
@@ -313,6 +321,7 @@ async fn proxy_buffered_response(
                 if status.is_success() { "success" } else { "error" },
                 None,
                 api_key_id,
+                client,
             ));
 
             // 构造响应，透传上游响应头（仅过滤 hop-by-hop 头）
@@ -340,6 +349,7 @@ async fn proxy_buffered_response(
                 "error",
                 Some(e.to_string()),
                 api_key_id,
+                client,
             ));
 
             (
@@ -360,6 +370,7 @@ async fn proxy_streaming_response(
     provider_id: &str,
     start: std::time::Instant,
     api_key_id: Option<String>,
+    client: Option<String>,
     api_format: &str,
 ) -> Response {
     let status = resp.status();
@@ -373,6 +384,7 @@ async fn proxy_streaming_response(
     let model_final = model.to_string();
     let provider_final = provider_id.to_string();
     let api_key_id_final = api_key_id.clone();
+    let client_final = client.clone();
     let api_format_final = api_format.to_string();
     let start_clone = start;
 
@@ -423,6 +435,7 @@ async fn proxy_streaming_response(
                         "error",
                         Some(e.to_string()),
                         api_key_id_final.clone(),
+                        client_final.clone(),
                     ));
                     break;
                 }
@@ -443,6 +456,7 @@ async fn proxy_streaming_response(
                 "success",
                 None,
                 api_key_id_final,
+                client_final,
             ));
         }
     });
@@ -615,13 +629,14 @@ async fn write_usage(
     status: &str,
     error_msg: Option<String>,
     api_key_id: Option<String>,
+    client: Option<String>,
 ) {
     tracing::debug!(
         "WRITE usage: provider={}, model={}, input={}, output={}, cache_read={}, cache_write={}, latency_ms={}, status={}",
         provider_id, model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status
     );
     if let Err(e) = sqlx::query(
-        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, client) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&api_key_id)
     .bind(&model_id)
@@ -633,6 +648,7 @@ async fn write_usage(
     .bind(latency_ms)
     .bind(status)
     .bind(&error_msg)
+    .bind(&client)
     .execute(&state.db)
     .await
     {

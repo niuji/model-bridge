@@ -97,6 +97,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             latency_ms INTEGER DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'success',
             error_msg TEXT,
+            client TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         "#,
@@ -110,6 +111,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .await
         .ok();
     sqlx::query("ALTER TABLE usage_records ADD COLUMN cache_write_tokens INTEGER DEFAULT 0")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE usage_records ADD COLUMN client TEXT")
         .execute(pool)
         .await
         .ok();

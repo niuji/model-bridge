@@ -37,6 +37,7 @@ pub struct LogEntry {
     pub api_key_id: Option<String>,
     pub api_key_name: Option<String>,
     pub api_key_preview: Option<String>,
+    pub client: Option<String>,
     pub model_id: String,
     pub provider_id: String,
     pub input_tokens: i64,
@@ -69,12 +70,13 @@ pub async fn get_logs(
         .await?;
 
     let offset = (page - 1) * page_size;
-    let rows = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<String>, String, String, i64, i64, i64, i64, i64, String, Option<String>, String)>(
+    let rows = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<String>, String, String, i64, i64, i64, i64, i64, String, Option<String>, Option<String>, String)>(
         r#"
         SELECT u.id, u.api_key_id, k.name, k.api_key,
                u.model_id, u.provider_id,
                u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
                u.latency_ms, u.status, u.error_msg,
+               u.client,
                strftime('%Y-%m-%dT%H:%M:%SZ', u.created_at) as created_at
         FROM usage_records u
         LEFT JOIN api_keys k ON u.api_key_id = k.id
@@ -89,7 +91,7 @@ pub async fn get_logs(
 
     let logs = rows
         .into_iter()
-        .map(|(id, api_key_id, api_key_name, api_key_raw, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, created_at)| {
+        .map(|(id, api_key_id, api_key_name, api_key_raw, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, client, created_at)| {
             let api_key_preview = api_key_raw
                 .as_deref()
                 .map(|k| crate::router::admin::mask_key(&crate::crypto::reveal(enc_key, k)));
@@ -98,6 +100,7 @@ pub async fn get_logs(
                 api_key_id,
                 api_key_name,
                 api_key_preview,
+                client,
                 model_id,
                 provider_id,
                 input_tokens,

@@ -144,6 +144,7 @@ const columns = [
       if (row.api_key_id) return h('span', { class: 'apikey-cell' }, [keyIcon('#b3261e'), h('span', { class: 'mono apikey-deleted' }, '已删除')])
       return h('span', { class: 'apikey-cell' }, [keyIcon('#c9c0b0'), h('span', { class: 'mono apikey-text apikey-na' }, '—')])
     } },
+  { title: '客户端', key: 'client', width: 170, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono client-cell' }, row.client || '—') },
   { title: '模型', key: 'model_id', width: 190, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono model-cell' }, row.model_id || '—') },
   { title: '供应商', key: 'provider_id', width: 76, align: 'center' as const, titleAlign: 'center' as const, render: (row: any) => {
       const p = providerMap.value[row.provider_id]
@@ -290,6 +291,9 @@ onMounted(init)
 
 /* 模型 */
 .logs :deep(.model-cell) { font-size: 12px; color: #74695a; }
+
+/* 客户端 */
+.logs :deep(.client-cell) { font-size: 12px; color: #74695a; }
 
 /* 供应商图标 */
 .logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: #faf7f0; border: 1px solid #ece6da; transition: border-color 0.15s, background 0.15s; }
