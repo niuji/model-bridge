@@ -48,6 +48,7 @@ pub async fn anthropic_handler(
     request: Request,
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
+    tracing::info!("Anthropic request: method={}, path={}, api_key_id={}", method, path, api_key_id.as_deref().unwrap_or("none"));
     let headers = request.headers().clone();
     let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_PROXY_BODY).await {
         Ok(b) => b,
@@ -138,6 +139,14 @@ async fn proxy_to_provider(
     let route = match routes.get(&model_lower) {
         Some(r) => r.clone(),
         None => {
+            let available_models: Vec<String> = routes.keys().cloned().collect();
+            tracing::warn!(
+                "Model not found: requested_model='{}' (lowercased='{}'), endpoint={}, available_models={:?}",
+                model,
+                model_lower,
+                api_format,
+                available_models
+            );
             return (
                 StatusCode::NOT_FOUND,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
