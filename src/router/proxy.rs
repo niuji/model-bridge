@@ -244,18 +244,23 @@ async fn proxy_to_provider(
 
             if is_stream {
                 proxy_streaming_response(
-                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format, &target_url,
                 )
                 .await
             } else {
                 proxy_buffered_response(
-                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format, &target_url,
                 )
                 .await
             }
         }
         Err(e) => {
             let latency_ms = start.elapsed().as_millis() as i64;
+            let err_msg = error_chain(&e);
+            tracing::warn!(
+                "upstream send error: model={}, provider={}, url={}, latency_ms={}, err={}",
+                route.model_id, route.provider_id, target_url, latency_ms, err_msg
+            );
             tokio::spawn(write_usage(
                 state.clone(),
                 route.model_id.clone(),
@@ -266,7 +271,7 @@ async fn proxy_to_provider(
                 0,
                 latency_ms,
                 "error",
-                Some(e.to_string()),
+                Some(err_msg),
                 api_key_id,
                 client,
             ));
@@ -300,6 +305,7 @@ async fn proxy_buffered_response(
     api_key_id: Option<String>,
     client: Option<String>,
     api_format: &str,
+    target_url: &str,
 ) -> Response {
     let status = resp.status();
     let resp_headers = resp.headers().clone();
@@ -337,6 +343,11 @@ async fn proxy_buffered_response(
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(e) => {
+            let err_msg = error_chain(&e);
+            tracing::warn!(
+                "upstream body error: model={}, provider={}, url={}, latency_ms={}, err={}",
+                model, provider_id, target_url, latency_ms, err_msg
+            );
             tokio::spawn(write_usage(
                 state.clone(),
                 model.to_string(),
@@ -347,7 +358,7 @@ async fn proxy_buffered_response(
                 0,
                 latency_ms,
                 "error",
-                Some(e.to_string()),
+                Some(err_msg),
                 api_key_id,
                 client,
             ));
@@ -372,6 +383,7 @@ async fn proxy_streaming_response(
     api_key_id: Option<String>,
     client: Option<String>,
     api_format: &str,
+    target_url: &str,
 ) -> Response {
     let status = resp.status();
     let resp_headers = resp.headers().clone();
@@ -386,6 +398,7 @@ async fn proxy_streaming_response(
     let api_key_id_final = api_key_id.clone();
     let client_final = client.clone();
     let api_format_final = api_format.to_string();
+    let target_url_final = target_url.to_string();
     let start_clone = start;
 
     tokio::spawn(async move {
@@ -423,6 +436,11 @@ async fn proxy_streaming_response(
                 Err(e) => {
                     has_error = true;
                     let latency_ms = start_clone.elapsed().as_millis() as i64;
+                    let err_msg = error_chain(&e);
+                    tracing::warn!(
+                        "upstream stream error: model={}, provider={}, url={}, latency_ms={}, err={}",
+                        model_final, provider_final, target_url_final, latency_ms, err_msg
+                    );
                     tokio::spawn(write_usage(
                         state_final.clone(),
                         model_final.clone(),
@@ -433,7 +451,7 @@ async fn proxy_streaming_response(
                         0,
                         latency_ms,
                         "error",
-                        Some(e.to_string()),
+                        Some(err_msg),
                         api_key_id_final.clone(),
                         client_final.clone(),
                     ));
@@ -614,6 +632,19 @@ fn extract_usage_from_response(body: &[u8], api_format: &str) -> (i64, i64, i64,
 
     tracing::debug!("BUFFERED response without usage: {}", String::from_utf8_lossy(body).chars().take(300).collect::<String>());
     (0, 0, 0, 0)
+}
+
+/// 将 reqwest 错误的完整 source 链拼成一行，便于在日志/DB 里看到底层真因
+/// （reqwest 的 Display 只输出 kind，如 "error decoding response body"，不含 source）。
+fn error_chain(e: &reqwest::Error) -> String {
+    let mut msg = e.to_string();
+    let mut cur = std::error::Error::source(e);
+    while let Some(src) = cur {
+        msg.push_str(": ");
+        msg.push_str(&src.to_string());
+        cur = std::error::Error::source(src);
+    }
+    msg
 }
 
 #[allow(clippy::too_many_arguments)]
