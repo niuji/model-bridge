@@ -119,7 +119,7 @@ async function loadData() {
       fetch(`${API_BASE}/stats/overview`).then(r => r.json()),
       byHour.value
         ? fetch(`${API_BASE}/stats/hourly`).then(r => r.json())
-        : Promise.resolve(dailyRes),
+        : Promise.resolve(dailyRes.slice(-30)),
       fetch(`${API_BASE}/stats/models`).then(r => r.json()),
     ])
     overview.value = overviewRes
