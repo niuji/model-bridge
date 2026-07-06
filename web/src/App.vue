@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h } from 'vue'
+import { computed, h, ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   NConfigProvider, NLayout, NLayoutSider, NLayoutContent, NMenu, NMessageProvider,
@@ -62,11 +62,18 @@ import {
 } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 
-// Build-time version (Vite `define`, sourced from Cargo.toml). Must be bound
-// here in <script setup>, not referenced directly in the template — the SFC
-// compiler rewrites bare template identifiers into render-context property
-// accesses (e.g. h.__APP_VERSION__), which Vite's define cannot replace.
-const appVersion = __APP_VERSION__
+// 版本号来自运行中的二进制（GET /api/admin/settings 的 version = CARGO_PKG_VERSION），
+// 不再 build 时注入——嵌入的 dist 无需随 Cargo.toml 重 build 即可显示正确版本。
+const appVersion = ref('…')
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/admin/settings')
+    if (res.ok) {
+      const data = await res.json()
+      if (data.version) appVersion.value = data.version
+    }
+  } catch { /* 取不到则保留占位 */ }
+})
 
 const router = useRouter(); const route = useRoute()
 const currentRoute = computed(() => route.path)

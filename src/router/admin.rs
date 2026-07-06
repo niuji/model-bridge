@@ -25,9 +25,14 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
 
 // ===== Settings =====
 
-/// 返回代理服务对外的 base URL，供管理 UI「接入指南」展示客户端接入地址。
+/// 返回代理服务对外的 base URL 与二进制版本号，供管理 UI 展示接入地址与页脚版本。
+/// version 取自 CARGO_PKG_VERSION（编译期注入），永远与 `model-bridge --version` 一致。
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(serde_json::json!({"proxy_base_url": state.proxy_base_url})).into_response()
+    Json(serde_json::json!({
+        "proxy_base_url": state.proxy_base_url,
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+    .into_response()
 }
 
 pub async fn get_provider(
