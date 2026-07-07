@@ -223,7 +223,9 @@ async fn proxy_to_provider(
     }
 
     // 6. 注入 stream_options（确保上游在流式响应中返回 usage）
-    let body = replace_model_in_body(body, &route.model_id);
+    // anthropic 链路先剥离 [1m]/[1M] 后缀再写入转发体（上游不识别该 1M 变体标记）
+    let upstream_model = upstream_model_name(api_format, &route.model_id);
+    let body = replace_model_in_body(body, upstream_model);
     let request_body = inject_stream_options(api_format, path, &body);
 
     // 7. 发送请求（带超时）
@@ -547,6 +549,21 @@ fn extract_model_from_body(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("model")?.as_str().map(|s| s.to_string()))
+}
+
+/// 计算转发上游时实际使用的 model 名。
+/// anthropic 链路下剥离客户端用于标记 1M 上下文变体的 [1m]/[1M] 后缀——
+/// 上游不识别该后缀。仅影响转发体；usage 记录仍用 route.model_id。
+fn upstream_model_name<'a>(api_format: &str, model_id: &'a str) -> &'a str {
+    if api_format == "anthropic" {
+        if let Some(stripped) = model_id
+            .strip_suffix("[1m]")
+            .or_else(|| model_id.strip_suffix("[1M]"))
+        {
+            return stripped;
+        }
+    }
+    model_id
 }
 
 /// 将请求体中的 model 字段替换为路由表中存储的原始大小写
