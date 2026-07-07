@@ -57,7 +57,7 @@
 
     <div class="card table-card">
       <div class="card-header"><h3 class="card-title">模型用量明细</h3><span class="card-badge mono">{{ modelData.length }} 个模型</span></div>
-      <div class="card-body"><n-spin :show="loading"><n-data-table :columns="modelColumns" :data="modelData" :bordered="false" :single-line="false" size="small" class="dashboard-table" /></n-spin></div>
+      <div class="card-body"><n-spin :show="loading"><n-data-table :columns="modelColumns" :data="modelData" :bordered="false" :single-line="false" :scroll-x="scrollX" size="small" class="dashboard-table" /></n-spin></div>
     </div>
   </div>
 </template>
@@ -108,6 +108,9 @@ const modelColumns: DataTableColumns<ModelRow> = [
   { title: '缓存写入', key: 'cache_write_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.cache_write_tokens)) },
   { title: '命中率', key: 'cache_hit_rate', width: 90, align: 'right', render: (row) => h('span', { class: 'mono', style: { color: row.cache_hit_rate > 0 ? '#1d7a4c' : '#a89e8c', fontWeight: row.cache_hit_rate > 0 ? '600' : '400' } }, `${row.cache_hit_rate}%`) },
 ]
+// 列宽总和：交给 n-data-table 的 scroll-x，窄屏时表格内部横向滚动（表头跟随），
+// 不再被 .card 的 overflow:hidden 裁掉右侧列。
+const scrollX = modelColumns.reduce((s, c) => s + (Number((c as any).width) || 0), 0)
 function formatNum(n: number): string { if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'; if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'; return String(n) }
 const byHour = ref(true)
 

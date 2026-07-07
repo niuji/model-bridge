@@ -7,6 +7,7 @@
             bordered
             :width="220"
             :collapsed-width="64"
+            :collapsed="collapsed"
             :native-scrollbar="false"
             class="sidebar"
             collapse-mode="width"
@@ -20,16 +21,17 @@
                   <circle cx="20" cy="14" r="1.2" fill="currentColor" />
                 </svg>
               </div>
-              <span class="brand-text serif">Model Bridge</span>
+              <span v-show="!collapsed" class="brand-text serif">Model Bridge</span>
             </div>
             <n-menu
               :options="menuOptions"
               :value="currentRoute"
+              :collapsed="collapsed"
               @update:value="navigate"
               class="sidebar-menu"
             />
             <div class="sidebar-footer">
-              <span class="footer-version mono">v{{ appVersion }}</span>
+              <span v-show="!collapsed" class="footer-version mono">v{{ appVersion }}</span>
               <div class="status-indicator">
                 <span class="status-dot" />
               </div>
@@ -54,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref, onMounted } from 'vue'
+import { computed, h, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   NConfigProvider, NLayout, NLayoutSider, NLayoutContent, NMenu, NMessageProvider,
@@ -75,15 +77,27 @@ onMounted(async () => {
   } catch { /* 取不到则保留占位 */ }
 })
 
+// 窄屏（≤1024px）自动折叠侧边栏为 64px 图标栏，省出横向空间。
+// 用 matchMedia 精确到 1024；NaiveUI 默认断点无此刻度，自定义全局 breakpoints 反而更重。
+const collapsed = ref(false)
+let collapseMql: MediaQueryList | null = null
+const syncCollapse = (e: MediaQueryList | MediaQueryListEvent) => { collapsed.value = e.matches }
+onMounted(() => {
+  collapseMql = window.matchMedia('(max-width: 1024px)')
+  syncCollapse(collapseMql)
+  collapseMql.addEventListener('change', syncCollapse)
+})
+onBeforeUnmount(() => collapseMql?.removeEventListener('change', syncCollapse))
+
 const router = useRouter(); const route = useRoute()
 const currentRoute = computed(() => route.path)
 
 const DashboardIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
-  h('rect', { x: 3, y: 3, width: 7, height: 7, rx: 1.5 }), h('rect', { x: 14, y: 3, width: 7, height: 7, rx: 1.5 }),
-  h('rect', { x: 3, y: 14, width: 7, height: 7, rx: 1.5 }), h('rect', { x: 14, y: 14, width: 7, height: 7, rx: 1.5 }),
+  h('path', { d: 'M3 3v18h18' }), h('polyline', { points: '7,14 11,9 14,12 19,6' }),
 ])
 const ProviderIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
-  h('path', { d: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z' }),
+  h('rect', { x: 3, y: 4, width: 18, height: 6, rx: 1.5 }), h('rect', { x: 3, y: 14, width: 18, height: 6, rx: 1.5 }),
+  h('circle', { cx: 7, cy: 7, r: 1 }), h('circle', { cx: 7, cy: 17, r: 1 }),
 ])
 const KeyIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
   h('path', { d: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4' }),

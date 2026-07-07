@@ -279,6 +279,7 @@ async fn proxy_to_provider(
                 Some(err_msg),
                 api_key_id,
                 client,
+                api_format.to_string(),
             ));
 
             // 根据错误类型返回更具体的信息
@@ -333,6 +334,7 @@ async fn proxy_buffered_response(
                 None,
                 api_key_id,
                 client,
+                api_format.to_string(),
             ));
 
             // 构造响应，透传上游响应头（仅过滤 hop-by-hop 头）
@@ -366,6 +368,7 @@ async fn proxy_buffered_response(
                 Some(err_msg),
                 api_key_id,
                 client,
+                api_format.to_string(),
             ));
 
             (
@@ -459,6 +462,7 @@ async fn proxy_streaming_response(
                         Some(err_msg),
                         api_key_id_final.clone(),
                         client_final.clone(),
+                        api_format_final.clone(),
                     ));
                     break;
                 }
@@ -480,6 +484,7 @@ async fn proxy_streaming_response(
                 None,
                 api_key_id_final,
                 client_final,
+                api_format_final,
             ));
         }
     });
@@ -666,13 +671,14 @@ async fn write_usage(
     error_msg: Option<String>,
     api_key_id: Option<String>,
     client: Option<String>,
+    api_format: String,
 ) {
     tracing::debug!(
         "WRITE usage: provider={}, model={}, input={}, output={}, cache_read={}, cache_write={}, latency_ms={}, status={}",
         provider_id, model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status
     );
     if let Err(e) = sqlx::query(
-        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, client) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, client, api_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&api_key_id)
     .bind(&model_id)
@@ -685,6 +691,7 @@ async fn write_usage(
     .bind(status)
     .bind(&error_msg)
     .bind(&client)
+    .bind(&api_format)
     .execute(&state.db)
     .await
     {

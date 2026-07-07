@@ -30,6 +30,7 @@
         :data="logs"
         :bordered="false"
         :loading="loading"
+        :scroll-x="scrollX"
         size="small"
         class="logs-table"
       />
@@ -161,26 +162,37 @@ const columns = [
         h('div', { class: 'time-time mono' }, time),
       ])
     } },
+  // 「调用方」合并原 API Key + 客户端两列：主行 key（带端点 badge），副行 client。
   // 不用 naive 的 ellipsis：它会包裹自定义渲染内容，既会干扰「已删除」删除线，
   // 又会把钥匙图标一起塞进 tooltip。改用 .apikey-text 上的 CSS ellipsis 截断。
-  { title: 'API Key', key: 'api_key', width: 160, render: (row: any) => {
-      if (row.api_key_name) return h('span', { class: 'apikey-cell' }, [keyIcon('#0d6e6b'), h('span', { class: 'mono apikey-text' }, row.api_key_name)])
-      if (row.api_key_preview) return h('span', { class: 'apikey-cell' }, [keyIcon('#9c6c00'), h('span', { class: 'mono apikey-text' }, row.api_key_preview)])
-      if (row.api_key_id) return h('span', { class: 'apikey-cell' }, [keyIcon('#b3261e'), h('span', { class: 'mono apikey-deleted' }, '已删除')])
-      return h('span', { class: 'apikey-cell' }, [keyIcon('#c9c0b0'), h('span', { class: 'mono apikey-text apikey-na' }, '—')])
-    } },
-  { title: '客户端', key: 'client', width: 150, render: (row: any) => {
+  { title: '调用方', key: 'caller', width: 248, render: (row: any) => {
+      // 主行 key 三态：有 name 用 name、否则 preview、否则「已删除」、无 id 则 —
+      let keyNode
+      if (row.api_key_name) keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#0d6e6b'), h('span', { class: 'mono apikey-text' }, row.api_key_name)])
+      else if (row.api_key_preview) keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#9c6c00'), h('span', { class: 'mono apikey-text' }, row.api_key_preview)])
+      else if (row.api_key_id) keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#b3261e'), h('span', { class: 'mono apikey-deleted' }, '已删除')])
+      else keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#c9c0b0'), h('span', { class: 'mono apikey-text apikey-na' }, '—')])
+      // 端点 badge：旧记录无 api_format 时不显示
+      const badge = row.api_format === 'anthropic' || row.api_format === 'openai'
+        ? h('span', { class: `ep-badge ep-${row.api_format} mono` }, row.api_format)
+        : null
+      // 副行 client（hover 整个单元格显完整 UA，含 (external, cli) 等注释段）
       const parsed = parseClient(row.client)
-      if (!parsed) return h('span', { class: 'mono client-na' }, '—')
-      const cell = h('div', { class: 'client-cell' }, [
-        clientIcon('#9c8d76'),
-        h('div', { class: 'client-text' }, [
-          h('span', { class: 'mono client-product' }, parsed.product),
-          parsed.version ? h('span', { class: 'mono client-version' }, parsed.version) : null,
-        ]),
+      const clientNode = parsed
+        ? h('div', { class: 'client-cell' }, [
+            clientIcon('#9c8d76'),
+            h('div', { class: 'client-text' }, [
+              h('span', { class: 'mono client-product' }, parsed.product),
+              parsed.version ? h('span', { class: 'mono client-version' }, parsed.version) : null,
+            ]),
+          ])
+        : null
+      const inner = h('div', { class: 'caller-cell' }, [
+        h('div', { class: 'caller-main' }, [keyNode, badge]),
+        clientNode,
       ])
-      // tooltip 悬停展示完整原始 user-agent（含 (external, cli) 等注释段）
-      return h(NTooltip, { placement: 'top' }, { trigger: () => cell, default: () => row.client })
+      if (!parsed) return inner
+      return h(NTooltip, { placement: 'top' }, { trigger: () => inner, default: () => row.client })
     } },
   { title: '模型', key: 'model_id', width: 190, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono model-cell' }, row.model_id || '—') },
   { title: '供应商', key: 'provider_id', width: 76, align: 'center' as const, titleAlign: 'center' as const, render: (row: any) => {
@@ -225,7 +237,7 @@ const columns = [
         h('span', { class: 'mono status-text' }, ok ? 'OK' : 'ERR'),
       ])
     } },
-  { title: '错误', key: 'error_msg', render: (row: any) => {
+  { title: '错误', key: 'error_msg', width: 200, render: (row: any) => {
       if (row.error_msg) return h(NTooltip, { placement: 'top' }, {
         trigger: () => h('span', { class: 'error-cell' }, [alertIcon('#b3261e'), h('span', { class: 'mono error-text' }, row.error_msg)]),
         default: () => row.error_msg,
@@ -233,6 +245,10 @@ const columns = [
       return h('span', { class: 'mono error-na' }, '—')
     } },
 ]
+
+// 列宽总和：交给 n-data-table 的 scroll-x，窄屏时表格内部横向滚动（表头跟随），
+// 不再被 .table-container 的 overflow:hidden 裁掉右侧列。
+const scrollX = columns.reduce((s: number, c: any) => s + (Number(c.width) || 0), 0)
 
 async function loadProviders() {
   try {
@@ -320,6 +336,16 @@ onMounted(init)
 .logs :deep(.time-time) { font-size: 12px; color: #17140f; font-weight: 500; }
 .logs :deep(.time-na) { font-size: 12px; color: #a89e8c; }
 
+/* 调用方（合并 API Key + 客户端 + 端点 badge） */
+.logs :deep(.caller-cell) { display: flex; flex-direction: column; gap: 2px; line-height: 1.25; }
+.logs :deep(.caller-main) { display: flex; align-items: center; gap: 8px; max-width: 100%; }
+.logs :deep(.caller-main .apikey-cell) { flex: 1 1 auto; min-width: 0; }
+.logs :deep(.caller-main .apikey-text) { color: #17140f; font-weight: 500; }
+.logs :deep(.caller-cell .client-product) { color: #74695a; font-weight: 400; }
+.logs :deep(.ep-badge) { flex-shrink: 0; font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 999px; white-space: nowrap; letter-spacing: 0.02em; }
+.logs :deep(.ep-badge.ep-anthropic) { background: rgba(181,132,43,0.1); border: 1px solid rgba(181,132,43,0.28); color: #9c6c00; }
+.logs :deep(.ep-badge.ep-openai) { background: rgba(13,110,107,0.1); border: 1px solid rgba(13,110,107,0.28); color: #0d6e6b; }
+
 /* API Key */
 .logs :deep(.apikey-cell) { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
 .logs :deep(.apikey-text) { font-size: 12px; color: #74695a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -334,7 +360,6 @@ onMounted(init)
 .logs :deep(.client-text) { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; min-width: 0; }
 .logs :deep(.client-product) { font-size: 12px; color: #17140f; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .logs :deep(.client-version) { font-size: 11px; color: #a89e8c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.logs :deep(.client-na) { font-size: 12px; color: #a89e8c; }
 
 /* 供应商图标 */
 .logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: #faf7f0; border: 1px solid #ece6da; transition: border-color 0.15s, background 0.15s; }

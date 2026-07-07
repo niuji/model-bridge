@@ -118,6 +118,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await
         .ok();
+    sqlx::query("ALTER TABLE usage_records ADD COLUMN api_format TEXT")
+        .execute(pool)
+        .await
+        .ok();
 
     Ok(())
 }

@@ -59,7 +59,7 @@ cp model-bridge.toml.example model-bridge.toml
 Logs confirm startup:
 
 ```
-INFO  proxy service starting on 0.0.0.0:10010
+INFO  proxy service starting on 127.0.0.1:10010
 INFO  admin service starting on 127.0.0.1:10020
 ```
 
@@ -117,7 +117,7 @@ The `mb-` key is accepted as either `Authorization: Bearer` or `x-api-key`; Mode
 
 | Field | Default | Description |
 |---|---|---|
-| `proxy.host` / `proxy.port` | `0.0.0.0` / `10010` | Proxy listen address. `0.0.0.0` = reachable on your LAN (a valid `mb-` key is still required). |
+| `proxy.host` / `proxy.port` | `127.0.0.1` / `10010` | Proxy listen address. Set to `0.0.0.0` to make it reachable on your LAN (a valid `mb-` key is still required). |
 | `admin.host` / `admin.port` | `127.0.0.1` / `10020` | Admin listen address. **Keep loopback** — the admin API has no app-level auth. |
 | `database.path` | `model-bridge.db` | SQLite database path. |
 | `database.encryption_key` | `""` | base64 of 32 bytes; encrypts client `mb-` keys at rest (AES-256-GCM). Empty = plaintext (only safe while admin is loopback). Generate with `openssl rand -base64 32`. |
