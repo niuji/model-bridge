@@ -162,13 +162,15 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     api_key: api_key.clone(),
                     channels: Vec::new(),
                 };
-                // anthropic 路由表的检索 id 全小写；非 claude-/anthropic 开头的模型
-                // 补 claude- 前缀，使 Claude Code 等网关客户端能识别。
+                // anthropic 路由表的检索 id 全小写，且剥掉 [1m]/[1M] 后缀（该后缀
+                // 仅用于 /v1/models 列表让 Claude Code 识别 1M 变体，实际请求不带）。
+                // 非 claude-/anthropic 开头的模型补 claude- 前缀。
                 let lower = route.model_id.to_lowercase();
-                let key = if lower.starts_with("claude") || lower.starts_with("anthropic") {
-                    lower
+                let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
+                let key = if clean.starts_with("claude") || clean.starts_with("anthropic") {
+                    clean.to_string()
                 } else {
-                    format!("claude-{}", lower)
+                    format!("claude-{}", clean)
                 };
                 anthropic_routes.insert(key, route);
             }

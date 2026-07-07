@@ -40,10 +40,11 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
     let routes = state.anthropic_routes.read().await;
     let mut models: Vec<AnthropicModelEntry> = Vec::with_capacity(routes.len());
 
-    // 对外暴露的 id 用路由表 key（已补 claude- 前缀且全小写），route.model_id 是转发上游用的原始 id。
-    for (key, route) in routes.iter() {
+    // 对外暴露的 id 用 route.model_id（转发上游的原始 id，保留大小写与 [1M] 后缀，
+    // 让 Claude Code 据此在本地开启 1M 上下文）。
+    for (_key, route) in routes.iter() {
         models.push(AnthropicModelEntry {
-            id: key.clone(),
+            id: route.model_id.clone(),
             entry_type: "model".to_string(),
             display_name: route.model_name.clone(),
             created_at: String::new(),

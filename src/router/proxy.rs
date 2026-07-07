@@ -223,7 +223,12 @@ async fn proxy_to_provider(
     }
 
     // 6. 注入 stream_options（确保上游在流式响应中返回 usage）
-    let body = replace_model_in_body(body, &route.model_id);
+    // anthropic 链路：路由表 key 已是干净名（无 [1m] 后缀），客户端发来的 model 名直接透传。
+    let body = if api_format == "anthropic" {
+        body.to_vec()
+    } else {
+        replace_model_in_body(body, &route.model_id)
+    };
     let request_body = inject_stream_options(api_format, path, &body);
 
     // 7. 发送请求（带超时）
