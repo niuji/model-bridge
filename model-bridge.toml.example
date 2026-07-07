@@ -4,13 +4,13 @@
 #   cp model-bridge.toml.example model-bridge.toml
 #
 # 若同目录下没有 model-bridge.toml，程序会用内置默认值启动
-# （proxy 0.0.0.0:10010 / admin 127.0.0.1:10020，不加密），仍可正常运行。
+# （proxy 127.0.0.1:10010 / admin 127.0.0.1:10020，不加密），仍可正常运行。
 #
 # providers.json 已编译进二进制，无需随包附带；下面的 providers_file
 # 仅在你想改用自定义 provider 定义文件时才需要调整。
 
 [proxy]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 10010
 
 [admin]
