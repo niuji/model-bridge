@@ -334,25 +334,55 @@ pub async fn get_api_key(
 }
 
 #[derive(Deserialize)]
-pub struct ToggleApiKeyRequest {
-    pub is_enabled: bool,
+pub struct UpdateApiKeyRequest {
+    pub name: Option<String>,
+    pub is_enabled: Option<bool>,
 }
 
-pub async fn toggle_api_key(
+/// 更新 API 密钥：可改名、可切换启用状态，两者亦可同时提交。
+/// 仅在启用状态变更时刷新认证缓存（改名不影响鉴权）。
+pub async fn update_api_key(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<ToggleApiKeyRequest>,
+    Json(req): Json<UpdateApiKeyRequest>,
 ) -> impl IntoResponse {
-    match sqlx::query("UPDATE api_keys SET is_enabled = ? WHERE id = ?")
-        .bind(req.is_enabled)
-        .bind(&id)
-        .execute(&state.db)
-        .await
-    {
-        Ok(result) if result.rows_affected() > 0 => {
-            crate::middleware::auth::refresh_api_key_cache(&state).await.ok();
+    let result = match (req.name, req.is_enabled) {
+        (Some(name), Some(is_enabled)) => {
+            sqlx::query("UPDATE api_keys SET name = ?, is_enabled = ? WHERE id = ?")
+                .bind(name)
+                .bind(is_enabled)
+                .bind(&id)
+                .execute(&state.db)
+                .await
+        }
+        (Some(name), None) => sqlx::query("UPDATE api_keys SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(&id)
+            .execute(&state.db)
+            .await,
+        (None, Some(is_enabled)) => {
+            sqlx::query("UPDATE api_keys SET is_enabled = ? WHERE id = ?")
+                .bind(is_enabled)
+                .bind(&id)
+                .execute(&state.db)
+                .await
+        }
+        (None, None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "no fields to update"})),
+            )
+                .into_response();
+        }
+    };
+
+    match result {
+        Ok(res) if res.rows_affected() > 0 => {
+            if req.is_enabled.is_some() {
+                crate::middleware::auth::refresh_api_key_cache(&state).await.ok();
+            }
             Json(serde_json::json!({ "status": "ok" })).into_response()
-        },
+        }
         Ok(_) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "api key not found"})),

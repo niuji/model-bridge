@@ -212,7 +212,7 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 - `GET /api/admin/api-keys` — list API keys (with masked preview, no full key)
 - `POST /api/admin/api-keys` — create API key (returns full `mb-{uuid}` key once)
 - `GET /api/admin/api-keys/{id}` — get full API key
-- `PUT /api/admin/api-keys/{id}` — toggle API key enabled state
+- `PUT /api/admin/api-keys/{id}` — update API key (optional `name` rename and/or `is_enabled` toggle; only `is_enabled` changes refresh the auth cache)
 - `DELETE /api/admin/api-keys/{id}` — delete API key
 - `GET /api/admin/stats/overview` — total requests, tokens, avg latency, errors (last 7 days)
 - `GET /api/admin/stats/models` — per-model usage breakdown (last 7 days)

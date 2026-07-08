@@ -122,6 +122,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await
         .ok();
+    // 通道类型（openai_chat / openai_responses / anthropic）：比 api_format 更细，
+    // 区分同一 openai 入口下的 chat/completions 与 responses 两条上游通道。
+    sqlx::query("ALTER TABLE usage_records ADD COLUMN channel TEXT")
+        .execute(pool)
+        .await
+        .ok();
 
     Ok(())
 }

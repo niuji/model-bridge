@@ -135,6 +135,15 @@ async fn proxy_to_provider(
     routes_lock: Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>>,
     required_channel: Option<&str>,
 ) -> Response {
+    // 实际命中的上游通道类型，由入口端点 + 子 path 唯一决定：
+    // openai/chat/completions→openai_chat、openai/responses→openai_responses、anthropic→anthropic。
+    // 与 required_channel 同源（anthropic 入口 required_channel 为 None，此处补为 "anthropic"），
+    // 比 api_format 更细：能区分同一 openai 入口下的 chat 与 responses 两条上游通道。
+    let channel: &str = match api_format {
+        "openai" if path == "responses" => "openai_responses",
+        "openai" => "openai_chat",
+        _ => "anthropic",
+    };
     // 1. 从请求体提取 model 名（转小写用于路由查找）
     let model = extract_model_from_body(body).unwrap_or_default();
     let model_lower = model.to_lowercase();
@@ -249,12 +258,12 @@ async fn proxy_to_provider(
 
             if is_stream {
                 proxy_streaming_response(
-                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format, &target_url,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format, channel, &target_url,
                 )
                 .await
             } else {
                 proxy_buffered_response(
-                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format, &target_url,
+                    state, resp, &route.model_id, &route.provider_id, start, api_key_id, client, api_format, channel, &target_url,
                 )
                 .await
             }
@@ -280,6 +289,7 @@ async fn proxy_to_provider(
                 api_key_id,
                 client,
                 api_format.to_string(),
+                channel.to_string(),
             ));
 
             // 根据错误类型返回更具体的信息
@@ -302,6 +312,7 @@ async fn proxy_to_provider(
 }
 
 /// 处理非流式响应：缓冲后返回
+#[allow(clippy::too_many_arguments)]
 async fn proxy_buffered_response(
     state: Arc<AppState>,
     resp: reqwest::Response,
@@ -311,6 +322,7 @@ async fn proxy_buffered_response(
     api_key_id: Option<String>,
     client: Option<String>,
     api_format: &str,
+    channel: &str,
     target_url: &str,
 ) -> Response {
     let status = resp.status();
@@ -335,6 +347,7 @@ async fn proxy_buffered_response(
                 api_key_id,
                 client,
                 api_format.to_string(),
+                channel.to_string(),
             ));
 
             // 构造响应，透传上游响应头（仅过滤 hop-by-hop 头）
@@ -369,6 +382,7 @@ async fn proxy_buffered_response(
                 api_key_id,
                 client,
                 api_format.to_string(),
+                channel.to_string(),
             ));
 
             (
@@ -382,6 +396,7 @@ async fn proxy_buffered_response(
 }
 
 /// 处理 SSE 流式响应：逐块透传，流结束时从最后 chunk 提取 usage
+#[allow(clippy::too_many_arguments)]
 async fn proxy_streaming_response(
     state: Arc<AppState>,
     resp: reqwest::Response,
@@ -391,6 +406,7 @@ async fn proxy_streaming_response(
     api_key_id: Option<String>,
     client: Option<String>,
     api_format: &str,
+    channel: &str,
     target_url: &str,
 ) -> Response {
     let status = resp.status();
@@ -406,6 +422,7 @@ async fn proxy_streaming_response(
     let api_key_id_final = api_key_id.clone();
     let client_final = client.clone();
     let api_format_final = api_format.to_string();
+    let channel_final = channel.to_string();
     let target_url_final = target_url.to_string();
     let start_clone = start;
 
@@ -463,6 +480,7 @@ async fn proxy_streaming_response(
                         api_key_id_final.clone(),
                         client_final.clone(),
                         api_format_final.clone(),
+                        channel_final.clone(),
                     ));
                     break;
                 }
@@ -485,6 +503,7 @@ async fn proxy_streaming_response(
                 api_key_id_final,
                 client_final,
                 api_format_final,
+                channel_final,
             ));
         }
     });
@@ -672,13 +691,14 @@ async fn write_usage(
     api_key_id: Option<String>,
     client: Option<String>,
     api_format: String,
+    channel: String,
 ) {
     tracing::debug!(
         "WRITE usage: provider={}, model={}, input={}, output={}, cache_read={}, cache_write={}, latency_ms={}, status={}",
         provider_id, model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status
     );
     if let Err(e) = sqlx::query(
-        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, client, api_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_records (api_key_id, model_id, provider_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, status, error_msg, client, api_format, channel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&api_key_id)
     .bind(&model_id)
@@ -692,6 +712,7 @@ async fn write_usage(
     .bind(&error_msg)
     .bind(&client)
     .bind(&api_format)
+    .bind(&channel)
     .execute(&state.db)
     .await
     {

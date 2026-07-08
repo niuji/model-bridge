@@ -20,8 +20,7 @@
           <span class="sk-bar w-prov" />
           <span class="sk-bar w-tok" />
           <span class="sk-bar w-lat" />
-          <span class="sk-bar w-st" />
-          <span class="sk-bar w-err" />
+          <span class="sk-bar w-res" />
         </div>
       </div>
       <n-data-table
@@ -111,29 +110,6 @@ function latencyPct(ms: any): number {
   return Math.round((v / maxLatency.value) * 100)
 }
 
-// 行内小图标（12px）。stroke 直接传色，按状态变色。
-function keyIcon(color: string) {
-  return h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'cell-icon' }, [
-    h('path', { d: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4' }),
-  ])
-}
-function alertIcon(color: string) {
-  return h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'cell-icon' }, [
-    h('path', { d: 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z' }),
-    h('line', { x1: 12, y1: 9, x2: 12, y2: 13 }),
-    h('line', { x1: 12, y1: 17, x2: 12.01, y2: 17 }),
-  ])
-}
-
-// 终端图标：客户端列首行小图标，暗示 CLI / 客户端程序。
-function clientIcon(color: string) {
-  return h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'cell-icon' }, [
-    h('rect', { x: 2, y: 3, width: 20, height: 18, rx: 2 }),
-    h('polyline', { points: '6 8 9 12 6 16' }),
-    h('line', { x1: 12, y1: 16, x2: 16, y2: 16 }),
-  ])
-}
-
 // 拆 user-agent 为 { product, version }：取首个空白前的 token，再按 '/' 分产品 / 版本。
 // 例：'claude-cli/2.1.201 (external, cli)' -> { product: 'claude-cli', version: '2.1.201' }
 function parseClient(ua: any): { product: string; version: string | null } | null {
@@ -150,8 +126,19 @@ function parseClient(ua: any): { product: string; version: string | null } | nul
   return { product, version: version || null }
 }
 
+// 通道类型 → 短标签 + 协议族着色。openai_chat/openai_responses 同属 openai 族（青），
+// anthropic 单独一族（赭）。旧记录无 channel 时返回 null，单元格回退为「—」。
+function channelMeta(ch: any): { text: string; tier: 'openai' | 'anthropic' } | null {
+  if (ch === 'anthropic') return { text: 'anthropic', tier: 'anthropic' }
+  if (ch === 'openai_responses') return { text: 'responses', tier: 'openai' }
+  if (ch === 'openai_chat') return { text: 'chat', tier: 'openai' }
+  return null
+}
+
+// 单层表头 7 列：时间 / 调用方 / 模型（含供应商图标）/ 通道 / Token / 延迟 / 结果。
+// 调用方主行强化客户端、副行弱化 key；供应商并入「模型」列，通道独立成列。
 const columns = [
-  { title: '时间', key: 'created_at', width: 150, render: (row: any) => {
+  { title: '时间', key: 'created_at', width: 148, titleAlign: 'center' as const, render: (row: any) => {
       const ts = formatLocalTime(row.created_at)
       if (!ts) return h('span', { class: 'mono time-na' }, '—')
       const sp = ts.indexOf(' ')
@@ -162,46 +149,62 @@ const columns = [
         h('div', { class: 'time-time mono' }, time),
       ])
     } },
-  // 「调用方」合并原 API Key + 客户端两列：主行 key（带端点 badge），副行 client。
-  // 不用 naive 的 ellipsis：它会包裹自定义渲染内容，既会干扰「已删除」删除线，
-  // 又会把钥匙图标一起塞进 tooltip。改用 .apikey-text 上的 CSS ellipsis 截断。
-  { title: '调用方', key: 'caller', width: 248, render: (row: any) => {
-      // 主行 key 三态：有 name 用 name、否则 preview、否则「已删除」、无 id 则 —
-      let keyNode
-      if (row.api_key_name) keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#0d6e6b'), h('span', { class: 'mono apikey-text' }, row.api_key_name)])
-      else if (row.api_key_preview) keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#9c6c00'), h('span', { class: 'mono apikey-text' }, row.api_key_preview)])
-      else if (row.api_key_id) keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#b3261e'), h('span', { class: 'mono apikey-deleted' }, '已删除')])
-      else keyNode = h('span', { class: 'apikey-cell' }, [keyIcon('#c9c0b0'), h('span', { class: 'mono apikey-text apikey-na' }, '—')])
-      // 端点 badge：旧记录无 api_format 时不显示
-      const badge = row.api_format === 'anthropic' || row.api_format === 'openai'
-        ? h('span', { class: `ep-badge ep-${row.api_format} mono` }, row.api_format)
-        : null
-      // 副行 client（hover 整个单元格显完整 UA，含 (external, cli) 等注释段）
+  // 「调用方」：一行排列——终端图标 + 客户端名 + 版本徽标 · 钥匙图标 + key 名。
+  // 客户端为主（#5d564b）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。
+  { title: '调用方', key: 'caller', width: 216, titleAlign: 'center' as const, render: (row: any) => {
+      let keyTextClass = 'mono caller-key'
+      let keyText: string
+      if (row.api_key_name) { keyText = row.api_key_name }
+      else if (row.api_key_preview) { keyText = row.api_key_preview; keyTextClass += ' caller-key-anon' }
+      else if (row.api_key_id) { keyText = '已删除'; keyTextClass = 'mono caller-key-deleted' }
+      else { keyText = '—'; keyTextClass += ' caller-key-na' }
       const parsed = parseClient(row.client)
-      const clientNode = parsed
-        ? h('div', { class: 'client-cell' }, [
-            clientIcon('#9c8d76'),
-            h('div', { class: 'client-text' }, [
-              h('span', { class: 'mono client-product' }, parsed.product),
-              parsed.version ? h('span', { class: 'mono client-version' }, parsed.version) : null,
-            ]),
-          ])
-        : null
-      const inner = h('div', { class: 'caller-cell' }, [
-        h('div', { class: 'caller-main' }, [keyNode, badge]),
-        clientNode,
+      const clientIcon = h('svg', { class: 'caller-client-icon', width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+        h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }),
+        h('path', { d: 'M7 9l3 3-3 3' }),
       ])
+      const keyIcon = h('svg', { class: 'caller-key-icon', width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+        h('circle', { cx: 7.5, cy: 12, r: 3.5 }),
+        h('path', { d: 'M11 12h10' }),
+        h('path', { d: 'M18 12v3' }),
+        h('path', { d: 'M15 12v2' }),
+      ])
+      const children: any[] = [clientIcon]
+      if (parsed) {
+        children.push(h('span', { class: 'caller-client-product' }, parsed.product))
+        if (parsed.version) children.push(h('span', { class: 'caller-client-version' }, `v${parsed.version}`))
+      } else {
+        children.push(h('span', { class: 'caller-client-na' }, '—'))
+      }
+      children.push(h('span', { class: 'caller-sep' }, '·'), keyIcon, h('span', { class: keyTextClass }, keyText))
+      const inner = h('div', { class: 'caller-body mono' }, children)
       if (!parsed) return inner
       return h(NTooltip, { placement: 'top' }, { trigger: () => inner, default: () => row.client })
     } },
-  { title: '模型', key: 'model_id', width: 190, ellipsis: { tooltip: true }, render: (row: any) => h('span', { class: 'mono model-cell' }, row.model_id || '—') },
-  { title: '供应商', key: 'provider_id', width: 76, align: 'center' as const, titleAlign: 'center' as const, render: (row: any) => {
+  // 模型：供应商图标 + model id（省略号，hover 全名）。供应商列已并入此处，通道独立成列。
+  { title: '模型', key: 'model_id', width: 176, titleAlign: 'center' as const, render: (row: any) => {
       const p = providerMap.value[row.provider_id]
       const name = p?.name || row.provider_id
-      const trigger = p?.icon
+      const iconNode = p?.icon
         ? h('span', { class: 'prov-icon-wrap' }, h('img', { src: iconUrl(p.icon), class: 'prov-icon', alt: '' }))
         : h('span', { class: 'prov-icon-wrap prov-mono-wrap' }, h('span', { class: 'mono prov-mono' }, row.provider_id.slice(0, 2).toUpperCase()))
-      return h(NTooltip, { placement: 'top' }, { trigger: () => trigger, default: () => name })
+      return h('div', { class: 'model-cell' }, [
+        h(NTooltip, { placement: 'top' }, { trigger: () => iconNode, default: () => name }),
+        h(NTooltip, { placement: 'top' }, {
+          trigger: () => h('span', { class: 'mono model-id' }, row.model_id || '—'),
+          default: () => row.model_id || '—',
+        }),
+      ])
+    } },
+  // 通道：独立列，按协议族着色（openai 系青、anthropic 赭），hover 显完整 channel 类型。
+  { title: '通道', key: 'channel', width: 100, align: 'center' as const, titleAlign: 'center' as const, render: (row: any) => {
+      const ch = channelMeta(row.channel)
+      return ch
+        ? h(NTooltip, { placement: 'top' }, {
+            trigger: () => h('span', { class: `mono ch-tag ch-${ch.tier}` }, ch.text),
+            default: () => row.channel,
+          })
+        : h('span', { class: 'mono ch-tag ch-na' }, '—')
     } },
   { title: 'Token（入 / 出）', key: 'tokens', width: 150, align: 'right' as const, titleAlign: 'right' as const, render: (row: any) => {
       const cacheRead = row.cache_read_tokens ?? 0
@@ -221,7 +224,7 @@ const columns = [
         ]) : null,
       ])
     } },
-  { title: '延迟', key: 'latency_ms', width: 120, align: 'right' as const, titleAlign: 'right' as const, render: (row: any) => {
+  { title: '延迟', key: 'latency_ms', width: 108, align: 'right' as const, titleAlign: 'right' as const, render: (row: any) => {
       const tier = latencyTier(row.latency_ms)
       return h('div', { class: 'latency-cell' }, [
         h('span', { class: `latency-num mono tier-${tier}` }, humanizeLatency(row.latency_ms)),
@@ -230,25 +233,27 @@ const columns = [
         ]),
       ])
     } },
-  { title: '状态', key: 'status', width: 78, align: 'center' as const, titleAlign: 'center' as const, render: (row: any) => {
+  // 结果：合并原「状态」+「错误」。成功只显 OK 徽标；
+  // 失败显 ERR 徽标 + 截断错误信息，hover 看完整错误。少一列、少一组图标噪音。
+  { title: '结果', key: 'result', width: 220, titleAlign: 'center' as const, render: (row: any) => {
       const ok = row.status === 'success'
-      return h('span', { class: `status-badge ${ok ? 'success' : 'error'}` }, [
+      const badge = h('span', { class: `status-badge ${ok ? 'success' : 'error'}` }, [
         h('span', { class: 'status-dot-sm' }),
         h('span', { class: 'mono status-text' }, ok ? 'OK' : 'ERR'),
       ])
-    } },
-  { title: '错误', key: 'error_msg', width: 200, render: (row: any) => {
-      if (row.error_msg) return h(NTooltip, { placement: 'top' }, {
-        trigger: () => h('span', { class: 'error-cell' }, [alertIcon('#b3261e'), h('span', { class: 'mono error-text' }, row.error_msg)]),
-        default: () => row.error_msg,
-      })
-      return h('span', { class: 'mono error-na' }, '—')
+      if (ok) return h('div', { class: 'result-cell' }, badge)
+      const msg = row.error_msg || '未知错误'
+      const inner = h('div', { class: 'result-cell' }, [
+        badge,
+        h('span', { class: 'mono error-text' }, msg),
+      ])
+      return h(NTooltip, { placement: 'top' }, { trigger: () => inner, default: () => msg })
     } },
 ]
 
 // 列宽总和：交给 n-data-table 的 scroll-x，窄屏时表格内部横向滚动（表头跟随），
 // 不再被 .table-container 的 overflow:hidden 裁掉右侧列。
-const scrollX = columns.reduce((s: number, c: any) => s + (Number(c.width) || 0), 0)
+const scrollX = columns.reduce((s, c) => s + (Number(c.width) || 0), 0)
 
 async function loadProviders() {
   try {
@@ -307,14 +312,13 @@ onMounted(init)
 .skeleton { padding: 4px 0 8px; }
 .sk-row { display: flex; align-items: center; gap: 14px; padding: 12px 24px; }
 .sk-bar { height: 10px; border-radius: 4px; background: linear-gradient(90deg, #f4efe3 0%, #ece6da 40%, #f4efe3 80%); background-size: 200% 100%; animation: sk-shimmer 1.5s ease-in-out infinite; animation-delay: var(--sk-d, 0s); }
-.w-time { width: 92px; }
-.w-key { width: 84px; }
-.w-model { width: 130px; }
-.w-prov { width: 26px; height: 26px; border-radius: 7px; }
+.w-time { width: 88px; }
+.w-key { width: 90px; }
+.w-model { width: 120px; }
+.w-prov { width: 60px; }
 .w-tok { width: 78px; }
 .w-lat { width: 54px; }
-.w-st { width: 44px; }
-.w-err { flex: 1; max-width: 220px; }
+.w-res { flex: 1; max-width: 200px; }
 @keyframes sk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 @media (max-width: 600px) { .page-header { flex-direction: column; align-items: flex-start; gap: 14px; } .count-block { align-items: flex-start; } }
@@ -331,42 +335,43 @@ onMounted(init)
 .logs :deep(.cell-icon) { flex-shrink: 0; }
 
 /* 时间 */
-.logs :deep(.time-cell) { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+.logs :deep(.time-cell) { display: flex; flex-direction: column; align-items: center; gap: 1px; line-height: 1.25; }
 .logs :deep(.time-date) { font-size: 11px; color: #a89e8c; }
-.logs :deep(.time-time) { font-size: 12px; color: #17140f; font-weight: 500; }
+.logs :deep(.time-time) { font-size: 12px; color: #5d564b; font-weight: 500; }
 .logs :deep(.time-na) { font-size: 12px; color: #a89e8c; }
 
-/* 调用方（合并 API Key + 客户端 + 端点 badge） */
-.logs :deep(.caller-cell) { display: flex; flex-direction: column; gap: 2px; line-height: 1.25; }
-.logs :deep(.caller-main) { display: flex; align-items: center; gap: 8px; max-width: 100%; }
-.logs :deep(.caller-main .apikey-cell) { flex: 1 1 auto; min-width: 0; }
-.logs :deep(.caller-main .apikey-text) { color: #17140f; font-weight: 500; }
-.logs :deep(.caller-cell .client-product) { color: #74695a; font-weight: 400; }
-.logs :deep(.ep-badge) { flex-shrink: 0; font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 999px; white-space: nowrap; letter-spacing: 0.02em; }
-.logs :deep(.ep-badge.ep-anthropic) { background: rgba(181,132,43,0.1); border: 1px solid rgba(181,132,43,0.28); color: #9c6c00; }
-.logs :deep(.ep-badge.ep-openai) { background: rgba(13,110,107,0.1); border: 1px solid rgba(13,110,107,0.28); color: #0d6e6b; }
+/* 调用方：一行排列——终端图标 + 客户端名 + 版本徽标 · 钥匙图标 + key 名。
+   客户端为主（#5d564b）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。 */
+.logs :deep(.caller-body) { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; line-height: 1.25; padding: 2px 0; }
 
-/* API Key */
-.logs :deep(.apikey-cell) { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
-.logs :deep(.apikey-text) { font-size: 12px; color: #74695a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.logs :deep(.apikey-text.apikey-na) { color: #a89e8c; }
-.logs :deep(.apikey-deleted) { font-size: 12px; color: #b3261e; text-decoration: line-through; }
+.logs :deep(.caller-client-icon) { flex-shrink: 0; color: #b3a98f; }
+.logs :deep(.caller-client-product) { flex: 0 1 auto; font-size: 13px; font-weight: 500; color: #5d564b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; letter-spacing: -0.01em; }
+.logs :deep(.caller-client-version) { flex-shrink: 0; font-size: 10px; color: #a89e8c; background: #f4efe3; border: 1px solid #ece6da; padding: 0 5px; border-radius: 4px; line-height: 1.4; white-space: nowrap; }
+.logs :deep(.caller-client-na) { flex-shrink: 0; font-size: 13px; color: #a89e8c; }
 
-/* 模型 */
-.logs :deep(.model-cell) { font-size: 12px; color: #74695a; }
+.logs :deep(.caller-sep) { flex-shrink: 0; color: #ddd6c8; }
+.logs :deep(.caller-key-icon) { flex-shrink: 0; color: #c9c0b0; }
+.logs :deep(.caller-key) { flex: 0 1 auto; font-size: 11px; color: #a89e8c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.logs :deep(.caller-key-anon) { color: #c9c0b0; }
+.logs :deep(.caller-key-na) { color: #d3ccc0; }
+.logs :deep(.caller-key-deleted) { flex: 0 1 auto; font-size: 11px; color: #b3261e; text-decoration: line-through; text-decoration-color: rgba(179,38,30,0.5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
-/* 客户端 */
-.logs :deep(.client-cell) { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; }
-.logs :deep(.client-text) { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; min-width: 0; }
-.logs :deep(.client-product) { font-size: 12px; color: #17140f; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.logs :deep(.client-version) { font-size: 11px; color: #a89e8c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+/* 模型：供应商图标 + model id（省略号）。flex 行，图标固定不缩、id 收缩省略。 */
+.logs :deep(.model-cell) { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; max-width: 100%; }
+.logs :deep(.model-id) { font-size: 12px; color: #5d564b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
-/* 供应商图标 */
-.logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: #faf7f0; border: 1px solid #ece6da; transition: border-color 0.15s, background 0.15s; }
-.logs :deep(.prov-icon) { width: 18px; height: 18px; object-fit: contain; display: block; }
+/* 供应商图标：并入「模型」列前缀，缩小为 18px 内联贴片。 */
+.logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; background: #faf7f0; border: 1px solid #ece6da; transition: border-color 0.15s, background 0.15s; }
+.logs :deep(.prov-icon) { width: 13px; height: 13px; object-fit: contain; display: block; }
 .logs :deep(.prov-mono-wrap) { background: #f4efe3; }
-.logs :deep(.prov-mono) { font-size: 10px; font-weight: 600; color: #0d6e6b; letter-spacing: 0.02em; }
+.logs :deep(.prov-mono) { font-size: 8px; font-weight: 600; color: #0d6e6b; letter-spacing: 0.02em; }
 .logs :deep(.n-data-table-tr:hover .prov-icon-wrap) { border-color: #bfe6cf; background: #f4fbf6; }
+
+/* 通道标签：按协议族着色（openai 系青、anthropic 赭），hover 显完整 channel 类型。 */
+.logs :deep(.ch-tag) { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.02em; white-space: nowrap; line-height: 1.4; }
+.logs :deep(.ch-tag.ch-openai) { color: #0d6e6b; background: rgba(13,110,107,0.08); border: 1px solid rgba(13,110,107,0.18); }
+.logs :deep(.ch-tag.ch-anthropic) { color: #b5842b; background: rgba(181,132,43,0.08); border: 1px solid rgba(181,132,43,0.18); }
+.logs :deep(.ch-tag.ch-na) { color: #a89e8c; }
 
 /* Token */
 .logs :deep(.token-info) { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
@@ -393,8 +398,10 @@ onMounted(init)
 .logs :deep(.latency-fill.tier-mid) { background: #b5842b; }
 .logs :deep(.latency-fill.tier-slow) { background: #b3261e; }
 
-/* 状态 */
-.logs :deep(.status-badge) { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; }
+/* 结果（合并状态 + 错误） */
+.logs :deep(.result-cell) { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
+.logs :deep(.result-cell .error-text) { font-size: 12px; color: #b3261e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.logs :deep(.status-badge) { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; flex-shrink: 0; }
 .logs :deep(.status-badge.success) { background: rgba(46,168,106,0.08); border: 1px solid rgba(46,168,106,0.22); }
 .logs :deep(.status-badge.error) { background: rgba(179,38,30,0.07); border: 1px solid rgba(179,38,30,0.22); }
 .logs :deep(.status-dot-sm) { width: 5px; height: 5px; border-radius: 50%; }
@@ -403,9 +410,4 @@ onMounted(init)
 .logs :deep(.status-text) { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; }
 .logs :deep(.status-badge.success .status-text) { color: #1d7a4c; }
 .logs :deep(.status-badge.error .status-text) { color: #b3261e; }
-
-/* 错误 */
-.logs :deep(.error-cell) { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
-.logs :deep(.error-text) { font-size: 12px; color: #b3261e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.logs :deep(.error-na) { font-size: 12px; color: #a89e8c; }
 </style>
