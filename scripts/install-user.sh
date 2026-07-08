@@ -35,15 +35,24 @@ UNINSTALL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --build) BUILD=1; shift ;;
-    --binary) BINARY="$2"; shift 2 ;;
+    --binary)
+      [[ $# -ge 2 ]] || { echo "--binary 需要一个路径参数" >&2; exit 2; }
+      BINARY="$2"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR>1{if(/^set -euo pipefail$/)exit;print}' "$0"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
 
 # --- 卸载 ---
 if [[ "$UNINSTALL" -eq 1 ]]; then
+  echo ">> 将删除：$BIN_PATH  $UNIT_FILE  $CFG_PATH"
+  echo ">> 将删除数据目录：$DATA_DIR（含全部 API key 与用量记录）"
+  read -r -p "确认卸载并删除以上数据？[y/N] " ans || ans=""
+  if [[ "${ans,,}" != "y" ]]; then
+    echo "已取消"
+    exit 0
+  fi
   systemctl --user disable --now model-bridge 2>/dev/null || true
   rm -f "$BIN_PATH" "$UNIT_FILE" "$CFG_PATH"
   rm -rf "$DATA_DIR"
@@ -108,7 +117,8 @@ if [[ ! -f "$CFG_PATH" ]]; then
   cat > "$CFG_PATH" <<EOF
 # 由 install-user.sh 生成。改端口/host 等直接编辑本文件，然后 systemctl --user restart model-bridge
 [proxy]
-host = "0.0.0.0"
+# 本机用：仅 loopback。需服务局域网时改 0.0.0.0（代理有 mb- key 鉴权）。
+host = "127.0.0.1"
 port = 10010
 
 [admin]
@@ -154,15 +164,21 @@ systemctl --user daemon-reload
 systemctl --user enable model-bridge
 
 if systemctl --user is-active --quiet model-bridge; then
-  systemctl --user restart model-bridge || true
-  echo ">> 已重启"
+  if systemctl --user restart model-bridge; then
+    echo ">> 已重启"
+  else
+    echo ">> 重启失败，请查看下方状态" >&2
+  fi
 else
-  systemctl --user start model-bridge || true
-  echo ">> 已启动"
+  if systemctl --user start model-bridge; then
+    echo ">> 已启动"
+  else
+    echo ">> 启动失败，请查看下方状态" >&2
+  fi
 fi
 
 echo
-echo "=== 完成 ==="
+echo "=== 安装完成（核对下方服务状态）==="
 systemctl --user --no-pager --full status model-bridge || true
 echo
 echo "代理：http://127.0.0.1:10010   管理 UI：http://127.0.0.1:10020"
