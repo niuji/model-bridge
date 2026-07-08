@@ -57,7 +57,7 @@
                       :aria-label="showApiKey ? '隐藏 API Key' : '显示 API Key'"
                       @click="showApiKey = !showApiKey"
                     >
-                      <svg v-if="showApiKey" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <svg v-if="!showApiKey" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.76 21.76 0 0 1 5.06-6.94" />
                         <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a21.76 21.76 0 0 1-4.31 5.14" />
                         <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
@@ -170,6 +170,16 @@
       </div>
       <template #footer><n-space justify="end"><n-button @click="showSync = false">取消</n-button><n-button type="primary" @click="applyDiff">应用选中</n-button></n-space></template>
     </n-modal>
+
+    <n-modal v-model:show="showCloseConfirm" title="确认关闭" style="width: 420px" preset="card" class="confirm-modal">
+      <div class="confirm-body">有未保存变更，确认关闭？</div>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showCloseConfirm = false">继续编辑</n-button>
+          <n-button class="confirm-close-btn" @click="confirmCloseConfig">确认关闭</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -197,6 +207,7 @@ const editProvider = ref<ProviderDetail | null>(null)
 const saving = ref(false)
 const fetching = ref(false)
 const showSync = ref(false)
+const showCloseConfirm = ref(false)
 const showApiKey = ref(false)
 const initialSnapshot = ref('')
 const diffResult = ref<DiffResult>({ added: [], removed: [], renamed: [] })
@@ -358,11 +369,19 @@ function removeModelRow(index: number) { form.value.models.splice(index, 1) }
 
 function closeConfig() {
   showConfig.value = false
+  showCloseConfirm.value = false
   showApiKey.value = false
 }
 
 function requestCloseConfig() {
-  if (isDirty.value && !window.confirm('有未保存变更，确认关闭？')) return
+  if (isDirty.value) {
+    showCloseConfirm.value = true
+    return
+  }
+  closeConfig()
+}
+
+function confirmCloseConfig() {
   closeConfig()
 }
 
@@ -471,6 +490,20 @@ onMounted(loadProviders)
 .dirty-tip.active { color: #b5842b; }
 
 .sync-modal { --n-title-text-color: #17140f; }
+.confirm-modal { --n-title-text-color: #17140f; }
+.confirm-body { color: #4b443a; font-size: 14px; line-height: 1.6; }
+.confirm-close-btn {
+  /* !important 覆盖 Naive NButton default type 的 inline `--n-color: initial`，否则 scoped 选择器优先级不够 */
+  --n-color: #b3261e !important;
+  --n-color-hover: #9f2019 !important;
+  --n-color-pressed: #851a15 !important;
+  --n-border: 1px solid #b3261e !important;
+  --n-border-hover: 1px solid #9f2019 !important;
+  --n-border-pressed: 1px solid #851a15 !important;
+  --n-text-color: #fff7f5 !important;
+  --n-text-color-hover: #fff7f5 !important;
+  --n-text-color-pressed: #fff7f5 !important;
+}
 .diff-section { margin-bottom: 16px; }
 .diff-section:last-child { margin-bottom: 0; }
 .diff-group-label { display: flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
