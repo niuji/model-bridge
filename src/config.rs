@@ -49,11 +49,6 @@ pub struct ProviderDef {
     /// 图标（emoji 或图片 URL）
     #[serde(default)]
     pub icon: Option<String>,
-    /// 获取模型列表的端点，不配置则不支持自动获取
-    pub models_endpoint: Option<String>,
-    /// models endpoint 的认证方式: "bearer"（默认，Authorization: Bearer xxx）或 "x-api-key"
-    #[serde(default = "default_auth_type")]
-    pub models_endpoint_auth: String,
     #[serde(default)]
     pub channels: Vec<ChannelDef>,
 }
@@ -62,15 +57,15 @@ pub struct ProviderDef {
 pub struct ChannelDef {
     #[serde(rename = "type")]
     pub channel_type: String,
+    /// 转发请求的上游端点
     pub base_url: String,
+    /// 拉取该通道模型列表的端点（不配置则该通道不支持「同步」）
+    #[serde(default)]
+    pub models_endpoint: Option<String>,
 }
 
 fn default_providers_file() -> String {
     "providers.json".to_string()
-}
-
-fn default_auth_type() -> String {
-    "bearer".to_string()
 }
 
 impl Default for AppConfig {

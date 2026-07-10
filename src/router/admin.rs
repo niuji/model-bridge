@@ -62,6 +62,7 @@ pub struct UpdateProviderChannel {
 
 #[derive(Deserialize)]
 pub struct UpdateProviderModel {
+    pub channel_type: String,
     pub model_id: String,
     pub model_name: String,
 }
@@ -85,10 +86,10 @@ pub async fn update_provider(
         .map(|c| (c.channel_type, c.is_enabled))
         .collect();
 
-    let models: Vec<(String, String)> = req
+    let models: Vec<(String, String, String)> = req
         .models
         .into_iter()
-        .map(|m| (m.model_id, m.model_name))
+        .map(|m| (m.channel_type, m.model_id, m.model_name))
         .collect();
 
     match provider_svc::update_provider(
@@ -126,6 +127,7 @@ pub async fn update_provider(
 #[derive(Deserialize, Default)]
 pub struct FetchModelsQuery {
     pub api_key: Option<String>,
+    pub channel: Option<String>,
 }
 
 pub async fn fetch_provider_models(
@@ -143,10 +145,21 @@ pub async fn fetch_provider_models(
                 .into_response();
         }
     };
+    let channel = match &query.channel {
+        Some(c) if !c.is_empty() => c.as_str(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "channel is required"})),
+            )
+                .into_response();
+        }
+    };
     match provider_svc::fetch_models_from_api(
         &state.client,
         &state.provider_defs,
         &id,
+        channel,
         api_key,
     )
     .await

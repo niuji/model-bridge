@@ -18,11 +18,8 @@
           <div class="card-channels">
             <div v-for="ch in p.channels" :key="ch.channel_type" class="channel-tag" :class="{ off: !ch.is_enabled }">
               <span class="channel-label mono">{{ channelLabel(ch.channel_type) }}</span>
+              <span class="channel-tag-count mono">{{ ch.model_count }}</span>
             </div>
-          </div>
-          <div class="card-footer">
-            <span class="model-count mono">{{ p.model_count }} 个模型</span>
-            <span class="card-arrow">→</span>
           </div>
         </div>
       </div>
@@ -78,7 +75,7 @@
             <div class="block-header">
               <div>
                 <div class="section-label">通道配置</div>
-                <p class="section-help">base_url 由 providers.json 决定，此处仅控制通道是否启用。</p>
+                <p class="section-help">base_url 与 models_endpoint 由 providers.json 决定，此处仅控制通道是否启用。</p>
               </div>
             </div>
             <div v-for="(ch, i) in form.channels" :key="ch.channel_type" class="channel-row-card">
@@ -100,11 +97,11 @@
             <div class="block-header model-block-header">
               <div>
                 <div class="section-label">模型列表</div>
-                <p class="section-help">左侧别名用于客户端请求；右侧填写实际上游模型或展示名。</p>
+                <p class="section-help">按通道独立配置。左侧别名用于客户端请求；右侧填写实际上游模型或展示名。</p>
               </div>
               <n-space :size="8">
                 <n-button
-                  v-if="editProvider?.models_endpoint"
+                  v-if="selectedChannelDef?.models_endpoint"
                   size="small"
                   secondary
                   @click="fetchModels"
@@ -122,9 +119,23 @@
                 <n-button size="small" dashed @click="addModelRow" class="add-model-toolbar-btn mono">添加</n-button>
               </n-space>
             </div>
+            <div class="channel-tabs">
+              <button
+                v-for="ch in form.channels"
+                :key="ch.channel_type"
+                type="button"
+                class="channel-tab mono"
+                :class="{ active: ch.channel_type === selectedChannel, off: !ch.is_enabled }"
+                @click="selectedChannel = ch.channel_type"
+              >
+                <span>{{ channelLabel(ch.channel_type) }}</span>
+                <span class="channel-tab-count">{{ channelModelCount(ch.channel_type) }}</span>
+              </button>
+            </div>
             <div class="model-toolbar">
               <span class="model-count-tip mono">{{ activeModelCount }} 条映射</span>
-              <span v-if="editProvider?.models_endpoint" class="sync-tip">从 provider API 拉取模型并生成差异</span>
+              <span v-if="selectedChannelDef?.models_endpoint" class="sync-tip">从该通道 API 拉取模型并生成差异</span>
+              <span v-else class="sync-tip">该通道未配置 models_endpoint，仅可手动添加</span>
             </div>
             <div class="model-table">
               <div class="model-table-header mono">
@@ -133,12 +144,12 @@
                 <span>操作</span>
               </div>
               <div class="model-list">
-                <div v-for="(m, i) in form.models" :key="i" class="model-row">
-                  <n-input v-model:value="form.models[i].model_id" size="small" placeholder="例如 claude-opus-4-1" class="mono model-id-input" />
-                  <n-input v-model:value="form.models[i].model_name" size="small" placeholder="例如 claude-opus-4-1 ($15/$75)" class="mono model-name-input" />
+                <div v-for="(m, i) in visibleModels" :key="i" class="model-row">
+                  <n-input v-model:value="visibleModels[i].model_id" size="small" placeholder="例如 glm-5.2" class="mono model-id-input" />
+                  <n-input v-model:value="visibleModels[i].model_name" size="small" placeholder="例如 glm-5.2 ($1.0/$3.5)" class="mono model-name-input" />
                   <n-button size="small" type="error" tertiary @click="removeModelRow(i)" class="remove-btn mono">删除</n-button>
                 </div>
-                <div v-if="form.models.length === 0" class="model-empty">还没有模型映射，点击右上角“添加模型”开始配置。</div>
+                <div v-if="visibleModels.length === 0" class="model-empty">该通道还没有模型映射，点击「添加」或「同步」开始配置。</div>
               </div>
             </div>
           </div>
@@ -190,15 +201,16 @@ import { NButton, NCheckbox, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NS
 const message = useMessage()
 const API_BASE = '/api/admin'
 
-interface ChannelInfo { channel_type: string; base_url: string; is_enabled: boolean }
-interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; model_count: number }
-interface ProviderDetail { id: string; name: string; api_key: string; is_enabled: boolean; models_endpoint?: string; channels: ChannelInfo[]; models: { id: string; provider_id: string; model_id: string; model_name: string }[] }
+interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean; model_count: number }
+interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[] }
+interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
+interface ProviderDetail { id: string; name: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
 interface ModelForm { model_id: string; model_name: string }
 interface DiffItem { model_id: string; model_name: string; checked: boolean }
 interface DiffRenamed { model_id: string; local_name: string; remote_name: string; checked: boolean }
 interface DiffResult { added: DiffItem[]; removed: DiffItem[]; renamed: DiffRenamed[] }
-interface ChannelForm { channel_type: string; base_url: string; is_enabled: boolean }
-interface FormState { api_key: string; is_enabled: boolean; channels: ChannelForm[]; models: ModelForm[] }
+interface ChannelForm { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean }
+interface FormState { api_key: string; is_enabled: boolean; channels: ChannelForm[]; modelsByChannel: Record<string, ModelForm[]> }
 
 const providers = ref<ProviderSummary[]>([])
 const loading = ref(false)
@@ -211,23 +223,38 @@ const showCloseConfirm = ref(false)
 const showApiKey = ref(false)
 const initialSnapshot = ref('')
 const diffResult = ref<DiffResult>({ added: [], removed: [], renamed: [] })
-const form = ref<FormState>({ api_key: '', is_enabled: false, channels: [], models: [] })
+const form = ref<FormState>({ api_key: '', is_enabled: false, channels: [], modelsByChannel: {} })
+const selectedChannel = ref('')
 
 const CHANNEL_LABELS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }
 
+const selectedChannelDef = computed(() => form.value.channels.find(c => c.channel_type === selectedChannel.value))
+const visibleModels = computed(() => form.value.modelsByChannel[selectedChannel.value] || [])
+const activeModelCount = computed(() => visibleModels.value.filter(m => m.model_id.trim()).length)
 const isDirty = computed(() => snapshotForm(form.value) !== initialSnapshot.value)
-const activeModelCount = computed(() => form.value.models.filter(m => m.model_id.trim()).length)
 
 function channelLabel(type: string): string { return CHANNEL_LABELS[type] || type }
 function iconUrl(icon: string): string { return /^https?:\/\//.test(icon) ? icon : `/icons/${icon}` }
 function normId(s: string): string { return s.trim().toLowerCase() }
+function channelModelCount(type: string): number { return (form.value.modelsByChannel[type] || []).filter(m => m.model_id.trim()).length }
+
+function flattenModels(state: FormState): { channel_type: string; model_id: string; model_name: string }[] {
+  const out: { channel_type: string; model_id: string; model_name: string }[] = []
+  for (const [ct, arr] of Object.entries(state.modelsByChannel)) {
+    for (const m of arr) {
+      if (m.model_id.trim()) out.push({ channel_type: ct, model_id: m.model_id.trim(), model_name: m.model_name.trim() || m.model_id.trim() })
+    }
+  }
+  out.sort((a, b) => a.channel_type.localeCompare(b.channel_type) || a.model_id.localeCompare(b.model_id))
+  return out
+}
 
 function snapshotForm(state: FormState): string {
   return JSON.stringify({
     api_key: state.api_key.trim(),
     is_enabled: state.is_enabled,
     channels: state.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url.trim(), is_enabled: c.is_enabled })),
-    models: state.models.map(m => ({ model_id: m.model_id.trim(), model_name: m.model_name.trim() }))
+    models: flattenModels(state)
   })
 }
 
@@ -246,12 +273,20 @@ async function openConfig(summary: ProviderSummary) {
   const res = await fetch(`${API_BASE}/providers/${summary.id}`)
   editProvider.value = await res.json()
   const p = editProvider.value!
+  const modelsByChannel: Record<string, ModelForm[]> = {}
+  for (const ch of p.channels) modelsByChannel[ch.channel_type] = []
+  for (const m of p.models) {
+    const ct = m.channel_type
+    if (!modelsByChannel[ct]) modelsByChannel[ct] = []
+    modelsByChannel[ct].push({ model_id: m.model_id, model_name: m.model_name || m.model_id })
+  }
   form.value = {
     api_key: p.api_key || '',
     is_enabled: p.is_enabled,
-    channels: p.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
-    models: p.models.map(m => ({ model_id: m.model_id, model_name: m.model_name || m.model_id }))
+    channels: p.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, models_endpoint: c.models_endpoint, is_enabled: c.is_enabled })),
+    modelsByChannel,
   }
+  selectedChannel.value = p.channels[0]?.channel_type || ''
   showApiKey.value = false
   diffResult.value = { added: [], removed: [], renamed: [] }
   initialSnapshot.value = snapshotForm(form.value)
@@ -259,15 +294,15 @@ async function openConfig(summary: ProviderSummary) {
 }
 
 async function fetchModels() {
-  if (!editProvider.value) return
+  if (!editProvider.value || !selectedChannel.value) return
   fetching.value = true
   try {
     const apiKey = form.value.api_key.trim()
-    const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}/fetch-models?api_key=${encodeURIComponent(apiKey)}`)
+    const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}/fetch-models?api_key=${encodeURIComponent(apiKey)}&channel=${encodeURIComponent(selectedChannel.value)}`)
     if (res.ok) {
       const data = await res.json()
       const remote = (data.models || []).map((m: any) => ({ model_id: String(m.model_id), model_name: (m.model_name || String(m.model_id)).trim() }))
-      diffResult.value = computeDiff(form.value.models, remote)
+      diffResult.value = computeDiff(visibleModels.value, remote)
       const total = diffResult.value.added.length + diffResult.value.removed.length + diffResult.value.renamed.length
       if (total === 0) {
         message.info('模型列表已是最新')
@@ -323,13 +358,14 @@ function computeDiff(local: ModelForm[], remote: { model_id: string; model_name:
 }
 
 function applyDiff() {
+  const local = visibleModels.value
   const removedKeys = new Set(diffResult.value.removed.filter(r => r.checked).map(r => normId(r.model_id)))
   const renamedMap = new Map(diffResult.value.renamed.map(r => [normId(r.model_id), r]))
   const result: ModelForm[] = []
 
   let removedCount = 0
   let renamedCount = 0
-  for (const l of form.value.models) {
+  for (const l of local) {
     const k = normId(l.model_id)
     if (!k) {
       result.push(l)
@@ -356,7 +392,7 @@ function applyDiff() {
     }
   }
 
-  form.value.models = result
+  form.value.modelsByChannel[selectedChannel.value] = result
   showSync.value = false
   message.success(`已应用 ${addedCount + removedCount + renamedCount} 项变更`)
 }
@@ -364,8 +400,8 @@ function applyDiff() {
 function allChecked(arr: { checked: boolean }[]): boolean { return arr.length > 0 && arr.every(m => m.checked) }
 function someChecked(arr: { checked: boolean }[]): boolean { return arr.some(m => m.checked) && !arr.every(m => m.checked) }
 function toggleAll(arr: { checked: boolean }[], v: boolean) { arr.forEach(m => { m.checked = v }) }
-function addModelRow() { form.value.models.push({ model_id: '', model_name: '' }) }
-function removeModelRow(index: number) { form.value.models.splice(index, 1) }
+function addModelRow() { (form.value.modelsByChannel[selectedChannel.value] ||= []).push({ model_id: '', model_name: '' }) }
+function removeModelRow(index: number) { form.value.modelsByChannel[selectedChannel.value].splice(index, 1) }
 
 function closeConfig() {
   showConfig.value = false
@@ -393,7 +429,7 @@ async function handleSave() {
       api_key: form.value.api_key,
       is_enabled: form.value.is_enabled,
       channels: form.value.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
-      models: form.value.models.filter(m => m.model_id.trim()).map(m => ({ model_id: m.model_id.trim(), model_name: m.model_name.trim() || m.model_id.trim() }))
+      models: flattenModels(form.value)
     }
     const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}`, {
       method: 'PUT',
@@ -421,7 +457,7 @@ async function quickToggle(p: ProviderSummary, enabled: boolean) {
     api_key: detail.api_key || '',
     is_enabled: enabled,
     channels: detail.channels.map((c: ChannelInfo) => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
-    models: detail.models.map((m: any) => ({ model_id: m.model_id, model_name: m.model_name || m.model_id }))
+    models: (detail.models || []).map((m: any) => ({ channel_type: m.channel_type, model_id: m.model_id, model_name: m.model_name || m.model_id }))
   }
   await fetch(`${API_BASE}/providers/${p.id}`, {
     method: 'PUT',
@@ -448,13 +484,10 @@ onMounted(loadProviders)
 .card-name { display: flex; align-items: center; gap: 10px; }
 .card-icon { width: 24px; height: 24px; object-fit: contain; flex-shrink: 0; }
 .card-name-text { font-size: 17px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; }
-.card-channels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.card-channels { display: flex; flex-wrap: wrap; gap: 6px; }
 .channel-tag { display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 4px 10px; background: #f4efe3; border: 1px solid #d9cfbf; border-radius: 8px; color: #74695a; }
+.channel-tag-count { font-weight: 600; color: #9a8c72; }
 .channel-tag.off { text-decoration: line-through; opacity: 0.5; }
-.card-footer { display: flex; justify-content: space-between; align-items: center; }
-.model-count { font-size: 12px; color: #a89e8c; }
-.card-arrow { font-size: 14px; color: #c9c0b0; transition: color 0.2s, transform 0.2s; }
-.provider-card:hover .card-arrow { color: #1d7a4c; transform: translateX(3px); }
 
 .config-modal { --n-title-text-color: #17140f; }
 .config-shell { display: flex; flex-direction: column; gap: 16px; }
@@ -473,6 +506,13 @@ onMounted(loadProviders)
 .channel-row-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .channel-type-label { font-size: 12px; width: 120px; flex-shrink: 0; color: #74695a; }
 .channel-url-input { flex: 1; }
+.channel-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.channel-tab { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 12px; background: #fff; border: 1px solid #e5dccd; border-radius: 8px; color: #74695a; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.channel-tab:hover { border-color: rgba(46, 168, 106, 0.4); color: #1d7a4c; }
+.channel-tab.active { border-color: #2ea86a; color: #1d7a4c; background: #eef7f0; }
+.channel-tab.off { opacity: 0.5; }
+.channel-tab-count { font-size: 10px; background: #f4efe3; border-radius: 6px; padding: 1px 6px; color: #8c7f6c; }
+.channel-tab.active .channel-tab-count { background: #dcefe1; color: #1d7a4c; }
 .model-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .model-count-tip { font-size: 12px; color: #8c7f6c; }
 .sync-tip { color: #a89e8c; font-size: 12px; }

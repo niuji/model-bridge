@@ -42,26 +42,84 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .await
         .ok();
 
-    // 模型列表（用户配置的数据）
+    // 模型列表（用户配置的数据）。channel_type 把模型按通道隔离——同一 provider 的
+    // anthropic / openai 通道各有独立模型清单，UNIQUE(provider_id, channel_type, model_id)
+    // 允许同一 model_id 存于不同通道（如 bigmodel 的 glm-4.7 同时走 openai_chat 与 anthropic）。
+    // 旧表 UNIQUE(provider_id, model_id) 需迁移：先补 channel_type 列，再在单连接事务内
+    // 重建表换约束——任一步失败整体回滚，绝不留搁浅表、绝不丢数据。
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS provider_models (
             id TEXT PRIMARY KEY,
             provider_id TEXT NOT NULL,
+            channel_type TEXT NOT NULL DEFAULT '',
             model_id TEXT NOT NULL,
             model_name TEXT NOT NULL DEFAULT '',
-            UNIQUE(provider_id, model_id)
+            UNIQUE(provider_id, channel_type, model_id)
         )
         "#,
     )
     .execute(pool)
     .await?;
 
-    // 为旧表添加 model_name 列（兼容已存在的数据库）
+    // 为旧表添加 channel_type / model_name 列（列已存在则忽略）。必须在重建前补上，
+    // 否则重建的 INSERT 引用 channel_type 会因列不存在而失败。
+    sqlx::query("ALTER TABLE provider_models ADD COLUMN channel_type TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
     sqlx::query("ALTER TABLE provider_models ADD COLUMN model_name TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await
         .ok();
+
+    // 旧约束 UNIQUE(provider_id, model_id) → 重建为 UNIQUE(provider_id, channel_type, model_id)。
+    // 幂等：检测到表定义里尚无新约束才重建。单连接事务：DROP IF EXISTS _new → CREATE _new
+    // → 拷贝 → DROP 旧 → RENAME；失败则 tx drop 自动回滚。
+    let create_sql: Option<String> = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='provider_models'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let need_rebuild = create_sql
+        .map(|s| {
+            !s.split_whitespace()
+                .collect::<String>()
+                .contains("UNIQUE(provider_id,channel_type,model_id)")
+        })
+        .unwrap_or(false);
+    if need_rebuild {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DROP TABLE IF EXISTS provider_models_new")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            r#"CREATE TABLE provider_models_new (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                channel_type TEXT NOT NULL DEFAULT '',
+                model_id TEXT NOT NULL,
+                model_name TEXT NOT NULL DEFAULT '',
+                UNIQUE(provider_id, channel_type, model_id)
+            )"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO provider_models_new (id, provider_id, channel_type, model_id, model_name)
+             SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DROP TABLE provider_models")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE provider_models_new RENAME TO provider_models")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        tracing::info!("provider_models unique migrated to (provider_id, channel_type, model_id)");
+    }
 
     sqlx::query(
         r#"

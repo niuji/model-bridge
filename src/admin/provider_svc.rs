@@ -20,22 +20,28 @@ pub async fn list_providers(
         let channel_configs = get_channel_configs(pool, &def.id).await;
 
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
-        let channels = merge_channels(&def.channels, &channel_configs);
+        let mut channels = merge_channels(&def.channels, &channel_configs);
 
-        let model_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM provider_models WHERE provider_id = ?")
-                .bind(&def.id)
-                .fetch_one(pool)
-                .await?;
+        // 按通道统计模型数：UNIQUE(provider_id, channel_type, model_id) 保证同一通道内无重复，
+        // 故每通道 COUNT(*) 即该通道去重后的模型数；卡片据此「区分通道」展示。
+        let counts: HashMap<String, i64> = sqlx::query_as::<_, (String, i64)>(
+            "SELECT channel_type, COUNT(*) FROM provider_models WHERE provider_id = ? GROUP BY channel_type",
+        )
+        .bind(&def.id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .collect();
+        for ch in &mut channels {
+            ch.model_count = *counts.get(&ch.channel_type).unwrap_or(&0);
+        }
 
         result.push(ProviderSummary {
             id: def.id.clone(),
             name: def.name.clone(),
             icon: def.icon.clone(),
             is_enabled,
-            models_endpoint: def.models_endpoint.clone(),
             channels,
-            model_count: model_count.0,
         });
     }
     Ok(result)
@@ -56,14 +62,23 @@ pub async fn get_provider(
 
     let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
     let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
-    let channels = merge_channels(&def.channels, &channel_configs);
+    let mut channels = merge_channels(&def.channels, &channel_configs);
 
     let models = sqlx::query_as::<_, ProviderModel>(
-        "SELECT id, provider_id, model_id, model_name FROM provider_models WHERE provider_id = ? ORDER BY model_id",
+        "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ? ORDER BY model_id",
     )
     .bind(id)
     .fetch_all(pool)
     .await?;
+
+    // 与列表卡片一致：按通道去重计数。
+    let mut counts: HashMap<&str, i64> = HashMap::new();
+    for m in &models {
+        *counts.entry(m.channel_type.as_str()).or_insert(0) += 1;
+    }
+    for ch in &mut channels {
+        ch.model_count = *counts.get(ch.channel_type.as_str()).unwrap_or(&0);
+    }
 
     Ok(Some(ProviderDetail {
         id: def.id.clone(),
@@ -71,7 +86,6 @@ pub async fn get_provider(
         icon: def.icon.clone(),
         api_key,
         is_enabled,
-        models_endpoint: def.models_endpoint.clone(),
         channels,
         models,
     }))
@@ -97,15 +111,12 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         let channels = merge_channels(&def.channels, &channel_configs);
 
         let models = sqlx::query_as::<_, ProviderModel>(
-            "SELECT id, provider_id, model_id, model_name FROM provider_models WHERE provider_id = ?",
+            "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
         )
         .bind(&def.id)
         .fetch_all(&state.db)
         .await?;
 
-        // 分离启用的 anthropic channel 与 openai channel。
-        // openai_chat / openai_responses 同一 provider 下 base_url 相同，合并为一条 route，
-        // channels 字段记录该 provider 实际启用了哪些 openai channel type，供 proxy 按请求 path 过滤。
         // 拒绝非 http(s) 的 base_url（file:// 等），避免被导向本地资源
         for c in channels
             .iter()
@@ -120,39 +131,20 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             .iter()
             .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
             .collect();
-        let openai_channels: Vec<&ChannelDetail> = enabled
-            .iter()
-            .copied()
-            .filter(|c| c.channel_type != "anthropic")
-            .collect();
-        let anthropic_channels: Vec<&ChannelDetail> = enabled
-            .iter()
-            .copied()
-            .filter(|c| c.channel_type == "anthropic")
-            .collect();
 
-        let openai_channel_types: Vec<String> = openai_channels
-            .iter()
-            .map(|c| c.channel_type.clone())
-            .collect();
+        // 模型按通道隔离：channel_type 为空（迁移残留）的跳过路由并告警
+        for m in models.iter().filter(|m| m.channel_type.is_empty()) {
+            tracing::warn!(
+                "provider '{}' model '{}' has empty channel_type, skipped from routing",
+                def.id, m.model_id
+            );
+        }
 
-        for model in &models {
-            // openai route：provider 至少启用一个 openai channel 才插入；base_url 取首个 openai channel
-            if let Some(first_openai) = openai_channels.first() {
-                let route = ProviderRoute {
-                    provider_id: def.id.clone(),
-                    provider_name: def.name.clone(),
-                    model_id: model.model_id.clone(),
-                    model_name: model.model_name.clone(),
-                    base_url: first_openai.base_url.clone(),
-                    api_key: api_key.clone(),
-                    channels: openai_channel_types.clone(),
-                };
-                openai_routes.insert(route.model_id.to_lowercase(), route);
-            }
-
-            // anthropic route：每个启用的 anthropic channel 各插一条（不同 channel 的 base_url 可能不同）
-            for ch in &anthropic_channels {
+        // ---- anthropic 路由：每个启用的 anthropic 通道，插入「归属该通道」的模型 ----
+        // 检索 key 由 model_id 派生（剥 [1m] 后缀；非 claude/anthropic 开头的补 claude- 前缀），
+        // 与 proxy 转发剥除 [1m] 的逻辑配套。
+        for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
+            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let route = ProviderRoute {
                     provider_id: def.id.clone(),
                     provider_name: def.name.clone(),
@@ -162,9 +154,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     api_key: api_key.clone(),
                     channels: Vec::new(),
                 };
-                // anthropic 路由表的检索 id 全小写，且剥掉 [1m]/[1M] 后缀（该后缀
-                // 仅用于 /v1/models 列表让 Claude Code 识别 1M 变体，实际请求不带）。
-                // 非 claude-/anthropic 开头的模型补 claude- 前缀。
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
                 let key = if clean.starts_with("claude") || clean.starts_with("anthropic") {
@@ -173,6 +162,69 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     format!("claude-{}", clean)
                 };
                 anthropic_routes.insert(key, route);
+            }
+        }
+
+        // ---- openai 路由：按 model_id 合并 ----
+        // 一个模型存于某 openai 通道时，自动并入「同 provider 同 base_url 的所有启用 openai 通道」——
+        // openai/minimax 的 chat+responses（同上游）「拉一次、两条路都服务」；
+        // trip 的 openai_responses（独立 base）只服务 /responses。
+        // openai_chat / openai_responses 同 provider 若同 base_url 会合并为一条 route，
+        // channels 字段记录该 provider 实际启用了哪些 openai channel type，供 proxy 按请求 path 过滤。
+        let enabled_openai: Vec<&ChannelDetail> = enabled
+            .iter()
+            .copied()
+            .filter(|c| c.channel_type != "anthropic")
+            .collect();
+        for model in models
+            .iter()
+            .filter(|m| !m.channel_type.is_empty() && m.channel_type != "anthropic")
+        {
+            let Some(stored_ch) = enabled_openai
+                .iter()
+                .copied()
+                .find(|c| c.channel_type == model.channel_type)
+            else {
+                // 模型所在通道未启用 → 不路由
+                continue;
+            };
+            let base = stored_ch.base_url.clone();
+            let ch_types: Vec<String> = enabled_openai
+                .iter()
+                .copied()
+                .filter(|c| c.base_url == base)
+                .map(|c| c.channel_type.clone())
+                .collect();
+            let key = model.model_id.to_lowercase();
+            let route = ProviderRoute {
+                provider_id: def.id.clone(),
+                provider_name: def.name.clone(),
+                model_id: model.model_id.clone(),
+                model_name: model.model_name.clone(),
+                base_url: base,
+                api_key: api_key.clone(),
+                channels: ch_types,
+            };
+            // insert-or-merge：同 model_id 已存于另一 openai 通道则并集 channels。
+            use std::collections::hash_map::Entry;
+            match openai_routes.entry(key) {
+                Entry::Vacant(v) => {
+                    v.insert(route);
+                }
+                Entry::Occupied(mut o) => {
+                    let existing = o.get_mut();
+                    if existing.base_url != route.base_url {
+                        tracing::warn!(
+                            "provider '{}' model '{}' appears on openai channels with different base_url ('{}' vs '{}'); keeping first",
+                            def.id, model.model_id, existing.base_url, route.base_url
+                        );
+                    }
+                    for ct in &route.channels {
+                        if !existing.channels.contains(ct) {
+                            existing.channels.push(ct.clone());
+                        }
+                    }
+                }
             }
         }
     }
@@ -202,7 +254,7 @@ pub async fn update_provider(
     api_key: &str,
     is_enabled: bool,
     channels: &[(String, bool)], // (channel_type, is_enabled)
-    models: &[(String, String)],          // (model_id, model_name)
+    models: &[(String, String, String)], // (channel_type, model_id, model_name)
 ) -> anyhow::Result<()> {
     // upsert provider_config
     sqlx::query(
@@ -228,22 +280,23 @@ pub async fn update_provider(
         .await?;
     }
 
-    // 替换模型列表
+    // 替换模型列表（按通道）
     sqlx::query("DELETE FROM provider_models WHERE provider_id = ?")
         .bind(id)
         .execute(pool)
         .await?;
 
-    for (model_id, model_name) in models {
+    for (channel_type, model_id, model_name) in models {
         if model_id.is_empty() {
             continue;
         }
         let mid = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO provider_models (id, provider_id, model_id, model_name) VALUES (?, ?, ?, ?)",
+            "INSERT INTO provider_models (id, provider_id, channel_type, model_id, model_name) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&mid)
         .bind(id)
+        .bind(channel_type)
         .bind(model_id)
         .bind(model_name)
         .execute(pool)
@@ -253,21 +306,24 @@ pub async fn update_provider(
     Ok(())
 }
 
-/// 从 Provider 的 API 拉取模型列表（不写入 DB），使用前端传入的 api_key
+/// 从指定通道的 models_endpoint 拉取模型列表（不写入 DB），使用前端传入的 api_key
 pub async fn fetch_models_from_api(
     client: &reqwest::Client,
     defs: &[ProviderDef],
     provider_id: &str,
+    channel_type: &str,
     ui_api_key: &str,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let Some(def) = defs.iter().find(|d| d.id == provider_id) else {
         anyhow::bail!("provider not found");
     };
-
-    let endpoint = def
+    let Some(ch) = def.channels.iter().find(|c| c.channel_type == channel_type) else {
+        anyhow::bail!("channel '{}' not found on provider '{}'", channel_type, provider_id);
+    };
+    let endpoint = ch
         .models_endpoint
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("models_endpoint not configured"))?;
+        .ok_or_else(|| anyhow::anyhow!("models_endpoint not configured for channel '{}'", channel_type))?;
 
     // 使用前端传入的 key
     let api_key = if ui_api_key.is_empty() {
@@ -276,14 +332,12 @@ pub async fn fetch_models_from_api(
         ui_api_key.to_string()
     };
 
-    let url = endpoint;
-    let mut req = client
-        .get(url)
-        .timeout(std::time::Duration::from_secs(10));
+    let mut req = client.get(endpoint).timeout(std::time::Duration::from_secs(10));
 
-    // 根据 provider 定义的 models_endpoint_auth 决定认证头格式，默认 bearer
-    match def.models_endpoint_auth.as_str() {
-        "x-api-key" => {
+    // 鉴权方式按通道类型推导：anthropic 通道用 x-api-key（Anthropic 约定），
+    // 其余（openai_chat / openai_responses）用 Bearer。
+    match ch.channel_type.as_str() {
+        "anthropic" => {
             req = req
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01");
@@ -320,6 +374,72 @@ pub async fn fetch_models_from_api(
     Ok(models)
 }
 
+/// 迁移辅助：把 schema 迁移后 channel_type 为空的 provider_models 行按启发式回填。
+/// claude/anthropic 前缀或含 [1M] 的归该 provider 的 anthropic 通道；
+/// 其余归首个非 anthropic 通道；都不匹配则归首个通道。
+/// 仅迁移期使用，正常运行无空值不触发。
+pub async fn backfill_model_channels(pool: &SqlitePool, defs: &[ProviderDef]) -> anyhow::Result<()> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        provider_id: String,
+        model_id: String,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        "SELECT provider_id, model_id FROM provider_models WHERE channel_type = '' OR channel_type IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    for Row {
+        provider_id,
+        model_id,
+    } in rows
+    {
+        let lower = model_id.to_lowercase();
+        let anthropic_style = lower.starts_with("claude")
+            || lower.starts_with("anthropic")
+            || lower.contains("[1m]");
+        let target = defs
+            .iter()
+            .find(|d| d.id == provider_id)
+            .and_then(|def| {
+                if anthropic_style {
+                    def.channels
+                        .iter()
+                        .find(|c| c.channel_type == "anthropic")
+                        .map(|c| c.channel_type.clone())
+                } else {
+                    def.channels
+                        .iter()
+                        .find(|c| c.channel_type != "anthropic")
+                        .map(|c| c.channel_type.clone())
+                }
+            })
+            .or_else(|| {
+                defs.iter()
+                    .find(|d| d.id == provider_id)
+                    .and_then(|d| d.channels.first().map(|c| c.channel_type.clone()))
+            });
+        let Some(target) = target else {
+            tracing::warn!(
+                "backfill: provider '{}' has no channels, model '{}' left unmapped",
+                provider_id,
+                model_id
+            );
+            continue;
+        };
+        sqlx::query("UPDATE provider_models SET channel_type = ? WHERE provider_id = ? AND model_id = ?")
+            .bind(&target)
+            .bind(&provider_id)
+            .bind(&model_id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 // ===== 内部辅助函数 =====
 
 async fn get_provider_config(pool: &SqlitePool, id: &str) -> Option<ProviderConfigRow> {
@@ -346,8 +466,8 @@ async fn get_channel_configs(
     .unwrap_or_default()
 }
 
-/// 合并配置定义与 DB 覆盖：base_url 一律以配置文件定义为准（不允许 DB 自定义），
-/// 仅 is_enabled 取 DB 覆盖值。
+/// 合并配置定义与 DB 覆盖：base_url / models_endpoint 一律以配置文件定义为准
+/// （不允许 DB 自定义），仅 is_enabled 取 DB 覆盖值。
 fn merge_channels(
     defs: &[ChannelDef],
     configs: &[ProviderChannelConfigRow],
@@ -362,7 +482,9 @@ fn merge_channels(
             ChannelDetail {
                 channel_type: def.channel_type.clone(),
                 base_url: def.base_url.clone(),
+                models_endpoint: def.models_endpoint.clone(),
                 is_enabled,
+                model_count: 0,
             }
         })
         .collect()

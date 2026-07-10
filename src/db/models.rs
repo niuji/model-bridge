@@ -23,6 +23,8 @@ pub struct ProviderChannelConfigRow {
 pub struct ProviderModel {
     pub id: String,
     pub provider_id: String,
+    /// 该模型所属通道（openai_chat / openai_responses / anthropic）
+    pub channel_type: String,
     pub model_id: String,
     pub model_name: String,
 }
@@ -36,8 +38,6 @@ pub struct ProviderDetail {
     pub icon: Option<String>,
     pub api_key: String,
     pub is_enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub models_endpoint: Option<String>,
     pub channels: Vec<ChannelDetail>,
     pub models: Vec<ProviderModel>,
 }
@@ -46,7 +46,12 @@ pub struct ProviderDetail {
 pub struct ChannelDetail {
     pub channel_type: String,
     pub base_url: String,
+    /// 该通道拉取模型列表的端点（无则不支持「同步」）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models_endpoint: Option<String>,
     pub is_enabled: bool,
+    /// 该通道已配置的模型数（同一通道内 UNIQUE 去重后的计数）
+    pub model_count: i64,
 }
 
 /// 合并后的 Provider 摘要（列表用，不含 api_key 和 models）
@@ -57,10 +62,7 @@ pub struct ProviderSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub is_enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub models_endpoint: Option<String>,
     pub channels: Vec<ChannelDetail>,
-    pub model_count: i64,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]

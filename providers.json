@@ -3,51 +3,45 @@
     "id": "openai",
     "name": "OpenAI",
     "icon": "openai.svg",
-    "models_endpoint": "https://api.openai.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.openai.com/v1" },
-      { "type": "openai_responses", "base_url": "https://api.openai.com/v1" }
+      { "type": "openai_chat", "base_url": "https://api.openai.com/v1", "models_endpoint": "https://api.openai.com/v1/models" },
+      { "type": "openai_responses", "base_url": "https://api.openai.com/v1", "models_endpoint": "https://api.openai.com/v1/models" }
     ]
   },
   {
     "id": "deepseek",
     "name": "DeepSeek",
     "icon": "deepseek.svg",
-    "models_endpoint": "https://api.deepseek.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.deepseek.com/v1" },
-      { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic/v1" }
+      { "type": "openai_chat", "base_url": "https://api.deepseek.com/v1", "models_endpoint": "https://api.deepseek.com/v1/models" },
+      { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic/v1", "models_endpoint": "https://api.deepseek.com/v1/models" }
     ]
   },
   {
     "id": "minimax",
     "name": "MiniMax",
     "icon": "minimax.ico",
-    "models_endpoint": "https://api.minimaxi.com/v1/models",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.minimaxi.com/v1" },
-      { "type": "openai_responses", "base_url": "https://api.minimaxi.com/v1" },
-      { "type": "anthropic", "base_url": "https://api.minimaxi.com/anthropic/v1" }
+      { "type": "openai_chat", "base_url": "https://api.minimaxi.com/v1", "models_endpoint": "https://api.minimaxi.com/v1/models" },
+      { "type": "openai_responses", "base_url": "https://api.minimaxi.com/v1", "models_endpoint": "https://api.minimaxi.com/v1/models" },
+      { "type": "anthropic", "base_url": "https://api.minimaxi.com/anthropic/v1", "models_endpoint": "https://api.minimaxi.com/anthropic/v1/models" }
     ]
   },
   {
     "id": "bigmodel",
     "name": "BigModel",
     "icon": "bigmodel.ico",
-    "models_endpoint": "https://open.bigmodel.cn/api/paas/v4/models",
     "channels": [
-      { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic/v1" },
-      { "type": "openai_chat", "base_url": "https://open.bigmodel.cn/api/paas/v4" }
+      { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic/v1", "models_endpoint": "https://open.bigmodel.cn/api/anthropic/v1/models" },
+      { "type": "openai_chat", "base_url": "https://open.bigmodel.cn/api/paas/v4", "models_endpoint": "https://open.bigmodel.cn/api/paas/v4/models" }
     ]
   },
   {
     "id": "anthropic",
     "name": "Anthropic",
     "icon": "anthropic.svg",
-    "models_endpoint": "https://api.anthropic.com/v1/models",
-    "models_endpoint_auth": "x-api-key",
     "channels": [
-      { "type": "anthropic", "base_url": "https://api.anthropic.com/v1" }
+      { "type": "anthropic", "base_url": "https://api.anthropic.com/v1", "models_endpoint": "https://api.anthropic.com/v1/models" }
     ]
   }
 ]

@@ -74,6 +74,15 @@ async fn main() -> anyhow::Result<()> {
     // 构建应用状态
     let provider_defs = config::load_providers(&app_config.providers_file)?;
 
+    // 迁移期回填：schema 迁移把旧 provider_models 行的 channel_type 置空，
+    // 这里按启发式（claude/anthropic 前缀或 [1M] → anthropic 通道，否则首个 openai 通道）补上。
+    // 正常运行无空值时为 no-op。
+    if let Err(e) =
+        admin::provider_svc::backfill_model_channels(&pool, &provider_defs).await
+    {
+        tracing::warn!("model channel backfill failed: {}", e);
+    }
+
     // 代理服务对外的 base URL（供管理 UI「接入指南」使用）：host 归一为 localhost，scheme 取 http。
     let proxy_host = match app_config.proxy.host.as_str() {
         "0.0.0.0" | "::" | "" => "localhost",
