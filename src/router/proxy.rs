@@ -232,9 +232,18 @@ async fn proxy_to_provider(
     }
 
     // 6. 注入 stream_options（确保上游在流式响应中返回 usage）
-    // anthropic 链路：路由表 key 已是干净名（无 [1m] 后缀），客户端发来的 model 名直接透传。
+    // anthropic 链路：路由表 key 是给客户端的检索名（已剥 [1m]，非 claude 模型还补了 claude- 前缀），
+    // 不能直接发上游。统一用 route.model_id 剥掉 [1m]/[1M] 变体后缀后的原始名转发：
+    // claude 原生模型无后缀（剥除为 no-op），非 claude 模型的 model_id 不含补的 claude- 前缀，
+    // 剥后即真实上游名。openai 链路按既有逻辑用完整 route.model_id。
     let body = if api_format == "anthropic" {
-        body.to_vec()
+        // [1m]/[1M] 为末 4 个 ASCII 字节，ends_with 已保证按字节切安全
+        let upstream_model = if route.model_id.to_lowercase().ends_with("[1m]") {
+            route.model_id[..route.model_id.len() - 4].to_string()
+        } else {
+            route.model_id.clone()
+        };
+        replace_model_in_body(body, &upstream_model)
     } else {
         replace_model_in_body(body, &route.model_id)
     };
