@@ -93,7 +93,8 @@ pub async fn get_provider(
 
 /// 从 DB 加载所有 enabled providers，构建路由表
 pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
-    let mut openai_routes: HashMap<String, ProviderRoute> = HashMap::new();
+    let mut openai_chat_routes: HashMap<String, ProviderRoute> = HashMap::new();
+    let mut openai_responses_routes: HashMap<String, ProviderRoute> = HashMap::new();
     let mut anthropic_routes: HashMap<String, ProviderRoute> = HashMap::new();
 
     for def in &state.provider_defs {
@@ -152,7 +153,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     model_name: model.model_name.clone(),
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
-                    channels: Vec::new(),
                 };
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
@@ -165,64 +165,43 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             }
         }
 
-        // ---- openai 路由：按 model_id 合并 ----
-        // 一个模型存于某 openai 通道时，自动并入「同 provider 同 base_url 的所有启用 openai 通道」——
-        // openai/minimax 的 chat+responses（同上游）「拉一次、两条路都服务」；
-        // trip 的 openai_responses（独立 base）只服务 /responses。
-        // openai_chat / openai_responses 同 provider 若同 base_url 会合并为一条 route，
-        // channels 字段记录该 provider 实际启用了哪些 openai channel type，供 proxy 按请求 path 过滤。
-        let enabled_openai: Vec<&ChannelDetail> = enabled
-            .iter()
-            .copied()
-            .filter(|c| c.channel_type != "anthropic")
-            .collect();
-        for model in models
-            .iter()
-            .filter(|m| !m.channel_type.is_empty() && m.channel_type != "anthropic")
-        {
-            let Some(stored_ch) = enabled_openai
-                .iter()
-                .copied()
-                .find(|c| c.channel_type == model.channel_type)
-            else {
-                // 模型所在通道未启用 → 不路由
-                continue;
-            };
-            let base = stored_ch.base_url.clone();
-            let ch_types: Vec<String> = enabled_openai
-                .iter()
-                .copied()
-                .filter(|c| c.base_url == base)
-                .map(|c| c.channel_type.clone())
-                .collect();
-            let key = model.model_id.to_lowercase();
-            let route = ProviderRoute {
-                provider_id: def.id.clone(),
-                provider_name: def.name.clone(),
-                model_id: model.model_id.clone(),
-                model_name: model.model_name.clone(),
-                base_url: base,
-                api_key: api_key.clone(),
-                channels: ch_types,
-            };
-            // insert-or-merge：同 model_id 已存于另一 openai 通道则并集 channels。
-            use std::collections::hash_map::Entry;
-            match openai_routes.entry(key) {
-                Entry::Vacant(v) => {
-                    v.insert(route);
+        // ---- openai 路由：chat 与 responses 各自独立建表，不再合并 ----
+        // 每个启用的 openai 通道单独成一张路由表：openai_chat → openai_chat_routes，
+        // openai_responses → openai_responses_routes。模型归属哪个通道就进哪张表，转发用该通道 base_url，
+        // 无需按 path 过滤。跨 provider 同名 model_id 冲突时保留先入者并告警。
+        use std::collections::hash_map::Entry;
+        for ch in enabled.iter().copied().filter(|c| c.channel_type != "anthropic") {
+            let table: &mut HashMap<String, ProviderRoute> = match ch.channel_type.as_str() {
+                "openai_chat" => &mut openai_chat_routes,
+                "openai_responses" => &mut openai_responses_routes,
+                other => {
+                    tracing::warn!(
+                        "provider '{}' channel '{}' has unknown openai channel type, skipped from routing",
+                        def.id, other
+                    );
+                    continue;
                 }
-                Entry::Occupied(mut o) => {
-                    let existing = o.get_mut();
-                    if existing.base_url != route.base_url {
-                        tracing::warn!(
-                            "provider '{}' model '{}' appears on openai channels with different base_url ('{}' vs '{}'); keeping first",
-                            def.id, model.model_id, existing.base_url, route.base_url
-                        );
+            };
+            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+                let key = model.model_id.to_lowercase();
+                let route = ProviderRoute {
+                    provider_id: def.id.clone(),
+                    provider_name: def.name.clone(),
+                    model_id: model.model_id.clone(),
+                    model_name: model.model_name.clone(),
+                    base_url: ch.base_url.clone(),
+                    api_key: api_key.clone(),
+                };
+                match table.entry(key) {
+                    Entry::Vacant(v) => {
+                        v.insert(route);
                     }
-                    for ct in &route.channels {
-                        if !existing.channels.contains(ct) {
-                            existing.channels.push(ct.clone());
-                        }
+                    Entry::Occupied(o) => {
+                        let existing = o.get();
+                        tracing::warn!(
+                            "model '{}' on '{}' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
+                            model.model_id, ch.channel_type, existing.provider_id, existing.base_url, def.id
+                        );
                     }
                 }
             }
@@ -230,8 +209,12 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     }
 
     {
-        let mut o = state.openai_routes.write().await;
-        *o = openai_routes;
+        let mut c = state.openai_chat_routes.write().await;
+        *c = openai_chat_routes;
+    }
+    {
+        let mut r = state.openai_responses_routes.write().await;
+        *r = openai_responses_routes;
     }
     {
         let mut a = state.anthropic_routes.write().await;
@@ -239,8 +222,9 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     }
 
     tracing::info!(
-        "Routes refreshed: {} openai models, {} anthropic models",
-        state.openai_routes.read().await.len(),
+        "Routes refreshed: {} chat models, {} responses models, {} anthropic models",
+        state.openai_chat_routes.read().await.len(),
+        state.openai_responses_routes.read().await.len(),
         state.anthropic_routes.read().await.len()
     );
 

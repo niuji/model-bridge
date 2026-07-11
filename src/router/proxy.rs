@@ -17,8 +17,8 @@ use crate::{
 /// 单个代理请求体上限（字节）。超出返回 413，避免超大请求耗尽内存。
 const MAX_PROXY_BODY: usize = 64 * 1024 * 1024; // 64 MiB
 
-/// OpenAI 格式入口: /openai/v1/{*path}
-pub async fn openai_handler(
+/// OpenAI Chat 入口: /openai-chat/v1/{*path}
+pub async fn openai_chat_handler(
     State(state): State<Arc<AppState>>,
     method: Method,
     Path(path): Path<String>,
@@ -37,7 +37,39 @@ pub async fn openai_handler(
                 .into_response();
         }
     };
-    handle_request(state, "openai", method, path, headers, body_bytes, api_key_id).await
+    handle_request(state, "openai_chat", method, path, headers, body_bytes, api_key_id).await
+}
+
+/// OpenAI Responses 入口: /openai-responses/v1/{*path}
+pub async fn openai_responses_handler(
+    State(state): State<Arc<AppState>>,
+    method: Method,
+    Path(path): Path<String>,
+    request: Request,
+) -> Response {
+    let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
+    let headers = request.headers().clone();
+    let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_PROXY_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                r#"{"error":"request body too large"}"#,
+            )
+                .into_response();
+        }
+    };
+    handle_request(
+        state,
+        "openai_responses",
+        method,
+        path,
+        headers,
+        body_bytes,
+        api_key_id,
+    )
+    .await
 }
 
 /// Anthropic 格式入口: /anthropic/v1/{*path}
@@ -66,43 +98,60 @@ pub async fn anthropic_handler(
 
 async fn handle_request(
     state: Arc<AppState>,
-    api_format: &str,
+    channel: &str,
     method: Method,
     path: String,
     headers: HeaderMap,
     body: axum::body::Bytes,
     api_key_id: Option<String>,
 ) -> Response {
-    // GET /v1/models → 返回内存中缓存的模型列表
+    // api_format（协议层）：openai_chat / openai_responses 均走 openai 协议，anthropic 走 anthropic 协议。
+    let api_format: &str = if channel == "anthropic" {
+        "anthropic"
+    } else {
+        "openai"
+    };
+
+    // GET /v1/models → 各端点返回各自路由表的模型列表
     if method == Method::GET && path == "models" {
-        return match api_format {
-            "openai" => models_list::get_openai_models(state).await,
+        return match channel {
+            "openai_chat" => models_list::get_openai_chat_models(state).await,
+            "openai_responses" => models_list::get_openai_responses_models(state).await,
             _ => models_list::get_anthropic_models(state).await,
         };
     }
 
-    // openai 入口仅识别 chat/completions、responses、models 三个子 path（共用同一张路由表）；其余记日志并 404。
-    // required_channel：该 path 对应的 channel type，命中 route 后校验 route.channels 是否包含它，
-    // 不含则视为无可用 provider 返回 404（即 provider 未声明该 channel 时不转发上游）。
-    let (routes_lock, required_channel): (
-        Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>>,
-        Option<&str>,
-    ) = match api_format {
-        "openai" => match path.as_str() {
-            "chat/completions" => (state.openai_routes.clone(), Some("openai_chat")),
-            "responses" => (state.openai_routes.clone(), Some("openai_responses")),
-            other => {
-                tracing::warn!("unsupported openai path: /openai/v1/{}", other);
-                return (
-                    StatusCode::NOT_FOUND,
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    serde_json::json!({ "error": format!("unsupported path '/openai/v1/{}'", other) }).to_string(),
-                )
-                    .into_response();
+    // 各端点仅服务其所属接口的 path，其余记日志并 404；anthropic 入口透传任意 path。
+    let routes_lock: Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>> =
+        match channel {
+            "openai_chat" => {
+                if path != "chat/completions" {
+                    tracing::warn!("unsupported openai-chat path: /openai-chat/v1/{}", path);
+                    return (
+                        StatusCode::NOT_FOUND,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        serde_json::json!({ "error": format!("unsupported path '/openai-chat/v1/{}'", path) })
+                            .to_string(),
+                    )
+                        .into_response();
+                }
+                state.openai_chat_routes.clone()
             }
-        },
-        _ => (state.anthropic_routes.clone(), None),
-    };
+            "openai_responses" => {
+                if path != "responses" {
+                    tracing::warn!("unsupported openai-responses path: /openai-responses/v1/{}", path);
+                    return (
+                        StatusCode::NOT_FOUND,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        serde_json::json!({ "error": format!("unsupported path '/openai-responses/v1/{}'", path) })
+                            .to_string(),
+                    )
+                        .into_response();
+                }
+                state.openai_responses_routes.clone()
+            }
+            _ => state.anthropic_routes.clone(),
+        };
 
     let client = headers
         .get("user-agent")
@@ -111,6 +160,7 @@ async fn handle_request(
     proxy_to_provider(
         state,
         api_format,
+        channel,
         method,
         &path,
         headers,
@@ -118,7 +168,6 @@ async fn handle_request(
         api_key_id,
         client,
         routes_lock,
-        required_channel,
     )
     .await
 }
@@ -126,6 +175,7 @@ async fn handle_request(
 async fn proxy_to_provider(
     state: Arc<AppState>,
     api_format: &str,
+    channel: &str,
     method: Method,
     path: &str,
     headers: HeaderMap,
@@ -133,17 +183,10 @@ async fn proxy_to_provider(
     api_key_id: Option<String>,
     client: Option<String>,
     routes_lock: Arc<tokio::sync::RwLock<HashMap<String, crate::state::ProviderRoute>>>,
-    required_channel: Option<&str>,
 ) -> Response {
-    // 实际命中的上游通道类型，由入口端点 + 子 path 唯一决定：
-    // openai/chat/completions→openai_chat、openai/responses→openai_responses、anthropic→anthropic。
-    // 与 required_channel 同源（anthropic 入口 required_channel 为 None，此处补为 "anthropic"），
-    // 比 api_format 更细：能区分同一 openai 入口下的 chat 与 responses 两条上游通道。
-    let channel: &str = match api_format {
-        "openai" if path == "responses" => "openai_responses",
-        "openai" => "openai_chat",
-        _ => "anthropic",
-    };
+    // channel（usage_records 的归属通道）由入口端点唯一决定：
+    // /openai-chat→openai_chat、/openai-responses→openai_responses、/anthropic→anthropic，
+    // 与建表时的 channel type 1:1 对应，比 api_format 更细。
     // 1. 从请求体提取 model 名（转小写用于路由查找）
     let model = extract_model_from_body(body).unwrap_or_default();
     let model_lower = model.to_lowercase();
@@ -175,29 +218,6 @@ async fn proxy_to_provider(
     };
 
     drop(routes);
-
-    // 2.1 openai 请求按 path 校验 route 是否支持对应 channel：
-    // provider 未声明该 channel 时直接 404，不转发上游。
-    if let Some(ch) = required_channel {
-        if !route.channels.iter().any(|c| c == ch) {
-            tracing::info!(
-                "model '{}' on /{} endpoint: provider '{}' has no '{}' channel, 404",
-                model, api_format, route.provider_id, ch
-            );
-            return (
-                StatusCode::NOT_FOUND,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                serde_json::json!({
-                    "error": format!(
-                        "model '{}' not available on /{} endpoint (provider '{}' has no '{}' channel)",
-                        model, api_format, route.provider_id, ch
-                    )
-                })
-                .to_string(),
-            )
-                .into_response();
-        }
-    }
 
     // 3. 构造目标 URL：base_url 自带完整版本前缀（如 .../v1 或 .../api/paas/v4），
     // 仅拼接 path，并去除两侧多余斜杠，避免出现 // 或重复 /v1。
@@ -630,7 +650,7 @@ fn inject_stream_options(api_format: &str, path: &str, body: &[u8]) -> Vec<u8> {
 }
 
 /// 按请求所属 channel 协议提取并归一化 usage 为 (input, output, cache_read, cache_write)。
-/// 协议由 api_format 决定（/openai/ 入口→openai 协议 channel，/anthropic/ 入口→anthropic 协议 channel，
+/// 协议由 api_format 决定（/openai-chat/ 与 /openai-responses/ 入口→openai 协议 channel，/anthropic/ 入口→anthropic 协议 channel，
 /// 二者与 refresh_routes 建表时的 channel type 1:1 对应），不靠响应字段猜测格式。
 /// - openai 协议: prompt_tokens / completion_tokens 已含缓存；cache_read 取
 ///   prompt_tokens_details.cached_tokens，回退顶层 cached_tokens / prompt_cache_hit_tokens。

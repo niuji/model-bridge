@@ -5,8 +5,11 @@ use crate::state::{
     AnthropicModelEntry, AnthropicModelsList, AppState, OpenAIModelEntry, OpenAIModelsList,
 };
 
-pub async fn get_openai_models(state: Arc<AppState>) -> Response {
-    let routes = state.openai_routes.read().await;
+async fn openai_models_list(
+    routes_lock: &Arc<tokio::sync::RwLock<std::collections::HashMap<String, crate::state::ProviderRoute>>>,
+    log_path: &str,
+) -> Response {
+    let routes = routes_lock.read().await;
     let mut models: Vec<OpenAIModelEntry> = Vec::with_capacity(routes.len());
 
     // id 用检索 key（客户端据此发起请求即可命中路由表）。
@@ -23,18 +26,25 @@ pub async fn get_openai_models(state: Arc<AppState>) -> Response {
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
 
-    tracing::debug!(
-        "GET /openai/v1/models → {} models: {:?}",
-        models.len(),
-        models
-    );
+    tracing::debug!("GET {} → {} models: {:?}", log_path, models.len(), models);
 
-    let result = OpenAIModelsList {
+    axum::Json(OpenAIModelsList {
         object: "list".to_string(),
         data: models,
-    };
+    })
+    .into_response()
+}
 
-    axum::Json(result).into_response()
+pub async fn get_openai_chat_models(state: Arc<AppState>) -> Response {
+    openai_models_list(&state.openai_chat_routes, "/openai-chat/v1/models").await
+}
+
+pub async fn get_openai_responses_models(state: Arc<AppState>) -> Response {
+    openai_models_list(
+        &state.openai_responses_routes,
+        "/openai-responses/v1/models",
+    )
+    .await
 }
 
 pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {

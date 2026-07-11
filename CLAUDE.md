@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Model Bridge is an LLM API proxy/gateway that routes client requests to upstream LLM providers. It exposes two HTTP servers:
 
-- **Proxy server** (default `:10010`): accepts OpenAI-compatible and Anthropic-compatible API requests at `/openai/v1/{*}` and `/anthropic/v1/{*}`. Every request is authenticated against an in-memory API-key cache (SHA-256 of the bearer/`x-api-key` token). After auth, the target model is looked up in an in-memory route table (case-insensitive) and the request is proxied to the correct upstream provider with the correct auth header format.
+- **Proxy server** (default `:10010`): accepts OpenAI Chat, OpenAI Responses, and Anthropic API requests at `/openai-chat/v1/{*}`, `/openai-responses/v1/{*}`, and `/anthropic/v1/{*}` — three fully independent endpoints, each with its own in-memory route table, model list, and upstream forwarding. Every request is authenticated against an in-memory API-key cache (SHA-256 of the bearer/`x-api-key` token). After auth, the target model is looked up in that endpoint's route table (case-insensitive) and the request is proxied to the correct upstream provider with the correct auth header format.
 - **Admin server** (default `:10020`): serves a Vue 3 SPA management UI and a REST admin API at `/api/admin/` for managing provider credentials, API keys, and usage statistics. The admin API has no app-level authentication; it is protected by binding to **loopback (`127.0.0.1`) by default**. Binding it to another address logs a warning at startup — do so only with a trusted network in front.
 
 Provider definitions (name, channels, models endpoint) live in a static JSON file (`providers.json`). User-specific credentials and overrides (API keys, enabled state, channel base URLs, model whitelists) are stored in SQLite. At runtime, the two are merged to build the in-memory route table.
@@ -99,17 +99,18 @@ The merge happens in `provider_svc::merge_channels()` and `list_providers()`/`ge
 Each provider can declare multiple channels with different protocol types. A channel's `type` determines which route table the model maps to:
 
 - `"anthropic"` → models go to `anthropic_routes` (served at `/anthropic/v1/{*}`)
-- Everything else (`"openai_chat"`, `"openai_responses"`, etc.) → models go to `openai_routes` (served at `/openai/v1/{*}`)
+- `"openai_chat"` → models go to `openai_chat_routes` (served at `/openai-chat/v1/{*}`)
+- `"openai_responses"` → models go to `openai_responses_routes` (served at `/openai-responses/v1/{*}`)
 
-A model listed under a provider with both an `openai_chat` and an `anthropic` channel will appear in BOTH route tables, routing to different base URLs per channel.
+A model listed under a provider with multiple channels appears in EACH channel's route table, routing to that channel's base URL independently (e.g. a provider with both `openai_chat` and `anthropic` channels serves the same `model_id` on two different endpoints/base URLs).
 
 ### Request Flow
 
 ```
-Client → Proxy server (:10010) → auth_middleware → proxy.rs handler
+Client → Proxy server (:10010) → auth_middleware → endpoint handler (openai_chat / openai_responses / anthropic)
   1. auth_middleware: extract Bearer / x-api-key token, SHA-256 hash, look up in api_key_cache; on match inject AuthenticatedKey(id) into request extensions, else 401.
-  2. GET /v1/models → return cached model list from in-memory route table
-  3. POST /v1/chat/completions etc. → extract "model" from JSON body → lowercase-lookup in route table → rewrite body's "model" to route.model_id (canonical case) → proxy to upstream provider with appropriate auth headers
+  2. GET /v1/models → return that endpoint's cached model list from its in-memory route table
+  3. POST chat/completions (or responses, or messages) → extract "model" from JSON body → lowercase-lookup in the endpoint's route table → rewrite body's "model" to route.model_id (canonical case) → proxy to the route's base_url with appropriate auth headers
 ```
 
 Auth header format is set per API format: Bearer token for OpenAI, `x-api-key` for Anthropic. The client-facing auth header (the `mb-xxx` key the gateway issues) is accepted in either form regardless of the upstream protocol.
@@ -118,19 +119,18 @@ Auth header format is set per API format: Bearer token for OpenAI, `x-api-key` f
 
 Route table `HashMap` keys are lowercased (`model.model_id.to_lowercase()`), so a client request with any-case `model` matches. The route stores the original `model_id`, and `replace_model_in_body()` rewrites the request body's `model` field back to that canonical value before forwarding upstream — so the upstream always sees the exact case stored in `provider_models`.
 
-### Channel-Type Gating (OpenAI Paths)
+### Endpoint Independence (OpenAI Paths)
 
-OpenAI requests are gated by the sub-path within `/openai/v1/`:
+The OpenAI surface is split into two fully independent endpoints — no shared route table, no path-gating:
 
-| Path | Required channel | Behavior |
-|------|-----------------|----------|
-| `chat/completions` | `openai_chat` | Route must have `openai_chat` in its `channels` list |
-| `responses` | `openai_responses` | Route must have `openai_responses` in its `channels` list |
-| anything else | — | 404 (unsupported path) |
+| Endpoint | Served path | Route table |
+|----------|-------------|-------------|
+| `/openai-chat/v1/` | `chat/completions`, `models` | `openai_chat_routes` |
+| `/openai-responses/v1/` | `responses`, `models` | `openai_responses_routes` |
 
-A model under a provider that only declares `openai_chat` (no `openai_responses` channel) will 404 on `/openai/v1/responses` even if the model exists in the route table. This prevents proxying to an endpoint the provider doesn't support.
+Each endpoint only serves its own interface's path — `/openai-chat/v1/responses` 404s, as does `/openai-responses/v1/chat/completions`. A model appears in an endpoint's `/v1/models` only if its provider declared the matching channel, so a chat client never sees responses-only models (and vice versa). The old shared `/openai/v1/*` prefix is gone — existing clients must move their OpenAI base URL to `/openai-chat/v1` (chat) or `/openai-responses/v1` (responses).
 
-Anthropic requests have no such gating — all models in the `anthropic_routes` table are served at `/anthropic/v1/messages`.
+Anthropic is a single endpoint: all models in `anthropic_routes` are served at `/anthropic/v1/{*}`.
 
 ### SSE Streaming & Usage Extraction
 
@@ -166,13 +166,13 @@ Routes are rebuilt by `provider_svc::refresh_routes()`, which:
 1. Iterates all provider definitions from `providers.json`
 2. Loads DB overrides for each provider
 3. Loads the model whitelist from `provider_models`
-4. For each enabled channel of an enabled provider, inserts every model into the appropriate route table
+4. For each enabled channel of an enabled provider, inserts every model into that channel's route table (`openai_chat_routes`, `openai_responses_routes`, or `anthropic_routes`) — each table is built independently, no cross-channel merging
 
 Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refresh_interval_min`), and after any provider update via the admin API.
 
 ### Key Design Decisions
 
-- **In-memory route table.** Two `HashMap<String, ProviderRoute>` in `AppState` (one for OpenAI, one for Anthropic format). Keys are lowercased for case-insensitive lookup; `ProviderRoute` carries the canonical `model_id`/`model_name`. No DB lookup per request.
+- **In-memory route tables.** Three `HashMap<String, ProviderRoute>` in `AppState` — `openai_chat_routes`, `openai_responses_routes`, `anthropic_routes` — one per client endpoint. Keys are lowercased for case-insensitive lookup; `ProviderRoute` carries the canonical `model_id`/`model_name`/`base_url`/`api_key`. No DB lookup per request.
 - **JSON definitions + DB overrides.** Provider metadata that rarely changes (name, channels) lives in `providers.json`. User-specific secrets and toggles (api_key, is_enabled, model whitelist) live in SQLite. The JSON file is the source of truth for provider identity; DB rows reference it by `provider_id`.
 - **Two HTTP servers.** The proxy and admin servers run on separate ports (default 10010/10020) in a `tokio::select!` — if either exits, both shut down.
 - **Proxy auth via API-key cache.** The proxy router is wrapped in `auth_middleware`. Client API keys (`mb-{uuid}`, created in the admin UI) are SHA-256 hashed and matched against `AppState.api_key_cache` (`HashMap<key_hash, api_key_id>`, enabled keys only). The cache is refreshed on startup, on the periodic timer, and after any api-key create/delete/toggle. A matched key injects `AuthenticatedKey(id)` into request extensions; `proxy.rs` threads that `api_key_id` into every `usage_records` insert. The admin API has no app-level auth (loopback-bound by default).
@@ -190,9 +190,9 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 | `src/main.rs` | Entry point: config loading, DB init, route table init, background refresh spawn, dual-server launch |
 | `src/config.rs` | CLI args (clap), TOML config parsing, `providers.json` loading, `ProviderDef`/`ChannelDef` types |
 | `src/state.rs` | `AppState` (in-memory route tables, provider defs, DB pool, HTTP client), model list response types |
-| `src/router/mod.rs` | Router assembly: proxy router (`/openai/`, `/anthropic/`), admin router (`/api/admin/`, SPA fallback), CORS |
+| `src/router/mod.rs` | Router assembly: proxy router (`/openai-chat/`, `/openai-responses/`, `/anthropic/`), admin router (`/api/admin/`, SPA fallback), CORS |
 | `src/router/proxy.rs` | Core proxy: model extraction, route lookup, upstream forwarding, SSE streaming, usage recording |
-| `src/router/models_list.rs` | Returns cached model lists in OpenAI/Anthropic format from in-memory route tables |
+| `src/router/models_list.rs` | Returns cached model lists (openai-chat / openai-responses / anthropic) from in-memory route tables |
 | `src/router/admin.rs` | Admin HTTP handlers: provider CRUD, API key CRUD, stats queries |
 | `src/admin/provider_svc.rs` | Provider business logic: JSON+DB merge, route refresh, `/models` endpoint probing, CRUD |
 | `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly |

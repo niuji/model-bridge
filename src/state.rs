@@ -16,16 +16,16 @@ pub struct ProviderRoute {
     pub model_name: String,
     pub base_url: String,
     pub api_key: String,
-    /// 该 route 所属 provider 启用的 openai channel 类型（如 ["openai_chat", "openai_responses"]）。
-    /// 仅 openai 路由表使用；anthropic 路由表恒为空。用于按请求 path 过滤：只有声明了
-    /// 对应 channel 的 provider，其模型才能通过该 path 访问。
-    pub channels: Vec<String>,
 }
 
 /// 应用程序全局状态
 pub struct AppState {
-    /// openai 格式的 model_id → ProviderRoute（检索 key 全小写；chat 与 responses 两个 channel 共用）
-    pub openai_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
+    /// OpenAI Chat 协议（/openai-chat/v1/）路由表：检索 key 全小写。
+    /// 仅收录 channel_type=openai_chat 的模型，转发到该通道 base_url。
+    pub openai_chat_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
+    /// OpenAI Responses 协议（/openai-responses/v1/）路由表：检索 key 全小写。
+    /// 仅收录 channel_type=openai_responses 的模型，转发到该通道 base_url。
+    pub openai_responses_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
     /// anthropic 格式的检索 id → ProviderRoute（检索 key 全小写；非 claude-/anthropic 开头的模型写入时补 claude- 前缀）
     pub anthropic_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
     /// Provider 定义（来自配置文件）

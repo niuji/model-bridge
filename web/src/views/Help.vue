@@ -64,7 +64,7 @@
         <div v-else class="tool-section">
           <div class="detail-title">
             <span class="detail-name">Cursor</span>
-            <span class="detail-tag mono">OpenAI · base_url {{ proxyBase }}/openai/v1</span>
+            <span class="detail-tag mono">OpenAI Chat · base_url {{ proxyBase }}/openai-chat/v1</span>
           </div>
           <p class="tool-desc">在 Cursor 设置里覆盖 OpenAI 基址：</p>
           <ol class="steps">
@@ -106,7 +106,7 @@ const claudeSnippet = computed(() =>
   }
 }`)
 
-const cursorBaseUrl = computed(() => `${proxyBase.value}/openai/v1`)
+const cursorBaseUrl = computed(() => `${proxyBase.value}/openai-chat/v1`)
 
 function openTool(tool: 'claude-code' | 'cursor') {
   activeTool.value = tool

@@ -91,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
     let proxy_base_url = format!("http://{}:{}", proxy_host, app_config.proxy.port);
 
     let state = Arc::new(AppState {
-        openai_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        openai_chat_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        openai_responses_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         anthropic_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         provider_defs,
         db: pool.clone(),

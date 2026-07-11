@@ -12,10 +12,18 @@ use crate::state::AppState;
 static WEB_UI_DIR: include_dir::Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
-/// 构建代理路由（OpenAI + Anthropic 协议转发，带 API Key 认证）
+/// 构建代理路由（OpenAI Chat / OpenAI Responses / Anthropic 三套独立端点，各带 API Key 认证）
 pub fn create_proxy_router(state: Arc<AppState>) -> Router {
-    let openai_router = Router::new()
-        .route("/v1/{*path}", axum::routing::any(proxy::openai_handler))
+    let openai_chat_router = Router::new()
+        .route("/v1/{*path}", axum::routing::any(proxy::openai_chat_handler))
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ));
+
+    let openai_responses_router = Router::new()
+        .route("/v1/{*path}", axum::routing::any(proxy::openai_responses_handler))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -31,7 +39,8 @@ pub fn create_proxy_router(state: Arc<AppState>) -> Router {
         ));
 
     Router::new()
-        .nest("/openai", openai_router)
+        .nest("/openai-chat", openai_chat_router)
+        .nest("/openai-responses", openai_responses_router)
         .nest("/anthropic", anthropic_router)
 }
 
