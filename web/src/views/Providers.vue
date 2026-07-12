@@ -1,27 +1,64 @@
 <template>
   <div class="providers">
-    <div class="page-header">
-      <h1 class="page-title serif">供应商</h1>
-      <p class="page-subtitle mono">管理 Provider 的 API 密钥、通道和模型列表</p>
-    </div>
+    <header class="page-header">
+      <div class="page-header-row">
+        <h1 class="page-title serif">供应商</h1>
+        <span v-if="!loading" class="page-count mono">{{ pad2(providers.length) }} entries</span>
+      </div>
+      <p class="page-subtitle mono">管理 Provider 的 API 密钥、通道与模型列表</p>
+      <div class="page-rule" />
+    </header>
 
     <n-spin :show="loading">
-      <div class="provider-grid">
-        <div v-for="p in providers" :key="p.id" class="provider-card" :class="{ disabled: !p.is_enabled }" @click="openConfig(p)">
-          <div class="card-top">
-            <div class="card-name">
-              <img v-if="p.icon" :src="iconUrl(p.icon)" class="card-icon" />
-              <span class="card-name-text serif">{{ p.name }}</span>
+      <div v-if="providers.length" class="provider-grid">
+        <article
+          v-for="(p, idx) in providers"
+          :key="p.id"
+          class="provider-card"
+          :class="{ disabled: !p.is_enabled }"
+          :style="{ '--i': String(idx) }"
+          role="button"
+          tabindex="0"
+          @click="openConfig(p)"
+          @keydown.enter.prevent="openConfig(p)"
+          @keydown.space.prevent="openConfig(p)"
+        >
+          <div class="card-hero">
+            <div class="card-icon-well">
+              <img v-if="p.icon" :src="iconUrl(p.icon)" class="card-icon" :alt="p.name" />
+              <span v-else class="card-icon-fallback serif" aria-hidden="true">{{ (p.name || '?').charAt(0) }}</span>
             </div>
-            <n-switch :value="p.is_enabled" @update:value="(v: boolean) => quickToggle(p, v)" size="small" @click.stop />
+            <div class="card-hero-text">
+              <h2 class="card-name serif">{{ p.name }}</h2>
+              <div class="card-meta mono">
+                <span class="card-status-dot" :class="{ on: p.is_enabled }" />
+                <span class="status-word">{{ p.is_enabled ? '在线' : '停用' }}</span>
+                <span class="meta-sep">·</span>
+                <span>{{ enabledModelTotal(p) }} 模型</span>
+              </div>
+            </div>
+            <n-switch :value="p.is_enabled" size="small" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
           </div>
+
+          <div class="card-divider" />
+
           <div class="card-channels">
-            <div v-for="ch in p.channels" :key="ch.channel_type" class="channel-tag" :class="{ off: !ch.is_enabled }">
-              <span class="channel-label mono">{{ channelLabel(ch.channel_type) }}</span>
-              <span class="channel-tag-count mono">{{ ch.model_count }}</span>
+            <div
+              v-for="ch in sortedChannels(p)"
+              :key="ch.channel_type"
+              class="channel-row"
+              :class="{ off: !ch.is_enabled }"
+            >
+              <span class="ch-dot" :class="{ on: ch.is_enabled }" />
+              <span class="ch-label mono">{{ channelLabel(ch.channel_type) }}</span>
+              <span class="ch-count mono">{{ ch.model_count }}</span>
             </div>
           </div>
-        </div>
+        </article>
+      </div>
+      <div v-else-if="!loading" class="provider-empty">
+        <span class="empty-mark serif">∅</span>
+        <p class="mono">暂无供应商配置</p>
       </div>
     </n-spin>
 
@@ -237,6 +274,9 @@ function channelLabel(type: string): string { return CHANNEL_LABELS[type] || typ
 function iconUrl(icon: string): string { return /^https?:\/\//.test(icon) ? icon : `/icons/${icon}` }
 function normId(s: string): string { return s.trim().toLowerCase() }
 function channelModelCount(type: string): number { return (form.value.modelsByChannel[type] || []).filter(m => m.model_id.trim()).length }
+function pad2(n: number): string { return String(n).padStart(2, '0') }
+function enabledModelTotal(p: ProviderSummary): number { return p.channels.filter(c => c.is_enabled).reduce((s, c) => s + (c.model_count || 0), 0) }
+function sortedChannels(p: ProviderSummary): ChannelInfo[] { return [...p.channels].sort((a, b) => a.channel_type.localeCompare(b.channel_type)) }
 
 function flattenModels(state: FormState): { channel_type: string; model_id: string; model_name: string }[] {
   const out: { channel_type: string; model_id: string; model_name: string }[] = []
@@ -471,23 +511,82 @@ onMounted(loadProviders)
 </script>
 
 <style scoped>
-.page-header { margin-bottom: 24px; }
-.page-title { font-size: 28px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; }
-.page-subtitle { margin: 6px 0 0; color: #a89e8c; font-size: 13px; }
+/* editorial catalog atmosphere: faint graph-paper dots on the page field */
+.providers {
+  background-image: radial-gradient(circle at 1px 1px, rgba(23,20,15,0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
 
-.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
-.provider-card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; padding: 22px; cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s; }
-.provider-card:hover { border-color: rgba(46, 168, 106, 0.3); box-shadow: 0 6px 22px rgba(23,20,15,0.06); transform: translateY(-1px); }
-.provider-card.disabled { opacity: 0.55; }
-.provider-card.disabled:hover { border-color: rgba(181, 132, 43, 0.25); box-shadow: 0 4px 24px rgba(181, 132, 43, 0.06); }
-.card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.card-name { display: flex; align-items: center; gap: 10px; }
-.card-icon { width: 24px; height: 24px; object-fit: contain; flex-shrink: 0; }
-.card-name-text { font-size: 17px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; }
-.card-channels { display: flex; flex-wrap: wrap; gap: 6px; }
-.channel-tag { display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 4px 10px; background: #f4efe3; border: 1px solid #d9cfbf; border-radius: 8px; color: #74695a; }
-.channel-tag-count { font-weight: 600; color: #9a8c72; }
-.channel-tag.off { text-decoration: line-through; opacity: 0.5; }
+/* ---- page masthead ---- */
+.page-header { margin-bottom: 26px; }
+.page-header-row { display: flex; align-items: baseline; gap: 14px; }
+.page-title { font-size: 30px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; line-height: 1; }
+.page-count { font-size: 11px; font-weight: 600; color: #8c7f6c; letter-spacing: 0.08em; padding: 3px 9px; border: 1px solid #d9cfbf; border-radius: 999px; background: #f4efe3; transform: translateY(-2px); }
+.page-subtitle { margin: 8px 0 0; color: #a89e8c; font-size: 13px; }
+.page-rule { margin-top: 16px; height: 1px; background: linear-gradient(90deg, #d9cfbf 0%, rgba(217,207,191,0) 96%); }
+
+/* ---- catalog grid ---- */
+.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; align-items: stretch; }
+
+/* ---- provider card ---- */
+.provider-card {
+  --max-opacity: 1;
+  display: flex; flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #d9cfbf;
+  border-radius: 12px;
+  padding: 16px 18px;
+  min-height: 190px;
+  cursor: pointer;
+  overflow: hidden;
+  opacity: var(--max-opacity);
+  transition: box-shadow 0.22s ease, border-color 0.22s ease, transform 0.22s ease;
+  animation: card-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+.provider-card:hover { border-color: rgba(46,168,106,0.45); box-shadow: 0 10px 28px rgba(23,20,15,0.07), 0 2px 6px rgba(23,20,15,0.04); transform: translateY(-2px); }
+.provider-card:focus-visible { outline: 2px solid rgba(46,168,106,0.5); outline-offset: 2px; }
+.provider-card.disabled { --max-opacity: 0.66; }
+.provider-card.disabled:hover { border-color: rgba(181,132,43,0.28); }
+
+/* entrance animates `translate` + `opacity`; hover uses `transform` so the filled keyframe never pins it */
+@keyframes card-rise {
+  from { opacity: 0; translate: 0 10px; }
+  to   { opacity: var(--max-opacity); translate: 0 0; }
+}
+
+.card-hero { display: flex; align-items: center; gap: 12px; }
+.card-icon-well { flex-shrink: 0; width: 38px; height: 38px; border-radius: 8px; background: #f4efe3; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.card-icon { width: 24px; height: 24px; object-fit: contain; }
+.card-icon-fallback { font-size: 18px; font-weight: 600; color: #74695a; line-height: 1; }
+.card-hero-text { min-width: 0; flex: 1; }
+.card-name { font-size: 18px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; margin: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: #8c7f6c; }
+.card-status-dot { width: 6px; height: 6px; border-radius: 50%; background: #c9c0b0; flex-shrink: 0; box-shadow: none; animation: none; }
+.card-status-dot.on { background: #2ea86a; box-shadow: 0 0 6px rgba(46,168,106,0.45); animation: dot-pulse 3s ease-in-out infinite; }
+.status-word { font-weight: 600; color: #74695a; }
+.provider-card.disabled .status-word { color: #a89e8c; }
+.meta-sep { color: #c9c0b0; }
+
+/* single hairline between hero and the channel listing */
+.card-divider { height: 1px; margin: 14px 0 4px; background: #ece6da; }
+
+/* per-channel listing: dot-led rows, label left, count right */
+.card-channels { display: flex; flex-direction: column; }
+.channel-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.channel-row + .channel-row { border-top: 1px solid #f1ece0; }
+.ch-dot { width: 6px; height: 6px; border-radius: 50%; background: #c9c0b0; flex-shrink: 0; box-sizing: border-box; }
+.ch-dot.on { background: #2ea86a; }
+.channel-row.off .ch-dot { background: transparent; border: 1px solid #c9c0b0; }
+.ch-label { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; color: #74695a; text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-count { font-size: 12px; font-weight: 600; color: #9a8c72; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.channel-row.off .ch-label, .channel-row.off .ch-count { color: #c9c0b0; }
+
+.provider-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 0; }
+.empty-mark { font-size: 30px; color: #c9c0b0; line-height: 1; }
+.provider-empty p { margin: 0; color: #a89e8c; font-size: 13px; }
+
+@keyframes dot-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(46,168,106,0.4); } 50% { box-shadow: 0 0 10px rgba(46,168,106,0.65); } }
 
 .config-modal { --n-title-text-color: #17140f; }
 .config-shell { display: flex; flex-direction: column; gap: 16px; }
