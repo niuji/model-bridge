@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 构建应用状态
-    let provider_defs = config::load_providers(&app_config.providers_file)?;
+    let provider_defs = config::load_providers()?;
 
     // 迁移期回填：schema 迁移把旧 provider_models 行的 channel_type 置空，
     // 这里按启发式（claude/anthropic 前缀或 [1M] → anthropic 通道，否则首个 openai 通道）补上。

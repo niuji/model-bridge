@@ -16,9 +16,6 @@ pub struct AppConfig {
     pub admin: ServerConfig,
     pub database: DatabaseConfig,
     pub bridge: BridgeConfig,
-    /// Provider 定义 JSON 文件路径
-    #[serde(default = "default_providers_file")]
-    pub providers_file: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -64,10 +61,6 @@ pub struct ChannelDef {
     pub models_endpoint: Option<String>,
 }
 
-fn default_providers_file() -> String {
-    "providers.json".to_string()
-}
-
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -86,7 +79,6 @@ impl Default for AppConfig {
             bridge: BridgeConfig {
                 refresh_interval_min: 10,
             },
-            providers_file: default_providers_file(),
         }
     }
 }
@@ -101,28 +93,11 @@ pub fn load_config(cli: &Cli) -> anyhow::Result<AppConfig> {
     Ok(config)
 }
 
-/// 从 JSON 文件加载 Provider 定义，并合并 ~/.mb/*.json 中的用户自定义 Provider（同名优先）
-pub fn load_providers(path: &str) -> anyhow::Result<Vec<ProviderDef>> {
-    // 优先读磁盘上的 providers_file（dev / 自定义部署，便于本地编辑后立即生效）；
-    // 磁盘缺失则回退到编译期嵌入的内置定义，使发布二进制（zip 仅含 exe）开箱即用。
-    let content = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!(
-                "providers file '{}' not found on disk, using embedded builtin providers",
-                path
-            );
-            include_str!("../providers.json").to_string()
-        }
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "failed to read providers file '{}': {}",
-                path,
-                e
-            ));
-        }
-    };
-    let mut providers: Vec<ProviderDef> = serde_json::from_str(&content)?;
+/// 加载 Provider 定义：编译期内嵌的 providers.json + ~/.mb/providers.json 用户自定义合并。
+/// 用户自定义中同 id 覆盖内置，新 id 追加。
+pub fn load_providers() -> anyhow::Result<Vec<ProviderDef>> {
+    let mut providers: Vec<ProviderDef> =
+        serde_json::from_str(include_str!("../providers.json"))?;
 
     let user_file = dirs::home_dir().map(|h| h.join(".mb").join("providers.json"));
     if let Some(file_path) = user_file.filter(|p| p.exists()) {

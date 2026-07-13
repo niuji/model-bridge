@@ -6,8 +6,8 @@
 # 若同目录下没有 model-bridge.toml，程序会用内置默认值启动
 # （proxy 127.0.0.1:10010 / admin 127.0.0.1:10020，不加密），仍可正常运行。
 #
-# providers.json 已编译进二进制，无需随包附带；下面的 providers_file
-# 仅在你想改用自定义 provider 定义文件时才需要调整。
+# 内置 providers 已编译进二进制。如需新增/覆盖供应商定义，
+# 写到 ~/.mb/providers.json（同名 id 覆盖内置，新 id 追加）。
 
 [proxy]
 host = "127.0.0.1"
@@ -29,6 +29,3 @@ encryption_key = ""
 [bridge]
 # 后台自动刷新模型列表间隔（分钟）
 refresh_interval_min = 10
-
-# Provider 定义 JSON 文件路径（可选；缺省用嵌入的内置定义）
-providers_file = "providers.json"
