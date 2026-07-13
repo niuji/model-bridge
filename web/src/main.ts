@@ -2,18 +2,12 @@ import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 
-import Dashboard from './views/Dashboard.vue'
-import Providers from './views/Providers.vue'
-import ApiKeys from './views/ApiKeys.vue'
-import Logs from './views/Logs.vue'
-import Help from './views/Help.vue'
-
 const routes = [
-  { path: '/', component: Dashboard },
-  { path: '/providers', component: Providers },
-  { path: '/api-keys', component: ApiKeys },
-  { path: '/logs', component: Logs },
-  { path: '/help', component: Help },
+  { path: '/', component: () => import('./views/Dashboard.vue') },
+  { path: '/providers', component: () => import('./views/Providers.vue') },
+  { path: '/api-keys', component: () => import('./views/ApiKeys.vue') },
+  { path: '/logs', component: () => import('./views/Logs.vue') },
+  { path: '/help', component: () => import('./views/Help.vue') },
 ]
 
 const router = createRouter({

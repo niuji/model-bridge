@@ -12,5 +12,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          echarts: ['echarts', 'vue-echarts'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 700,
   },
 })
