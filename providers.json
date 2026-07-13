@@ -43,5 +43,23 @@
     "channels": [
       { "type": "anthropic", "base_url": "https://api.anthropic.com/v1", "models_endpoint": "https://api.anthropic.com/v1/models" }
     ]
+  },
+  {
+    "id": "siliconflow",
+    "name": "SiliconFlow",
+    "icon": "siliconflow.png",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://api.siliconflow.cn/v1", "models_endpoint": "https://api.siliconflow.cn/v1/models" }
+    ]
+  },
+  {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "icon": "openrouter.png",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" },
+      { "type": "openai_responses", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" },
+      { "type": "anthropic", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" }
+    ]
   }
 ]
