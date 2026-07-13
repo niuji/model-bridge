@@ -141,6 +141,7 @@
                   v-if="selectedChannelDef?.models_endpoint"
                   size="small"
                   secondary
+                  type="success"
                   @click="fetchModels"
                   :loading="fetching"
                   class="sync-btn mono"
@@ -323,7 +324,7 @@ async function openConfig(summary: ProviderSummary) {
   form.value = {
     api_key: p.api_key || '',
     is_enabled: p.is_enabled,
-    channels: p.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, models_endpoint: c.models_endpoint, is_enabled: c.is_enabled })),
+    channels: p.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, models_endpoint: c.models_endpoint, is_enabled: c.is_enabled })).sort((a, b) => a.channel_type.localeCompare(b.channel_type)),
     modelsByChannel,
   }
   selectedChannel.value = p.channels[0]?.channel_type || ''
@@ -599,8 +600,7 @@ onMounted(loadProviders)
 .api-key-input { width: 100%; }
 .api-key-visibility-btn { display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; padding: 0; color: #8c7f6c; cursor: pointer; }
 .api-key-visibility-btn:hover { color: #1d7a4c; }
-.sync-btn { font-size: 12px; color: #1d7a4c; }
-.sync-btn:focus:not(:focus-visible) { background-color: transparent; }
+.sync-btn { font-size: 12px; background-color: #f4efe3 !important; }
 .channel-row-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #e5dccd; border-radius: 10px; background: #fff; padding: 10px 12px; margin-bottom: 8px; }
 .channel-row-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .channel-type-label { font-size: 12px; width: 120px; flex-shrink: 0; color: #74695a; }
