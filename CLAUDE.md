@@ -102,7 +102,7 @@ Each provider can declare multiple channels with different protocol types. A cha
 - `"openai_chat"` → models go to `openai_chat_routes` (served at `/openai-chat/v1/{*}`)
 - `"openai_responses"` → models go to `openai_responses_routes` (served at `/openai-responses/v1/{*}`)
 
-A model listed under a provider with multiple channels appears in EACH channel's route table, routing to that channel's base URL independently (e.g. a provider with both `openai_chat` and `anthropic` channels serves the same `model_id` on two different endpoints/base URLs).
+A model is bound to a specific channel — each `provider_models` row carries a `channel_type`, and `refresh_routes()` inserts it only into the route table whose channel matches (`m.channel_type == ch.channel_type`). So a model is NOT auto-surfaced on every channel of its provider: to serve the same `model_id` on both `openai_chat` and `anthropic` endpoints, it must be added to each channel's model list separately (one `provider_models` row per `channel_type`). Adding a new channel to a provider therefore starts with an empty route table for that channel until its models are fetched/added.
 
 ### Request Flow
 
@@ -128,7 +128,7 @@ The OpenAI surface is split into two fully independent endpoints — no shared r
 | `/openai-chat/v1/` | `chat/completions`, `models` | `openai_chat_routes` |
 | `/openai-responses/v1/` | `responses`, `models` | `openai_responses_routes` |
 
-Each endpoint only serves its own interface's path — `/openai-chat/v1/responses` 404s, as does `/openai-responses/v1/chat/completions`. A model appears in an endpoint's `/v1/models` only if its provider declared the matching channel, so a chat client never sees responses-only models (and vice versa). The old shared `/openai/v1/*` prefix is gone — existing clients must move their OpenAI base URL to `/openai-chat/v1` (chat) or `/openai-responses/v1` (responses).
+Each endpoint only serves its own interface's path — `/openai-chat/v1/responses` 404s, as does `/openai-responses/v1/chat/completions`. A model appears in an endpoint's `/v1/models` only if it is listed in `provider_models` under that channel's `channel_type` (not merely because the provider declared the channel), so a chat client never sees responses-only models (and vice versa). The old shared `/openai/v1/*` prefix is gone — existing clients must move their OpenAI base URL to `/openai-chat/v1` (chat) or `/openai-responses/v1` (responses).
 
 Anthropic is a single endpoint: all models in `anthropic_routes` are served at `/anthropic/v1/{*}`.
 
