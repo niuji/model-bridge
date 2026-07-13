@@ -64,7 +64,6 @@
 
     <n-modal
       v-model:show="showConfig"
-      :title="editProvider?.name + ' 配置'"
       style="width: 760px"
       preset="card"
       class="config-modal"
@@ -72,6 +71,16 @@
       :close-on-esc="false"
       @close="requestCloseConfig"
     >
+      <template #header>
+        <div class="modal-header-hero">
+          <div class="card-icon-well">
+            <img v-if="editProvider?.icon" :src="iconUrl(editProvider?.icon ?? '')" class="card-icon" :alt="editProvider?.name || ''" />
+            <span v-else class="card-icon-fallback serif" aria-hidden="true">{{ (editProvider?.name || '?').charAt(0) }}</span>
+          </div>
+          <span class="modal-header-name serif">{{ editProvider?.name }}</span>
+          <span class="modal-header-suffix mono">配置</span>
+        </div>
+      </template>
       <div v-if="editProvider" class="config-shell">
         <n-form label-placement="left" label-width="90px">
           <div class="config-block">
@@ -242,7 +251,7 @@ const API_BASE = '/api/admin'
 interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean; model_count: number }
 interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
-interface ProviderDetail { id: string; name: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
+interface ProviderDetail { id: string; name: string; icon?: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
 interface ModelForm { model_id: string; model_name: string }
 interface DiffItem { model_id: string; model_name: string; checked: boolean }
 interface DiffRenamed { model_id: string; local_name: string; remote_name: string; checked: boolean }
@@ -557,7 +566,7 @@ onMounted(loadProviders)
 }
 
 .card-hero { display: flex; align-items: center; gap: 12px; }
-.card-icon-well { flex-shrink: 0; width: 38px; height: 38px; border-radius: 8px; background: #f4efe3; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.card-icon-well { flex-shrink: 0; width: 38px; height: 38px; border-radius: 8px; background: transparent; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .card-icon { width: 24px; height: 24px; object-fit: contain; }
 .card-icon-fallback { font-size: 18px; font-weight: 600; color: #74695a; line-height: 1; }
 .card-hero-text { min-width: 0; flex: 1; }
@@ -590,6 +599,12 @@ onMounted(loadProviders)
 @keyframes dot-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(46,168,106,0.4); } 50% { box-shadow: 0 0 10px rgba(46,168,106,0.65); } }
 
 .config-modal { --n-title-text-color: #17140f; }
+.modal-header-hero { display: flex; align-items: center; gap: 10px; }
+.modal-header-hero .card-icon-well { width: 30px; height: 30px; border-radius: 7px; background: transparent; }
+.modal-header-hero .card-icon { width: 19px; height: 19px; }
+.modal-header-hero .card-icon-fallback { font-size: 15px; }
+.modal-header-name { font-size: 18px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; line-height: 1.2; }
+.modal-header-suffix { font-size: 13px; color: #a89e8c; }
 .config-shell { display: flex; flex-direction: column; gap: 16px; }
 .config-block { border: 1px solid #e5dccd; border-radius: 12px; background: #fcfaf6; padding: 16px; margin-top: 16px; }
 .block-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
