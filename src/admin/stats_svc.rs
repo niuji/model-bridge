@@ -190,7 +190,7 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
             COALESCE(SUM(cache_read_tokens), 0),
             COALESCE(SUM(cache_write_tokens), 0)
         FROM usage_records
-        WHERE created_at >= datetime('now', '-7 days')
+        WHERE created_at >= datetime('now', '-30 days')
         GROUP BY model_id
         ORDER BY cnt DESC
         "#,

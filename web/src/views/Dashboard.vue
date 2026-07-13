@@ -56,7 +56,7 @@
     </div>
 
     <div class="card table-card">
-      <div class="card-header"><h3 class="card-title">模型用量明细</h3><span class="card-badge mono">{{ modelData.length }} 个模型</span></div>
+      <div class="card-header"><h3 class="card-title">模型用量明细</h3><div class="card-badges"><span class="card-badge mono">近 30 天</span><span class="card-badge mono">{{ modelData.length }} 个模型</span></div></div>
       <div class="card-body"><n-spin :show="loading"><n-data-table :columns="modelColumns" :data="modelData" :bordered="false" :single-line="false" :scroll-x="scrollX" size="small" class="dashboard-table" /></n-spin></div>
     </div>
   </div>
@@ -165,6 +165,7 @@ onMounted(loadData)
 .chart-header-right { display: flex; align-items: center; gap: 12px; }
 .card-title { margin: 0; font-family: 'Fraunces', 'Georgia', serif; font-size: 17px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; }
 .card-badge { font-size: 11px; color: #74695a; padding: 4px 10px; background: #f4efe3; border: 1px solid #d9cfbf; border-radius: 999px; }
+.card-badges { display: flex; align-items: center; gap: 8px; }
 .card-body { padding: 24px; }
 
 .chart { height: 320px; }
