@@ -92,7 +92,7 @@ const hourlyOption = ref({
 const heatmapOption = ref({
   backgroundColor: 'transparent',
   tooltip: { formatter: (p: any) => `${p.value[0]}<br/>Token: <b>${formatNum(p.value[1] as number)}</b>`, backgroundColor: '#ffffff', borderColor: '#d9cfbf', textStyle: { color: '#17140f', fontFamily: 'IBM Plex Mono, monospace', fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(23,20,15,0.06);' },
-  visualMap: { min: 0, max: 1, type: 'continuous' as const, orient: 'vertical' as const, right: 10, top: 'middle', itemWidth: 10, itemHeight: 90, inRange: { color: ['#ece6da', '#bfe6cf', '#5bbf8a', '#2ea86a', '#1d7a4c'] }, textStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 9 } },
+  visualMap: { min: 0, max: 1, type: 'continuous' as const, orient: 'vertical' as const, right: 10, top: 'middle', itemWidth: 10, itemHeight: 90, inRange: { color: ['#ece6da', '#bfe6cf', '#5bbf8a', '#2ea86a', '#1d7a4c'] }, textStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 9 }, formatter: (v: number) => formatNum(v) },
   calendar: { range: ['2026-01-01', '2026-01-31'], cellSize: [13, 13], left: 36, right: 56, top: 24, bottom: 8, orient: 'horizontal', itemStyle: { borderWidth: 2, borderColor: '#fff', color: '#faf7f0' }, yearLabel: { show: false }, monthLabel: { nameMap: 'cn', color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, margin: 8 }, dayLabel: { firstDay: 1, nameMap: 'cn', color: '#a89e8c', fontFamily: 'IBM Plex Mono, monospace', fontSize: 10 }, splitLine: { show: false } },
   series: [{ type: 'heatmap' as const, coordinateSystem: 'calendar', data: [] as any[] }],
 })
