@@ -748,3 +748,360 @@ async fn write_usage(
         tracing::error!("Failed to write usage record: {}", e);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== parse_data_line =====
+
+    #[test]
+    fn parse_data_line_standard() {
+        let line = b"data: {\"key\":\"value\"}\n";
+        assert_eq!(
+            parse_data_line(line),
+            Some(b"{\"key\":\"value\"}".to_vec())
+        );
+    }
+
+    #[test]
+    fn parse_data_line_no_space_after_colon() {
+        let line = b"data:{\"x\":1}\n";
+        assert_eq!(parse_data_line(line), Some(b"{\"x\":1}".to_vec()));
+    }
+
+    #[test]
+    fn parse_data_line_done_marker() {
+        assert_eq!(parse_data_line(b"data: [DONE]\n"), None);
+        assert_eq!(parse_data_line(b"data:[DONE]\r\n"), None);
+    }
+
+    #[test]
+    fn parse_data_line_non_data_line() {
+        assert_eq!(parse_data_line(b"event: ping\n"), None);
+        assert_eq!(parse_data_line(b"\n"), None);
+    }
+
+    #[test]
+    fn parse_data_line_trailing_crlf() {
+        let line = b"data: {\"a\":1}\r\n";
+        assert_eq!(parse_data_line(line), Some(b"{\"a\":1}".to_vec()));
+    }
+
+    #[test]
+    fn parse_data_line_empty_payload() {
+        // 空 data 行不算错误，返回空 vec
+        assert_eq!(parse_data_line(b"data:\n"), Some(vec![]));
+    }
+
+    // ===== extract_model_from_body =====
+
+    #[test]
+    fn extract_model_present() {
+        let body = br#"{"model":"gpt-4","messages":[]}"#;
+        assert_eq!(extract_model_from_body(body).as_deref(), Some("gpt-4"));
+    }
+
+    #[test]
+    fn extract_model_preserves_case() {
+        let body = br#"{"model":"Claude-3.5-Sonnet","stream":true}"#;
+        assert_eq!(
+            extract_model_from_body(body).as_deref(),
+            Some("Claude-3.5-Sonnet")
+        );
+    }
+
+    #[test]
+    fn extract_model_missing() {
+        let body = br#"{"messages":[]}"#;
+        assert_eq!(extract_model_from_body(body), None);
+    }
+
+    #[test]
+    fn extract_model_empty_body() {
+        assert_eq!(extract_model_from_body(b""), None);
+    }
+
+    #[test]
+    fn extract_model_invalid_json() {
+        assert_eq!(extract_model_from_body(b"not json"), None);
+    }
+
+    // ===== replace_model_in_body =====
+
+    #[test]
+    fn replace_model_basic() {
+        let body = br#"{"model":"claude-3","stream":true}"#;
+        let result = replace_model_in_body(body, "claude-3-5-sonnet-latest");
+        let v: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(v["model"], "claude-3-5-sonnet-latest");
+    }
+
+    #[test]
+    fn replace_model_empty_body() {
+        let result = replace_model_in_body(b"", "gpt-4");
+        assert_eq!(result, b"");
+    }
+
+    #[test]
+    fn replace_model_invalid_json_passthrough() {
+        let broken = b"not valid json";
+        assert_eq!(replace_model_in_body(broken, "gpt-4"), broken);
+    }
+
+    #[test]
+    fn replace_model_adds_field_if_missing() {
+        let body = br#"{"stream":true}"#;
+        let result = replace_model_in_body(body, "o1");
+        let v: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(v["model"], "o1");
+    }
+
+    #[test]
+    fn replace_model_keeps_other_fields() {
+        let body = br#"{"model":"old","messages":[{"role":"user","content":"hi"}],"temperature":0.7}"#;
+        let result = replace_model_in_body(body, "new-model");
+        let v: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(v["model"], "new-model");
+        assert_eq!(v["temperature"], 0.7);
+        assert!(v["messages"].is_array());
+    }
+
+    // ===== inject_stream_options =====
+
+    #[test]
+    fn inject_stream_options_adds_when_missing() {
+        let body = br#"{"model":"gpt-4","stream":true}"#;
+        let result = inject_stream_options("openai", "chat/completions", body);
+        let v: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(
+            v["stream_options"],
+            serde_json::json!({"include_usage": true})
+        );
+    }
+
+    #[test]
+    fn inject_stream_options_skips_when_not_streaming() {
+        let body = br#"{"model":"gpt-4","stream":false}"#;
+        let result = inject_stream_options("openai", "chat/completions", body);
+        let v: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert!(v.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn inject_stream_options_skips_when_already_present() {
+        let body = br#"{"model":"gpt-4","stream":true,"stream_options":{"include_usage":false}}"#;
+        let result = inject_stream_options("openai", "chat/completions", body);
+        let v: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(v["stream_options"]["include_usage"], false);
+    }
+
+    #[test]
+    fn inject_stream_options_skips_anthropic() {
+        let body = br#"{"model":"claude-3","stream":true}"#;
+        let result = inject_stream_options("anthropic", "messages", body);
+        assert_eq!(result, body);
+    }
+
+    #[test]
+    fn inject_stream_options_skips_responses_path() {
+        let body = br#"{"model":"gpt-4","stream":true}"#;
+        let result = inject_stream_options("openai", "responses", body);
+        assert_eq!(result, body);
+    }
+
+    #[test]
+    fn inject_stream_options_empty_body() {
+        let result = inject_stream_options("openai", "chat/completions", b"");
+        assert_eq!(result, b"");
+    }
+
+    #[test]
+    fn inject_stream_options_invalid_json() {
+        let broken = b"not json";
+        assert_eq!(
+            inject_stream_options("openai", "chat/completions", broken),
+            broken
+        );
+    }
+
+    // ===== extract_usage =====
+
+    #[test]
+    fn extract_usage_openai_basic() {
+        let usage = serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 20}
+        });
+        let (input, output, cache_read, cache_write) = extract_usage(&usage, "openai");
+        assert_eq!(input, 100);
+        assert_eq!(output, 50);
+        assert_eq!(cache_read, 20);
+        assert_eq!(cache_write, 0);
+    }
+
+    #[test]
+    fn extract_usage_openai_cached_tokens_fallback() {
+        // 没有 prompt_tokens_details 时回退顶层 cached_tokens
+        let usage = serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cached_tokens": 15
+        });
+        let (input, _output, cache_read, _cache_write) = extract_usage(&usage, "openai");
+        assert_eq!(input, 100);
+        assert_eq!(cache_read, 15);
+    }
+
+    #[test]
+    fn extract_usage_openai_prompt_cache_hit_tokens_fallback() {
+        let usage = serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 10
+        });
+        let (_input, _output, cache_read, _cache_write) = extract_usage(&usage, "openai");
+        assert_eq!(cache_read, 10);
+    }
+
+    #[test]
+    fn extract_usage_openai_details_takes_priority() {
+        // prompt_tokens_details.cached_tokens 优先于顶层 fallback
+        let usage = serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cached_tokens": 999,
+            "prompt_tokens_details": {"cached_tokens": 30}
+        });
+        let (_input, _output, cache_read, _cache_write) = extract_usage(&usage, "openai");
+        assert_eq!(cache_read, 30);
+    }
+
+    #[test]
+    fn extract_usage_openai_all_zero() {
+        let usage = serde_json::json!({});
+        let (input, output, cache_read, cache_write) = extract_usage(&usage, "openai");
+        assert_eq!((input, output, cache_read, cache_write), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn extract_usage_anthropic_normalizes_input() {
+        let usage = serde_json::json!({
+            "input_tokens": 80,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 10
+        });
+        let (input, output, cache_read, cache_write) = extract_usage(&usage, "anthropic");
+        // input = 80 + 20 + 10 = 110（归一化为含缓存的总额）
+        assert_eq!(input, 110);
+        assert_eq!(output, 40);
+        assert_eq!(cache_read, 20);
+        assert_eq!(cache_write, 10);
+    }
+
+    #[test]
+    fn extract_usage_anthropic_no_cache() {
+        let usage = serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 50
+        });
+        let (input, output, cache_read, cache_write) = extract_usage(&usage, "anthropic");
+        assert_eq!(input, 100);
+        assert_eq!(output, 50);
+        assert_eq!(cache_read, 0);
+        assert_eq!(cache_write, 0);
+    }
+
+    // ===== extract_usage_from_sse_event =====
+
+    #[test]
+    fn sse_event_openai_final_chunk() {
+        // OpenAI 流式末尾 chunk：usage 在顶层
+        let data = br#"{"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":50}}"#;
+        let (input, output, _, _) = extract_usage_from_sse_event(data, "openai");
+        assert_eq!(input, 100);
+        assert_eq!(output, 50);
+    }
+
+    #[test]
+    fn sse_event_anthropic_message_start() {
+        let data = br#"{"type":"message_start","message":{"usage":{"input_tokens":80,"output_tokens":0,"cache_read_input_tokens":20}}}"#;
+        let (input, output, cache_read, _) = extract_usage_from_sse_event(data, "anthropic");
+        // anthropic 归一化: 80 + 20 + 0 = 100
+        assert_eq!(input, 100);
+        assert_eq!(output, 0);
+        assert_eq!(cache_read, 20);
+    }
+
+    #[test]
+    fn sse_event_anthropic_message_delta() {
+        // message_delta 的 usage 在顶层
+        let data = br#"{"type":"message_delta","usage":{"output_tokens":42}}"#;
+        let (input, output, _, _) = extract_usage_from_sse_event(data, "anthropic");
+        assert_eq!(input, 0);
+        assert_eq!(output, 42);
+    }
+
+    #[test]
+    fn sse_event_no_usage() {
+        let data = br#"{"type":"content_block_delta","delta":{"text":"hello"}}"#;
+        let (input, output, cache_read, cache_write) =
+            extract_usage_from_sse_event(data, "openai");
+        assert_eq!((input, output, cache_read, cache_write), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn sse_event_invalid_json() {
+        let (input, output, cache_read, cache_write) =
+            extract_usage_from_sse_event(b"not json", "openai");
+        assert_eq!((input, output, cache_read, cache_write), (0, 0, 0, 0));
+    }
+
+    // ===== mask_key (from admin.rs) =====
+
+    #[test]
+    fn mask_key_standard() {
+        let key = "mb-12345678-1234-1234-1234-1234567890ab";
+        let masked = crate::router::admin::mask_key(key);
+        assert!(masked.starts_with("mb-123"));
+        assert!(masked.ends_with("90ab"));
+        assert!(masked.contains("..."));
+    }
+
+    #[test]
+    fn mask_key_short_passthrough() {
+        assert_eq!(crate::router::admin::mask_key("mb-abcd"), "mb-abcd");
+        assert_eq!(crate::router::admin::mask_key("abc"), "abc");
+    }
+
+    // ===== is_safe_base_url (from provider_svc.rs) =====
+
+    #[test]
+    fn is_safe_base_url_accepts_https() {
+        assert!(crate::admin::provider_svc::is_safe_base_url(
+            "https://api.openai.com/v1"
+        ));
+    }
+
+    #[test]
+    fn is_safe_base_url_accepts_http() {
+        assert!(crate::admin::provider_svc::is_safe_base_url(
+            "http://localhost:8080"
+        ));
+    }
+
+    #[test]
+    fn is_safe_base_url_rejects_file() {
+        assert!(!crate::admin::provider_svc::is_safe_base_url(
+            "file:///etc/passwd"
+        ));
+    }
+
+    #[test]
+    fn is_safe_base_url_rejects_garbage() {
+        assert!(!crate::admin::provider_svc::is_safe_base_url("not a url"));
+        assert!(!crate::admin::provider_svc::is_safe_base_url(""));
+    }
+}

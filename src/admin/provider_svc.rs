@@ -475,6 +475,6 @@ fn merge_channels(
 }
 
 /// 仅允许 http(s) 的 base_url，拒绝 file:// 等本地协议及非 URL 字符串。
-fn is_safe_base_url(url: &str) -> bool {
+pub fn is_safe_base_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }

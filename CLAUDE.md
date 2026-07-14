@@ -9,7 +9,7 @@ Model Bridge is an LLM API proxy/gateway that routes client requests to upstream
 - **Proxy server** (default `:10010`): accepts OpenAI Chat, OpenAI Responses, and Anthropic API requests at `/openai-chat/v1/{*}`, `/openai-responses/v1/{*}`, and `/anthropic/v1/{*}` — three fully independent endpoints, each with its own in-memory route table, model list, and upstream forwarding. Every request is authenticated against an in-memory API-key cache (SHA-256 of the bearer/`x-api-key` token). After auth, the target model is looked up in that endpoint's route table (case-insensitive) and the request is proxied to the correct upstream provider with the correct auth header format.
 - **Admin server** (default `:10020`): serves a Vue 3 SPA management UI and a REST admin API at `/api/admin/` for managing provider credentials, API keys, and usage statistics. The admin API has no app-level authentication; it is protected by binding to **loopback (`127.0.0.1`) by default**. Binding it to another address logs a warning at startup — do so only with a trusted network in front.
 
-Provider definitions (name, channels, models endpoint) live in a static JSON file (`providers.json`). User-specific credentials and overrides (API keys, enabled state, channel base URLs, model whitelists) are stored in SQLite. At runtime, the two are merged to build the in-memory route table.
+Provider definitions (id, name, icon, channels) are embedded at compile time via `include_str!("../providers.json")` in `config.rs::load_providers()` — there is no runtime disk read of this file. User-level overrides (`~/.mb/providers.json`, same schema) are loaded and merged at startup: same `id` replaces the builtin entry, new `id` is appended. User-specific credentials and per-model toggles (API keys, enabled state, model whitelists) are stored in SQLite. At runtime, the three layers are merged to build the in-memory route table.
 
 ## Build & Run
 
@@ -26,7 +26,10 @@ cargo check
 # Lint
 cargo clippy
 
-# Run with default config (model-bridge.toml + providers.json)
+# Run tests
+cargo test
+
+# Run with default config (model-bridge.toml)
 cargo run
 
 # Run with custom config
@@ -88,7 +91,7 @@ git push origin v0.1.0
 
 Providers are defined in three layers that merge at startup:
 
-1. **`providers.json`** (static definition) — id, name, icon, `models_endpoint` (optional), `models_endpoint_auth` (optional, `"bearer"` default or `"x-api-key"`), and `channels` array (each with `type` and `base_url`). These are loaded once at startup into `AppState.provider_defs`. The file is also embedded into the binary via `include_str!` (`src/config.rs::load_providers`): if the on-disk `providers_file` is missing, the embedded builtin definition is used as a fallback, so a release build (which ships the binary alone) starts without any extra files. A present on-disk file always wins, for local editing.
+1. **`providers.json`** (static definition, embedded at compile time) — id, name, icon, and `channels` array (each with `type`, `base_url`, and optional `models_endpoint`). These are loaded once at startup into `AppState.provider_defs` via `include_str!`. The binary always uses the compile-time embedded definition; there is no runtime disk read of a repo-level `providers.json`.
 2. **`~/.mb/providers.json`** (user-local overrides) — same schema as `providers.json`. Loaded and merged into layer 1 at startup: same `id` replaces the builtin entry, new `id` is appended. Parse failures are logged and skipped; the file is optional. Use this for private or corporate providers that shouldn't be committed to the repo.
 3. **SQLite tables** (runtime overrides) — `provider_config` (api_key, is_enabled), `provider_channel_config` (per-channel is_enabled; base_url is always sourced from the JSON definition, not overridable), `provider_models` (model whitelist).
 
@@ -173,20 +176,20 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 ### Key Design Decisions
 
 - **In-memory route tables.** Three `HashMap<String, ProviderRoute>` in `AppState` — `openai_chat_routes`, `openai_responses_routes`, `anthropic_routes` — one per client endpoint. Keys are lowercased for case-insensitive lookup; `ProviderRoute` carries the canonical `model_id`/`model_name`/`base_url`/`api_key`. No DB lookup per request.
-- **JSON definitions + DB overrides.** Provider metadata that rarely changes (name, channels) lives in `providers.json`. User-specific secrets and toggles (api_key, is_enabled, model whitelist) live in SQLite. The JSON file is the source of truth for provider identity; DB rows reference it by `provider_id`.
+- **JSON definitions + DB overrides.** Provider metadata that rarely changes (name, channels) lives in `providers.json` (embedded at compile time) and `~/.mb/providers.json` (user overrides at runtime). User-specific secrets and toggles (api_key, is_enabled, model whitelist) live in SQLite. The JSON files are the source of truth for provider identity; DB rows reference them by `provider_id`.
 - **Two HTTP servers.** The proxy and admin servers run on separate ports (default 10010/10020) in a `tokio::select!` — if either exits, both shut down.
 - **Proxy auth via API-key cache.** The proxy router is wrapped in `auth_middleware`. Client API keys (`mb-{uuid}`, created in the admin UI) are SHA-256 hashed and matched against `AppState.api_key_cache` (`HashMap<key_hash, api_key_id>`, enabled keys only). The cache is refreshed on startup, on the periodic timer, and after any api-key create/delete/toggle. A matched key injects `AuthenticatedKey(id)` into request extensions; `proxy.rs` threads that `api_key_id` into every `usage_records` insert. The admin API has no app-level auth (loopback-bound by default).
 - **API key at rest.** The upstream provider API key (`provider_config.api_key`) is stored in plaintext. Client-facing `mb-xxx` keys are stored **twice** in `api_keys`: as a SHA-256 `key_hash` (used by `auth_middleware` for proxy auth) and, to support the "reveal key later" UI feature, as `api_key`. When `[database] encryption_key` is set (base64 of 32 bytes), `api_key` is encrypted at rest via AES-256-GCM (`crypto::seal`/`reveal`); decryption falls back to returning the raw value for legacy plaintext rows. Without a key configured, `api_key` is stored in plaintext (acceptable only while admin is loopback-bound).
 - **SSE streaming support.** Upstream SSE responses are proxied through a tokio mpsc channel with line-buffered parsing. Usage is accumulated via "last non-zero value" (not summation) to handle providers where multiple SSE events carry cumulative totals. See [SSE Streaming & Usage Extraction](#sse-streaming--usage-extraction) above for details.
 - **SSRF hardening.** HTTP redirects are disabled on the shared `reqwest::Client`. `refresh_routes()` skips channels whose `base_url` is not `http(s)` (`is_safe_base_url` check), logging a warning — this prevents `file://` or other local-protocol URLs from being used as upstream targets.
-- **No tests.** The project currently has no unit or integration tests.
+- **Tests.** The `crypto` module has unit tests (seal/reveal roundtrip, key parsing, legacy fallback). The `proxy.rs` module has unit tests covering all pure functions: SSE data-line parsing, model extraction from request bodies, model name canonicalization, `stream_options` injection, usage extraction/normalization across both protocols, SSE event usage parsing, API key masking, and base URL safety checks. Use `cargo test` to run all tests.
 
 ## Source Structure
 
 | Path | Purpose |
 |------|---------|
-| `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh interval, providers file path |
-| `providers.json` | Static provider definitions (id, name, icon, channels, models_endpoint, models_endpoint_auth) |
+| `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh interval, encryption key |
+| `providers.json` | Static provider definitions (id, name, icon, channels with type/base_url/models_endpoint), embedded at compile time |
 | `src/main.rs` | Entry point: config loading, DB init, route table init, background refresh spawn, dual-server launch |
 | `src/config.rs` | CLI args (clap), TOML config parsing, `providers.json` loading, `ProviderDef`/`ChannelDef` types |
 | `src/state.rs` | `AppState` (in-memory route tables, provider defs, DB pool, HTTP client), model list response types |
@@ -207,15 +210,16 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 - `GET /api/admin/providers` — list providers (merged JSON + DB)
 - `GET /api/admin/providers/{id}` — single provider detail (includes api_key, models)
 - `PUT /api/admin/providers/{id}` — update provider config (api_key, is_enabled, channel overrides, models)
-- `GET /api/admin/providers/{id}/fetch-models?api_key=...` — probe upstream `/v1/models` endpoint using the supplied key (not the stored one), return `[{model_id, model_name}]`
+- `GET /api/admin/providers/{id}/fetch-models?api_key=...&channel=...` — probe upstream `/v1/models` endpoint on a specific channel using the supplied key (not the stored one), return `{models: [{model_id, model_name}]}`
 - `POST /api/admin/providers/{id}/refresh` — force full route table refresh
 - `GET /api/admin/api-keys` — list API keys (with masked preview, no full key)
 - `POST /api/admin/api-keys` — create API key (returns full `mb-{uuid}` key once)
 - `GET /api/admin/api-keys/{id}` — get full API key
 - `PUT /api/admin/api-keys/{id}` — update API key (optional `name` rename and/or `is_enabled` toggle; only `is_enabled` changes refresh the auth cache)
 - `DELETE /api/admin/api-keys/{id}` — delete API key
+- `GET /api/admin/logs?page=1&page_size=50` — paginated proxy request logs (with decrypted API key previews)
 - `GET /api/admin/stats/overview` — total requests, tokens, avg latency, errors (last 7 days)
 - `GET /api/admin/stats/models` — per-model usage breakdown (last 7 days)
 - `GET /api/admin/stats/daily?days=7` — daily usage for last N days
 - `GET /api/admin/stats/hourly` — hourly token usage (last 7 days)
-- `GET /api/admin/settings` — return `{"proxy_base_url":"http://<host>:<port>"}` (proxy `host` normalized to `localhost` when bound to `0.0.0.0`/`::`); consumed by the「接入指南」help page to render copy-paste-ready client config snippets
+- `GET /api/admin/settings` — return `{"proxy_base_url":"http://<host>:<port>","version":"0.x.y"}`; consumed by the「接入指南」help page to render copy-paste-ready client config snippets and the page footer
