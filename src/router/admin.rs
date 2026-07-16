@@ -195,6 +195,21 @@ pub async fn refresh_provider(
     }
 }
 
+/// 返回该 provider 自上次查看以来的上游变更明细，并落地 baseline（打开即清零角标）。
+pub async fn model_changes(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match provider_svc::get_model_changes(&state.db, &id).await {
+        Ok(channels) => Json(serde_json::json!({ "channels": channels })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 // ===== API Key handlers =====
 
 pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {

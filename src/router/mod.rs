@@ -61,6 +61,10 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
             axum::routing::get(admin::fetch_provider_models),
         )
         .route(
+            "/providers/{id}/model-changes",
+            axum::routing::get(admin::model_changes),
+        )
+        .route(
             "/providers/{id}/refresh",
             axum::routing::post(admin::refresh_provider),
         )
