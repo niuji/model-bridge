@@ -187,5 +187,36 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .await
         .ok();
 
+    // 上游模型快照：探测成功后按 (provider, channel) 整体替换；失败时保留旧值。
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS upstream_models (
+            provider_id   TEXT NOT NULL,
+            channel_type  TEXT NOT NULL,
+            model_id      TEXT NOT NULL,
+            model_name    TEXT NOT NULL DEFAULT '',
+            last_seen_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (provider_id, channel_type, model_id)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // baseline：上次打开"变更"弹窗时落地的上游快照（结构与 upstream_models 一致，无 last_seen_at）。
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS upstream_models_seen (
+            provider_id   TEXT NOT NULL,
+            channel_type  TEXT NOT NULL,
+            model_id      TEXT NOT NULL,
+            model_name    TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (provider_id, channel_type, model_id)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
