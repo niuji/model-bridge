@@ -60,14 +60,10 @@ pub async fn list_providers(
         let drift = {
             let cur = cur_by_prov.get(&def.id).map(|v| v.as_slice()).unwrap_or(&[]);
             let base = base_by_prov.get(&def.id).map(|v| v.as_slice()).unwrap_or(&[]);
-            if base.is_empty() {
-                None // 从未打开过变更弹窗 → 不报角标
-            } else {
-                let d = compute_drift(cur, base);
-                let new = d.iter().map(|c| c.added.len() as i64).sum();
-                let removed = d.iter().map(|c| c.removed.len() as i64).sum();
-                Some(DriftSummary { new, removed })
-            }
+            let d = compute_drift(cur, base);
+            let new = d.iter().map(|c| c.added.len() as i64).sum();
+            let removed = d.iter().map(|c| c.removed.len() as i64).sum();
+            Some(DriftSummary { new, removed })
         };
         result.push(ProviderSummary {
             id: def.id.clone(),
@@ -637,14 +633,10 @@ async fn land_baseline(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<(
 }
 
 /// 计算并返回 drift（current vs 旧 baseline），然后落地 baseline（打开即清零）。
-/// 首看防灌水：baseline 为空时不报全量新增，仅落地。
+/// 初始化场景：baseline 为空时，所有 current 模型视为新增，确保首次打开即有提醒。
 pub async fn get_model_changes(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<ChannelDrift>> {
     let current = fetch_current_snapshot(pool, provider_id).await?;
     let baseline = fetch_baseline_snapshot(pool, provider_id).await?;
-    if baseline.is_empty() {
-        land_baseline(pool, provider_id).await?;
-        return Ok(Vec::new());
-    }
     let drift = compute_drift(&current, &baseline);
     land_baseline(pool, provider_id).await?;
     Ok(drift)
