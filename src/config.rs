@@ -39,7 +39,15 @@ pub struct BridgeConfig {
     pub refresh_interval_min: u64,
     /// 后台探测上游 /v1/models 的间隔（分钟），与路由刷新解耦。
     /// 默认 1440（1 天）。模型目录变化是天/周级，日频已足够。
+    /// serde default 保证旧配置文件（无此字段）仍可解析为 1440。
+    #[serde(default = "default_probe_interval_min")]
     pub probe_interval_min: u64,
+}
+
+/// `probe_interval_min` 的 serde 默认值：缺省时取 1 天，而非 u64::default()=0
+/// （否则旧配置会让探测退化为每分钟一次）。
+fn default_probe_interval_min() -> u64 {
+    1440
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -131,4 +139,23 @@ pub fn load_providers() -> anyhow::Result<Vec<ProviderDef>> {
     }
 
     Ok(providers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_defaults_probe_interval_when_absent() {
+        // 旧配置（无 probe_interval_min）应解析成功并默认 1440
+        let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\n").unwrap();
+        assert_eq!(cfg.refresh_interval_min, 5);
+        assert_eq!(cfg.probe_interval_min, 1440);
+    }
+
+    #[test]
+    fn bridge_respects_explicit_probe_interval() {
+        let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\nprobe_interval_min = 30\n").unwrap();
+        assert_eq!(cfg.probe_interval_min, 30);
+    }
 }
