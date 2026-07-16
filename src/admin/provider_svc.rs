@@ -569,11 +569,58 @@ pub fn select_probe_targets(
     out
 }
 
+async fn fetch_current_snapshot(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<UpstreamModelRow>> {
+    Ok(sqlx::query_as::<_, UpstreamModelRow>(
+        "SELECT provider_id, channel_type, model_id, model_name FROM upstream_models WHERE provider_id = ?",
+    )
+    .bind(provider_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn fetch_baseline_snapshot(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<UpstreamModelRow>> {
+    Ok(sqlx::query_as::<_, UpstreamModelRow>(
+        "SELECT provider_id, channel_type, model_id, model_name FROM upstream_models_seen WHERE provider_id = ?",
+    )
+    .bind(provider_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// 落地 baseline := 当前 upstream_models（per provider，事务）
+async fn land_baseline(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM upstream_models_seen WHERE provider_id = ?")
+        .bind(provider_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO upstream_models_seen (provider_id, channel_type, model_id, model_name)
+         SELECT provider_id, channel_type, model_id, model_name FROM upstream_models WHERE provider_id = ?",
+    )
+    .bind(provider_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// 计算并返回 drift（current vs 旧 baseline），然后落地 baseline（打开即清零）。
+/// 首看防灌水：baseline 为空时不报全量新增，仅落地。
+pub async fn get_model_changes(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<ChannelDrift>> {
+    let current = fetch_current_snapshot(pool, provider_id).await?;
+    let baseline = fetch_baseline_snapshot(pool, provider_id).await?;
+    if baseline.is_empty() {
+        land_baseline(pool, provider_id).await?;
+        return Ok(Vec::new());
+    }
+    let drift = compute_drift(&current, &baseline);
+    land_baseline(pool, provider_id).await?;
+    Ok(drift)
+}
+
 #[cfg(test)]
 mod drift_tests {
     use super::*;
     use crate::config::{ChannelDef, ProviderDef};
     use crate::db::models::{ChannelDrift, ModelEntry, UpstreamModelRow};
+    use sqlx::SqlitePool;
 
     fn row(ct: &str, id: &str, name: &str) -> UpstreamModelRow {
         UpstreamModelRow {
@@ -686,5 +733,47 @@ mod drift_tests {
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].channel_type, "openai_chat");
         assert_eq!(t[0].models_endpoint, "https://x/v1/models");
+    }
+
+    async fn mempool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_up(pool: &SqlitePool, pid: &str, ct: &str, rows: &[(&str, &str)]) {
+        for (id, name) in rows {
+            sqlx::query(
+                "INSERT INTO upstream_models (provider_id, channel_type, model_id, model_name) VALUES (?, ?, ?, ?)",
+            )
+            .bind(pid).bind(ct).bind(id).bind(name)
+            .execute(pool).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn model_changes_returns_drift_then_lands_baseline() {
+        let pool = mempool().await;
+        // 当前快照：a, b（openai_chat 通道）
+        insert_up(&pool, "p", "openai_chat", &[("a", "A"), ("b", "B")]).await;
+
+        // 第一次：baseline 为空 → 不灌水，返回空并落地 baseline={a,b}
+        let d1 = get_model_changes(&pool, "p").await.unwrap();
+        assert!(d1.is_empty(), "first view must not flood");
+
+        // 上游变化：下架 a、新增 c → current={b,c}
+        sqlx::query("DELETE FROM upstream_models WHERE provider_id = 'p'")
+            .execute(&pool).await.unwrap();
+        insert_up(&pool, "p", "openai_chat", &[("b", "B"), ("c", "C")]).await;
+
+        let d2 = get_model_changes(&pool, "p").await.unwrap();
+        let added: Vec<String> = d2.iter().flat_map(|c| c.added.iter().map(|m| m.model_id.clone())).collect();
+        let removed: Vec<String> = d2.iter().flat_map(|c| c.removed.iter().map(|m| m.model_id.clone())).collect();
+        assert_eq!(added, vec!["c".to_string()]);
+        assert_eq!(removed, vec!["a".to_string()]);
+
+        // 第三次：baseline 已={b,c}、current={b,c} → 无变化
+        let d3 = get_model_changes(&pool, "p").await.unwrap();
+        assert!(d3.is_empty());
     }
 }
