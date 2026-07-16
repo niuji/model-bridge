@@ -173,6 +173,16 @@ Routes are rebuilt by `provider_svc::refresh_routes()`, which:
 
 Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refresh_interval_min`), and after any provider update via the admin API.
 
+### Upstream Drift Detection
+
+A separate periodic task (`probe_upstream_models`, on its own `bridge.probe_interval_min` — default 1440 min / 1 day, decoupled from route refresh) probes each enabled channel's `/v1/models` via the existing `fetch_models_from_api` (using the stored provider key) and transactionally overwrites that (provider, channel) row set in `upstream_models` (DELETE+INSERT; on failure the old snapshot is kept, only a warn is logged). `upstream_models` holds the latest successful upstream list per channel.
+
+Drift is **derived on read, not stored**: `compute_drift` takes the symmetric difference of the current `upstream_models` snapshot vs `upstream_models_seen` — the **baseline**, i.e. the upstream list as of the last time the user opened that provider's "上游变更" modal. New = upstream has / baseline lacks; Removed = baseline has / upstream lacks. Comparison is per-channel + case-insensitive on `model_id`; `model_name`-only differences are ignored (renames skipped). **`provider_models` (the user's curated selection) is not part of the diff** — only routing + actionability — so deliberately-unadopted models are never flagged as "new".
+
+- `GET /api/admin/providers` adds `drift: {new, removed}` per provider (count only; omitted when the baseline is empty / never viewed, to avoid a first-view flood).
+- `GET /api/admin/providers/{id}/model-changes` returns per-channel `{added, removed}` lists and **lands the baseline** (`upstream_models_seen := upstream_models`) as a side effect — opening the modal clears the card badge until the next upstream change. First view (empty baseline) returns no drift and just lands the baseline.
+- The card badge (`✚N ✖M`) opens a read-only "上游变更" modal listing the changes; adopting/removing models still happens in the existing config modal — this feature only *notices* changes, it doesn't apply them.
+
 ### Key Design Decisions
 
 - **In-memory route tables.** Three `HashMap<String, ProviderRoute>` in `AppState` — `openai_chat_routes`, `openai_responses_routes`, `anthropic_routes` — one per client endpoint. Keys are lowercased for case-insensitive lookup; `ProviderRoute` carries the canonical `model_id`/`model_name`/`base_url`/`api_key`. No DB lookup per request.
@@ -182,6 +192,7 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 - **API key at rest.** The upstream provider API key (`provider_config.api_key`) is stored in plaintext. Client-facing `mb-xxx` keys are stored **twice** in `api_keys`: as a SHA-256 `key_hash` (used by `auth_middleware` for proxy auth) and, to support the "reveal key later" UI feature, as `api_key`. When `[database] encryption_key` is set (base64 of 32 bytes), `api_key` is encrypted at rest via AES-256-GCM (`crypto::seal`/`reveal`); decryption falls back to returning the raw value for legacy plaintext rows. Without a key configured, `api_key` is stored in plaintext (acceptable only while admin is loopback-bound).
 - **SSE streaming support.** Upstream SSE responses are proxied through a tokio mpsc channel with line-buffered parsing. Usage is accumulated via "last non-zero value" (not summation) to handle providers where multiple SSE events carry cumulative totals. See [SSE Streaming & Usage Extraction](#sse-streaming--usage-extraction) above for details.
 - **SSRF hardening.** HTTP redirects are disabled on the shared `reqwest::Client`. `refresh_routes()` skips channels whose `base_url` is not `http(s)` (`is_safe_base_url` check), logging a warning — this prevents `file://` or other local-protocol URLs from being used as upstream targets.
+- **Upstream drift detection.** A separate `probe_interval_min` (default 1 day) task probes each enabled channel's `/v1/models` into an `upstream_models` snapshot; drift is the symmetric diff vs `upstream_models_seen` (the last-viewed baseline) — **not** vs `provider_models` (the curated set). A card badge + read-only "上游变更" modal surface it; opening the modal lands the baseline and clears the badge. See [Upstream Drift Detection](#upstream-drift-detection).
 - **Tests.** The `crypto` module has unit tests (seal/reveal roundtrip, key parsing, legacy fallback). The `proxy.rs` module has unit tests covering all pure functions: SSE data-line parsing, model extraction from request bodies, model name canonicalization, `stream_options` injection, usage extraction/normalization across both protocols, SSE event usage parsing, API key masking, and base URL safety checks. Use `cargo test` to run all tests.
 
 ## Source Structure
@@ -199,7 +210,7 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 | `src/router/admin.rs` | Admin HTTP handlers: provider CRUD, API key CRUD, stats queries |
 | `src/admin/provider_svc.rs` | Provider business logic: JSON+DB merge, route refresh, `/models` endpoint probing, CRUD |
 | `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly |
-| `src/db/schema.rs` | SQLite migrations: `provider_config`, `provider_channel_config`, `provider_models`, `api_keys`, `usage_records` |
+| `src/db/schema.rs` | SQLite migrations: `provider_config`, `provider_channel_config`, `provider_models`, `api_keys`, `usage_records`, `upstream_models`, `upstream_models_seen` |
 | `src/db/models.rs` | SQLx `FromRow` structs and merge-result DTOs (`ProviderDetail`, `ProviderSummary`, `ChannelDetail`) |
 | `src/middleware/mod.rs` + `auth.rs` | API key auth: `auth_middleware` (wired onto the proxy router), `refresh_api_key_cache()`, `AuthenticatedKey` extension type |
 | `web/src/` | Vue 3 SPA: `Dashboard.vue`, `Providers.vue`, `ApiKeys.vue`, `Logs.vue`, `Help.vue` (接入指南). Naive UI components, ECharts charts |
@@ -211,6 +222,7 @@ Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refr
 - `GET /api/admin/providers/{id}` — single provider detail (includes api_key, models)
 - `PUT /api/admin/providers/{id}` — update provider config (api_key, is_enabled, channel overrides, models)
 - `GET /api/admin/providers/{id}/fetch-models?api_key=...&channel=...` — probe upstream `/v1/models` endpoint on a specific channel using the supplied key (not the stored one), return `{models: [{model_id, model_name}]}`
+- `GET /api/admin/providers/{id}/model-changes` — return per-channel upstream drift (added/removed) since the last view and land the baseline (clearing the card badge); see [Upstream Drift Detection](#upstream-drift-detection)
 - `POST /api/admin/providers/{id}/refresh` — force full route table refresh
 - `GET /api/admin/api-keys` — list API keys (with masked preview, no full key)
 - `POST /api/admin/api-keys` — create API key (returns full `mb-{uuid}` key once)
