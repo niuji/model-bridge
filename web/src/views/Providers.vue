@@ -35,6 +35,18 @@
                 <span class="status-word">{{ p.is_enabled ? '在线' : '停用' }}</span>
                 <span class="meta-sep">·</span>
                 <span>{{ enabledModelTotal(p) }} 模型</span>
+                <span
+                  v-if="p.drift && (p.drift.new > 0 || p.drift.removed > 0)"
+                  class="drift-badge mono"
+                  role="button"
+                  tabindex="0"
+                  :title="`自上次查看：${p.drift!.new} 新增 / ${p.drift!.removed} 下架，点击查看`"
+                  @click.stop="openChanges(p)"
+                  @keydown.enter.prevent="openChanges(p)"
+                >
+                  <span v-if="p.drift!.new" class="d-add">✚{{ p.drift!.new }}</span>
+                  <span v-if="p.drift!.removed" class="d-rem">✖{{ p.drift!.removed }}</span>
+                </span>
               </div>
             </div>
             <n-switch :value="p.is_enabled" size="small" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
@@ -238,18 +250,47 @@
         </n-space>
       </template>
     </n-modal>
+
+    <n-modal
+      v-model:show="showChanges"
+      :title="`${changesProvider?.name} · 上游变更`"
+      style="width: 560px"
+      preset="card"
+      class="changes-modal"
+    >
+      <n-spin :show="changesLoading">
+        <div v-if="!changesData.length" class="changes-empty mono">自上次查看以来无变化</div>
+        <div v-for="ch in changesData" :key="ch.channel_type" class="changes-channel">
+          <div class="changes-channel-label mono">{{ channelLabel(ch.channel_type) }}</div>
+          <div v-if="ch.added.length" class="changes-group added">
+            <span class="changes-group-label">✚ 新增 ({{ ch.added.length }})</span>
+            <div v-for="(m, i) in ch.added" :key="'a' + i" class="changes-row mono">{{ m.model_id }}</div>
+          </div>
+          <div v-if="ch.removed.length" class="changes-group removed">
+            <span class="changes-group-label">✖ 下架 ({{ ch.removed.length }})</span>
+            <div v-for="(m, i) in ch.removed" :key="'r' + i" class="changes-row mono">{{ m.model_id }}</div>
+          </div>
+        </div>
+      </n-spin>
+      <template #footer>
+        <n-space justify="end"><n-button @click="showChanges = false">关闭</n-button></n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NCheckbox, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NSwitch, useMessage } from 'naive-ui'
 
 const message = useMessage()
 const API_BASE = '/api/admin'
 
 interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean; model_count: number }
-interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[] }
+interface DriftSummary { new: number; removed: number }
+interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary }
+interface ChangeEntry { model_id: string; model_name: string }
+interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
 interface ProviderDetail { id: string; name: string; icon?: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
 interface ModelForm { model_id: string; model_name: string }
@@ -270,6 +311,10 @@ const showCloseConfirm = ref(false)
 const showApiKey = ref(false)
 const initialSnapshot = ref('')
 const diffResult = ref<DiffResult>({ added: [], removed: [], renamed: [] })
+const showChanges = ref(false)
+const changesProvider = ref<ProviderSummary | null>(null)
+const changesData = ref<ChannelChange[]>([])
+const changesLoading = ref(false)
 const form = ref<FormState>({ api_key: '', is_enabled: false, channels: [], modelsByChannel: {} })
 const selectedChannel = ref('')
 
@@ -367,6 +412,29 @@ async function fetchModels() {
     fetching.value = false
   }
 }
+
+async function openChanges(p: ProviderSummary) {
+  changesProvider.value = p
+  showChanges.value = true
+  changesLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE}/providers/${p.id}/model-changes`)
+    if (res.ok) {
+      const data = await res.json()
+      changesData.value = (data.channels || []) as ChannelChange[]
+    } else {
+      message.error('获取上游变更失败')
+      changesData.value = []
+    }
+  } finally {
+    changesLoading.value = false
+  }
+}
+
+// 变更弹窗关闭后刷新卡片列表，让角标清零（baseline 已在打开时由后端落地）
+watch(showChanges, (now, prev) => {
+  if (prev && !now) loadProviders()
+})
 
 function computeDiff(local: ModelForm[], remote: { model_id: string; model_name: string }[]): DiffResult {
   const norm = (m: ModelForm) => m.model_name.trim() || m.model_id
@@ -665,6 +733,24 @@ onMounted(loadProviders)
 .diff-group-label.removed { color: #b3261e; }
 .diff-group-label.renamed { color: #b5842b; }
 .diff-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+
+/* ---- drift badge + changes modal ---- */
+.drift-badge { display: inline-flex; gap: 5px; align-items: center; padding: 1px 7px; border-radius: 999px; background: #eef7f0; border: 1px solid #cbe6d3; font-size: 10px; font-weight: 600; cursor: pointer; line-height: 1.5; transition: background 0.15s; }
+.drift-badge:hover { background: #dcefe1; }
+.drift-badge:focus-visible { outline: 2px solid rgba(46,168,106,0.5); outline-offset: 1px; }
+.d-add { color: #1d7a4c; }
+.d-rem { color: #b3261e; }
+.changes-modal { --n-title-text-color: #17140f; }
+.changes-empty { color: #a89e8c; text-align: center; padding: 24px 0; font-size: 13px; }
+.changes-channel { border: 1px solid #e5dccd; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.changes-channel:last-child { margin-bottom: 0; }
+.changes-channel-label { font-size: 11px; font-weight: 600; color: #8c7f6c; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+.changes-group { margin-bottom: 8px; }
+.changes-group:last-child { margin-bottom: 0; }
+.changes-group-label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.changes-group.added .changes-group-label { color: #1d7a4c; }
+.changes-group.removed .changes-group-label { color: #b3261e; }
+.changes-row { font-size: 13px; color: #4b443a; padding: 2px 0 2px 12px; }
 
 @media (max-width: 780px) {
   .model-table-header,
