@@ -15,6 +15,27 @@ pub async fn list_providers(
     defs: &[ProviderDef],
 ) -> anyhow::Result<Vec<ProviderSummary>> {
     let mut result = Vec::new();
+
+    // 漂移计数：一次性载入上游当前快照与 baseline，按 provider 分组算对称差（避免 N+1）
+    let current_all: Vec<UpstreamModelRow> = sqlx::query_as::<_, UpstreamModelRow>(
+        "SELECT provider_id, channel_type, model_id, model_name FROM upstream_models",
+    )
+    .fetch_all(pool)
+    .await?;
+    let baseline_all: Vec<UpstreamModelRow> = sqlx::query_as::<_, UpstreamModelRow>(
+        "SELECT provider_id, channel_type, model_id, model_name FROM upstream_models_seen",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut cur_by_prov: HashMap<String, Vec<UpstreamModelRow>> = HashMap::new();
+    for r in current_all {
+        cur_by_prov.entry(r.provider_id.clone()).or_default().push(r);
+    }
+    let mut base_by_prov: HashMap<String, Vec<UpstreamModelRow>> = HashMap::new();
+    for r in baseline_all {
+        base_by_prov.entry(r.provider_id.clone()).or_default().push(r);
+    }
+
     for def in defs {
         let config = get_provider_config(pool, &def.id).await;
         let channel_configs = get_channel_configs(pool, &def.id).await;
@@ -36,13 +57,25 @@ pub async fn list_providers(
             ch.model_count = *counts.get(&ch.channel_type).unwrap_or(&0);
         }
 
+        let drift = {
+            let cur = cur_by_prov.get(&def.id).map(|v| v.as_slice()).unwrap_or(&[]);
+            let base = base_by_prov.get(&def.id).map(|v| v.as_slice()).unwrap_or(&[]);
+            if base.is_empty() {
+                None // 从未打开过变更弹窗 → 不报角标
+            } else {
+                let d = compute_drift(cur, base);
+                let new = d.iter().map(|c| c.added.len() as i64).sum();
+                let removed = d.iter().map(|c| c.removed.len() as i64).sum();
+                Some(DriftSummary { new, removed })
+            }
+        };
         result.push(ProviderSummary {
             id: def.id.clone(),
             name: def.name.clone(),
             icon: def.icon.clone(),
             is_enabled,
             channels,
-            drift: None,
+            drift,
         });
     }
     Ok(result)
