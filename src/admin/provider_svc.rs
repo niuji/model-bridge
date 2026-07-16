@@ -521,9 +521,58 @@ pub fn compute_drift(current: &[UpstreamModelRow], baseline: &[UpstreamModelRow]
     out
 }
 
+/// 一轮探测的目标
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeTarget {
+    pub provider_id: String,
+    pub channel_type: String,
+    pub models_endpoint: String,
+    pub api_key: String,
+}
+
+/// 选出本轮要探测的 (provider, channel)：provider 已启用且有 api_key；
+/// 通道已启用、有 models_endpoint、且 models_endpoint 为 http(s)（即真正会被 GET 的 URL）。
+pub fn select_probe_targets(
+    defs: &[ProviderDef],
+    provider_enabled: &HashMap<String, bool>,
+    provider_api_key: &HashMap<String, String>,
+    channel_enabled: &HashMap<(String, String), bool>,
+) -> Vec<ProbeTarget> {
+    let mut out = Vec::new();
+    for def in defs {
+        if !provider_enabled.get(&def.id).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(api_key) = provider_api_key.get(&def.id).filter(|k| !k.is_empty()).cloned() else {
+            continue;
+        };
+        for ch in &def.channels {
+            let ch_on = channel_enabled
+                .get(&(def.id.clone(), ch.channel_type.clone()))
+                .copied()
+                .unwrap_or(true);
+            if !ch_on {
+                continue;
+            }
+            let Some(ep) = ch.models_endpoint.as_deref() else { continue };
+            if !is_safe_base_url(ep) {
+                continue;
+            }
+            out.push(ProbeTarget {
+                provider_id: def.id.clone(),
+                channel_type: ch.channel_type.clone(),
+                models_endpoint: ep.to_string(),
+                api_key: api_key.clone(),
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod drift_tests {
     use super::*;
+    use crate::config::{ChannelDef, ProviderDef};
     use crate::db::models::{ChannelDrift, ModelEntry, UpstreamModelRow};
 
     fn row(ct: &str, id: &str, name: &str) -> UpstreamModelRow {
@@ -594,5 +643,48 @@ mod drift_tests {
         let cur = vec![row("openai_chat", "glm-5.2", "new name")];
         let base = vec![row("openai_chat", "glm-5.2", "old name")];
         assert_eq!(compute_drift(&cur, &base), vec![]);
+    }
+
+    fn chan(ct: &str, base: &str, ep: Option<&str>) -> ChannelDef {
+        ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from) }
+    }
+    fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
+        ProviderDef { id: id.into(), name: id.into(), icon: None, channels: chans }
+    }
+
+    #[test]
+    fn probe_skips_disabled_provider_and_missing_key() {
+        let defs = vec![def("a", vec![chan("openai_chat", "https://x/v1", Some("https://x/v1/models"))])];
+        let mut enabled = std::collections::HashMap::new();
+        enabled.insert("a".to_string(), false);
+        let mut keys = std::collections::HashMap::new();
+        keys.insert("a".to_string(), "sk-1".to_string());
+        assert!(select_probe_targets(&defs, &enabled, &keys, &Default::default()).is_empty());
+
+        // 启用但无 key → 仍跳过
+        enabled.insert("a".to_string(), true);
+        keys.remove("a");
+        assert!(select_probe_targets(&defs, &enabled, &keys, &Default::default()).is_empty());
+    }
+
+    #[test]
+    fn probe_skips_disabled_channel_missing_endpoint_nonhttp() {
+        let defs = vec![def("a", vec![
+            chan("openai_chat", "https://x/v1", Some("https://x/v1/models")),       // 命中
+            chan("openai_responses", "https://x/v1", Some("https://x/v1/models2")), // 通道关
+            chan("anthropic", "https://x/v1", None),                                // 无 endpoint
+            chan("openai_chat2", "https://x/v1", Some("file:///etc/passwd")),       // 非 http
+        ])];
+        let mut enabled = std::collections::HashMap::new();
+        enabled.insert("a".to_string(), true);
+        let mut keys = std::collections::HashMap::new();
+        keys.insert("a".to_string(), "sk-1".to_string());
+        let mut ch_en = std::collections::HashMap::new();
+        ch_en.insert(("a".to_string(), "openai_responses".to_string()), false);
+
+        let t = select_probe_targets(&defs, &enabled, &keys, &ch_en);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].channel_type, "openai_chat");
+        assert_eq!(t[0].models_endpoint, "https://x/v1/models");
     }
 }
