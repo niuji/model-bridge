@@ -37,6 +37,9 @@ pub struct DatabaseConfig {
 pub struct BridgeConfig {
     /// 后台自动刷新模型列表间隔（分钟）
     pub refresh_interval_min: u64,
+    /// 后台探测上游 /v1/models 的间隔（分钟），与路由刷新解耦。
+    /// 默认 1440（1 天）。模型目录变化是天/周级，日频已足够。
+    pub probe_interval_min: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -78,6 +81,7 @@ impl Default for AppConfig {
             },
             bridge: BridgeConfig {
                 refresh_interval_min: 10,
+                probe_interval_min: 1440,
             },
         }
     }
