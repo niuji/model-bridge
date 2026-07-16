@@ -484,9 +484,11 @@ pub fn is_safe_base_url(url: &str) -> bool {
 /// 按 (channel_type, model_id 小写) 比对——同通道大小写不敏感、跨通道不误配。model_name 变化不算（跳过改名）。
 pub fn compute_drift(current: &[UpstreamModelRow], baseline: &[UpstreamModelRow]) -> Vec<ChannelDrift> {
     use std::collections::{HashMap, HashSet};
-    let key = |r: &UpstreamModelRow| (r.channel_type.clone(), r.model_id.to_lowercase());
-    let base_keys: HashSet<(String, String)> = baseline.iter().map(|r| key(r)).collect();
-    let cur_keys: HashSet<(String, String)> = current.iter().map(|r| key(r)).collect();
+    fn key(r: &UpstreamModelRow) -> (String, String) {
+        (r.channel_type.clone(), r.model_id.to_lowercase())
+    }
+    let base_keys: HashSet<(String, String)> = baseline.iter().map(key).collect();
+    let cur_keys: HashSet<(String, String)> = current.iter().map(key).collect();
 
     let mut by_channel: HashMap<String, ChannelDrift> = HashMap::new();
     for r in current {
@@ -613,6 +615,72 @@ pub async fn get_model_changes(pool: &SqlitePool, provider_id: &str) -> anyhow::
     let drift = compute_drift(&current, &baseline);
     land_baseline(pool, provider_id).await?;
     Ok(drift)
+}
+
+/// 用本轮探测结果整体替换某 (provider, channel) 的上游快照（事务）。
+async fn replace_upstream_snapshot(
+    pool: &SqlitePool,
+    provider_id: &str,
+    channel_type: &str,
+    models: &[(String, String)],
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM upstream_models WHERE provider_id = ? AND channel_type = ?")
+        .bind(provider_id).bind(channel_type).execute(&mut *tx).await?;
+    for (id, name) in models {
+        sqlx::query(
+            "INSERT INTO upstream_models (provider_id, channel_type, model_id, model_name) VALUES (?, ?, ?, ?)",
+        )
+        .bind(provider_id).bind(channel_type).bind(id).bind(name)
+        .execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// 后台探测上游 /v1/models，刷新 upstream_models 快照。失败保留旧快照（仅 warn）。
+pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> {
+    #[derive(sqlx::FromRow)]
+    struct CfgRow { provider_id: String, is_enabled: bool, api_key: String }
+    #[derive(sqlx::FromRow)]
+    struct ChCfgRow { provider_id: String, channel_type: String, is_enabled: bool }
+
+    let cfgs: Vec<CfgRow> = sqlx::query_as::<_, CfgRow>(
+        "SELECT provider_id, is_enabled, api_key FROM provider_config",
+    )
+    .fetch_all(&state.db).await?;
+    let ch_cfgs: Vec<ChCfgRow> = sqlx::query_as::<_, ChCfgRow>(
+        "SELECT provider_id, channel_type, is_enabled FROM provider_channel_config",
+    )
+    .fetch_all(&state.db).await?;
+
+    let mut provider_enabled: HashMap<String, bool> = HashMap::new();
+    let mut provider_api_key: HashMap<String, String> = HashMap::new();
+    for c in &cfgs {
+        provider_enabled.insert(c.provider_id.clone(), c.is_enabled);
+        provider_api_key.insert(c.provider_id.clone(), c.api_key.clone());
+    }
+    let mut channel_enabled: HashMap<(String, String), bool> = HashMap::new();
+    for c in &ch_cfgs {
+        channel_enabled.insert((c.provider_id.clone(), c.channel_type.clone()), c.is_enabled);
+    }
+
+    let targets = select_probe_targets(
+        &state.provider_defs, &provider_enabled, &provider_api_key, &channel_enabled,
+    );
+
+    for t in targets {
+        tracing::debug!("probing upstream '{}' '{}' at {}", t.provider_id, t.channel_type, t.models_endpoint);
+        match fetch_models_from_api(&state.client, &state.provider_defs, &t.provider_id, &t.channel_type, &t.api_key).await {
+            Ok(models) => {
+                if let Err(e) = replace_upstream_snapshot(&state.db, &t.provider_id, &t.channel_type, &models).await {
+                    tracing::warn!("upstream snapshot persist failed for '{}' '{}': {}", t.provider_id, t.channel_type, e);
+                }
+            }
+            Err(e) => tracing::warn!("upstream probe failed for '{}' '{}': {}", t.provider_id, t.channel_type, e),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
