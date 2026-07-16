@@ -131,6 +131,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // 启动后台上游模型探测（独立节奏，默认 1 天）。tokio::time::interval 首次 tick 立即触发→启动即播种快照。
+    let probe_state = state.clone();
+    let probe_interval_min = app_config.bridge.probe_interval_min.max(1);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(probe_interval_min * 60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = admin::provider_svc::probe_upstream_models(&probe_state).await {
+                tracing::error!("Scheduled upstream probe failed: {}", e);
+            }
+        }
+    });
+
     // 构建路由
     let proxy_router = router::create_proxy_router(state.clone());
     let admin_router = router::create_admin_router(state);
