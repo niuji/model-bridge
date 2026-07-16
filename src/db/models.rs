@@ -63,6 +63,9 @@ pub struct ProviderSummary {
     pub icon: Option<String>,
     pub is_enabled: bool,
     pub channels: Vec<ChannelDetail>,
+    /// 自上次打开"上游变更"弹窗以来的变化计数（baseline 为空/未查看过时为 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift: Option<DriftSummary>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -91,4 +94,35 @@ pub struct UsageRecord {
     pub error_msg: Option<String>,
     pub client: Option<String>,
     pub created_at: NaiveDateTime,
+}
+
+/// 上游快照中的一行（FromRow，仅取 diff 所需列）
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct UpstreamModelRow {
+    pub provider_id: String,
+    pub channel_type: String,
+    pub model_id: String,
+    pub model_name: String,
+}
+
+/// 模型条目（变更弹窗展示用）
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModelEntry {
+    pub model_id: String,
+    pub model_name: String,
+}
+
+/// 单通道的上游变更（current 相对 baseline 的对称差）
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChannelDrift {
+    pub channel_type: String,
+    pub added: Vec<ModelEntry>,
+    pub removed: Vec<ModelEntry>,
+}
+
+/// 卡片角标用的变更计数
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DriftSummary {
+    pub new: i64,
+    pub removed: i64,
 }

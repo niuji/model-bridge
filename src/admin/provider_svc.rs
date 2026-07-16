@@ -42,6 +42,7 @@ pub async fn list_providers(
             icon: def.icon.clone(),
             is_enabled,
             channels,
+            drift: None,
         });
     }
     Ok(result)
