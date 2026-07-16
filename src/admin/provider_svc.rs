@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::config::{ChannelDef, ProviderDef};
 use crate::db::models::{
-    ChannelDetail, ProviderChannelConfigRow, ProviderConfigRow, ProviderDetail, ProviderModel,
-    ProviderSummary,
+    ChannelDetail, ChannelDrift, DriftSummary, ModelEntry, ProviderChannelConfigRow, ProviderConfigRow,
+    ProviderDetail, ProviderModel, ProviderSummary, UpstreamModelRow,
 };
 use crate::state::{AppState, ProviderRoute};
 
@@ -478,4 +478,121 @@ fn merge_channels(
 /// 仅允许 http(s) 的 base_url，拒绝 file:// 等本地协议及非 URL 字符串。
 pub fn is_safe_base_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
+}
+
+/// 对称差：current 相对 baseline 的新增（current 有、baseline 无）与下架（baseline 有、current 无）。
+/// 按 (channel_type, model_id 小写) 比对——同通道大小写不敏感、跨通道不误配。model_name 变化不算（跳过改名）。
+pub fn compute_drift(current: &[UpstreamModelRow], baseline: &[UpstreamModelRow]) -> Vec<ChannelDrift> {
+    use std::collections::{HashMap, HashSet};
+    let key = |r: &UpstreamModelRow| (r.channel_type.clone(), r.model_id.to_lowercase());
+    let base_keys: HashSet<(String, String)> = baseline.iter().map(|r| key(r)).collect();
+    let cur_keys: HashSet<(String, String)> = current.iter().map(|r| key(r)).collect();
+
+    let mut by_channel: HashMap<String, ChannelDrift> = HashMap::new();
+    for r in current {
+        if !base_keys.contains(&key(r)) {
+            by_channel
+                .entry(r.channel_type.clone())
+                .or_insert_with(|| ChannelDrift {
+                    channel_type: r.channel_type.clone(),
+                    added: vec![],
+                    removed: vec![],
+                })
+                .added
+                .push(ModelEntry { model_id: r.model_id.clone(), model_name: r.model_name.clone() });
+        }
+    }
+    for r in baseline {
+        if !cur_keys.contains(&key(r)) {
+            by_channel
+                .entry(r.channel_type.clone())
+                .or_insert_with(|| ChannelDrift {
+                    channel_type: r.channel_type.clone(),
+                    added: vec![],
+                    removed: vec![],
+                })
+                .removed
+                .push(ModelEntry { model_id: r.model_id.clone(), model_name: r.model_name.clone() });
+        }
+    }
+
+    let mut out: Vec<ChannelDrift> = by_channel.into_values().collect();
+    out.sort_by(|a, b| a.channel_type.cmp(&b.channel_type));
+    out
+}
+
+#[cfg(test)]
+mod drift_tests {
+    use super::*;
+    use crate::db::models::{ChannelDrift, ModelEntry, UpstreamModelRow};
+
+    fn row(ct: &str, id: &str, name: &str) -> UpstreamModelRow {
+        UpstreamModelRow {
+            provider_id: "p".into(),
+            channel_type: ct.into(),
+            model_id: id.into(),
+            model_name: name.into(),
+        }
+    }
+
+    #[test]
+    fn added_when_current_has_baseline_missing() {
+        let cur = vec![row("openai_chat", "glm-5.2-air", "GLM 5.2 Air")];
+        let d = compute_drift(&cur, &[]);
+        assert_eq!(
+            d,
+            vec![ChannelDrift {
+                channel_type: "openai_chat".into(),
+                added: vec![ModelEntry { model_id: "glm-5.2-air".into(), model_name: "GLM 5.2 Air".into() }],
+                removed: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn removed_when_baseline_has_current_missing() {
+        let base = vec![row("openai_chat", "glm-4-air", "GLM 4 Air")];
+        let d = compute_drift(&[], &base);
+        assert_eq!(
+            d,
+            vec![ChannelDrift {
+                channel_type: "openai_chat".into(),
+                added: vec![],
+                removed: vec![ModelEntry { model_id: "glm-4-air".into(), model_name: "GLM 4 Air".into() }],
+            }]
+        );
+    }
+
+    #[test]
+    fn case_insensitive_match_not_flagged() {
+        // current GLM-5.2 / baseline glm-5.2 → 同一模型，不算新增也不算下架
+        let cur = vec![row("openai_chat", "GLM-5.2", "x")];
+        let base = vec![row("openai_chat", "glm-5.2", "y")];
+        assert_eq!(compute_drift(&cur, &base), vec![]);
+    }
+
+    #[test]
+    fn per_channel_isolation() {
+        // 同 model_id 不同通道 → 互不抵消：anthropic 新增、openai_chat 下架
+        let cur = vec![row("anthropic", "claude-x", "c")];
+        let base = vec![row("openai_chat", "claude-x", "c")];
+        let d = compute_drift(&cur, &base);
+        let mut chans: Vec<(String, usize, usize)> = d
+            .into_iter()
+            .map(|c| (c.channel_type, c.added.len(), c.removed.len()))
+            .collect();
+        chans.sort();
+        assert_eq!(
+            chans,
+            vec![("anthropic".to_string(), 1, 0), ("openai_chat".to_string(), 0, 1)]
+        );
+    }
+
+    #[test]
+    fn rename_only_is_ignored() {
+        // 同 model_id、不同 model_name → 既不在 added 也不在 removed（跳过改名）
+        let cur = vec![row("openai_chat", "glm-5.2", "new name")];
+        let base = vec![row("openai_chat", "glm-5.2", "old name")];
+        assert_eq!(compute_drift(&cur, &base), vec![]);
+    }
 }
