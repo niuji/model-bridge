@@ -111,8 +111,7 @@
                 <pre class="mono"><code>{{ copilotBaseUrl }}</code></pre>
               </div>
             </li>
-            <li>在 <strong>API Key</strong> 填入你的 <code class="chip mono">mb-</code> 密钥（见「API 密钥」页）</li>
-            <li>在 <strong>Model</strong> 填写网关中已接入的模型 id（见「供应商」页）</li>
+            <li>在 <strong>API Key</strong> 填入你的 <code class="chip mono">mb-</code> 密钥（见「API 密钥」页），插件会自动从 <code class="chip mono">{{ proxyBase }}/openai-chat/v1/models</code> 发现可用模型</li>
           </ol>
           <ul class="notes">
             <li>LLM Gateway 把 Copilot 的请求转为标准 OpenAI Chat API，网关以 <code class="chip mono">/openai-chat/v1</code> 协议接入。</li>
