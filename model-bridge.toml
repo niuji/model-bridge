@@ -16,3 +16,5 @@ encryption_key = ""
 [bridge]
 # 后台自动刷新模型列表间隔（分钟）
 refresh_interval_min = 10
+# 上游模型变更探测间隔（分钟）
+probe_interval_min = 120
