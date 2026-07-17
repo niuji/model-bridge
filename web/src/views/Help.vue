@@ -24,6 +24,15 @@
           <div class="card-tag mono">OpenAI 协议</div>
         </div>
       </div>
+      <div class="tool-card" @click="openTool('copilot')">
+        <div class="card-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="#2A84EE" role="img" aria-label="GitHub Copilot"><circle cx="12" cy="12" r="11.5" fill="#2A84EE" stroke="#2A84EE"/><path d="M9.2 8.2h5.6v1.2H9.2zm0 3h5.6v1.2H9.2zm0 3h3.2v1.2H9.2z" fill="#fff"/></svg>
+        </div>
+        <div class="card-meta">
+          <div class="card-name">GitHub Copilot</div>
+          <div class="card-tag mono">VS Code · LLM Gateway</div>
+        </div>
+      </div>
     </div>
 
     <n-modal
@@ -61,7 +70,7 @@
         </div>
 
         <!-- Cursor -->
-        <div v-else class="tool-section">
+        <div v-else-if="activeTool === 'cursor'" class="tool-section">
           <div class="detail-title">
             <span class="detail-name">Cursor</span>
             <span class="detail-tag mono">OpenAI Chat · base_url {{ proxyBase }}/openai-chat/v1</span>
@@ -69,7 +78,7 @@
           <p class="tool-desc">在 Cursor 设置里覆盖 OpenAI 基址：</p>
           <ol class="steps">
             <li>打开 <strong>Settings → Models</strong></li>
-            <li>勾选 <strong>“Override OpenAI Base URL”</strong>，填入（可复制）：
+            <li>勾选 <strong>"Override OpenAI Base URL"</strong>，填入（可复制）：
               <div class="code-block">
                 <n-button size="tiny" text class="copy-btn" @click="copy(cursorBaseUrl, 'Cursor 基址')">
                   <template #icon><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg></template>
@@ -78,9 +87,37 @@
                 <pre class="mono"><code>{{ cursorBaseUrl }}</code></pre>
               </div>
             </li>
-            <li><strong>“OpenAI API Key”</strong> 填入你的 <code class="chip mono">mb-</code> 密钥（见「API 密钥」页）</li>
+            <li><strong>"OpenAI API Key"</strong> 填入你的 <code class="chip mono">mb-</code> 密钥（见「API 密钥」页）</li>
             <li>选择一个网关已接入的模型（见「供应商」页）</li>
           </ol>
+        </div>
+
+        <!-- GitHub Copilot (VS Code via LLM Gateway) -->
+        <div v-else class="tool-section">
+          <div class="detail-title">
+            <span class="detail-name">GitHub Copilot (VS Code)</span>
+            <span class="detail-tag mono">OpenAI Chat · base_url {{ proxyBase }}/openai-chat/v1</span>
+          </div>
+          <p class="tool-desc">通过 VS Code 插件 <strong>LLM Gateway</strong> 将 GitHub Copilot 接入 Model Bridge：</p>
+          <ol class="steps">
+            <li>VS Code 扩展商店搜索安装 <strong>LLM Gateway</strong></li>
+            <li>打开 <strong>Settings → Extensions → LLM Gateway</strong></li>
+            <li>在 <strong>Base URL</strong> 填入（可复制）：
+              <div class="code-block">
+                <n-button size="tiny" text class="copy-btn" @click="copy(copilotBaseUrl, 'Copilot 基址')">
+                  <template #icon><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg></template>
+                  复制
+                </n-button>
+                <pre class="mono"><code>{{ copilotBaseUrl }}</code></pre>
+              </div>
+            </li>
+            <li>在 <strong>API Key</strong> 填入你的 <code class="chip mono">mb-</code> 密钥（见「API 密钥」页）</li>
+            <li>在 <strong>Model</strong> 填写网关中已接入的模型 id（见「供应商」页）</li>
+          </ol>
+          <ul class="notes">
+            <li>LLM Gateway 把 Copilot 的请求转为标准 OpenAI Chat API，网关以 <code class="chip mono">/openai-chat/v1</code> 协议接入。</li>
+            <li>网关 chat 通道中的模型均可直接使用，无需额外配置。</li>
+          </ul>
         </div>
       </div>
     </n-modal>
@@ -94,7 +131,7 @@ import { NButton, NModal, useMessage } from 'naive-ui'
 const message = useMessage()
 const API_BASE = '/api/admin'
 const proxyBase = ref('http://localhost:10010')
-const activeTool = ref<'claude-code' | 'cursor'>('claude-code')
+const activeTool = ref<'claude-code' | 'cursor' | 'copilot'>('claude-code')
 const showModal = ref(false)
 
 const claudeSnippet = computed(() =>
@@ -107,8 +144,9 @@ const claudeSnippet = computed(() =>
 }`)
 
 const cursorBaseUrl = computed(() => `${proxyBase.value}/openai-chat/v1`)
+const copilotBaseUrl = computed(() => `${proxyBase.value}/openai-chat/v1`)
 
-function openTool(tool: 'claude-code' | 'cursor') {
+function openTool(tool: 'claude-code' | 'cursor' | 'copilot') {
   activeTool.value = tool
   showModal.value = true
 }
