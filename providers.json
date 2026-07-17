@@ -18,6 +18,15 @@
     ]
   },
   {
+    "id": "kimi",
+    "name": "Kimi",
+    "icon": "kimi.ico",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://api.moonshot.cn/v1", "models_endpoint": "https://api.moonshot.cn/v1/models" },
+      { "type": "anthropic", "base_url": "https://api.moonshot.cn/anthropic/v1", "models_endpoint": "https://api.moonshot.cn/v1/models" }
+    ]
+  },
+  {
     "id": "minimax",
     "name": "MiniMax",
     "icon": "minimax.ico",
