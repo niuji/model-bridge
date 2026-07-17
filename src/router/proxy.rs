@@ -590,7 +590,13 @@ fn extract_usage_from_sse_event(data: &[u8], api_format: &str) -> (i64, i64, i64
         }
     }
 
-    // 通用: usage 在顶层（OpenAI 末尾 chunk / Anthropic message_delta）
+    // OpenAI Responses API: usage 在 response.usage 下
+    // (response.completed / response.in_progress 等事件)
+    if let Some(resp_usage) = v.get("response").and_then(|r| r.get("usage")) {
+        return extract_usage(resp_usage, api_format);
+    }
+
+    // 通用: usage 在顶层（OpenAI Chat 末尾 chunk / Anthropic message_delta）
     if let Some(usage) = v.get("usage") {
         return extract_usage(usage, api_format);
     }
@@ -664,12 +670,22 @@ fn extract_usage(usage: &serde_json::Value, api_format: &str) -> (i64, i64, i64,
         let cache_write = usage.get("cache_creation_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
         return (input + cache_read + cache_write, output, cache_read, cache_write);
     }
-    // openai 协议
-    let input = usage.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-    let output = usage.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+    // openai 协议: 兼容 Chat Completions (prompt_tokens/completion_tokens)
+    // 和 Responses API (input_tokens/output_tokens) 两种字段名
+    let input = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output = usage
+        .get("completion_tokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let cache_read = usage
         .get("prompt_tokens_details")
         .and_then(|d| d.get("cached_tokens"))
+        .or_else(|| usage.get("input_tokens_details").and_then(|d| d.get("cached_tokens")))
         .and_then(|v| v.as_i64())
         .or_else(|| usage.get("cached_tokens").and_then(|v| v.as_i64()))
         .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(|v| v.as_i64()))
