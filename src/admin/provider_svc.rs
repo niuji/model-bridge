@@ -850,9 +850,11 @@ mod drift_tests {
         // 当前快照：a, b（openai_chat 通道）
         insert_up(&pool, "p", "openai_chat", &[("a", "A"), ("b", "B")]).await;
 
-        // 第一次：baseline 为空 → 不灌水，返回空并落地 baseline={a,b}
+        // 第一次：baseline 为空 → 所有 current 模型视为新增（首次提醒）
         let d1 = get_model_changes(&pool, "p").await.unwrap();
-        assert!(d1.is_empty(), "first view must not flood");
+        let d1_added: Vec<String> = d1.iter().flat_map(|c| c.added.iter().map(|m| m.model_id.clone())).collect();
+        assert_eq!(d1_added, vec!["a".to_string(), "b".to_string()]);
+        assert!(d1.iter().flat_map(|c| c.removed.iter()).count() == 0);
 
         // 上游变化：下架 a、新增 c → current={b,c}
         sqlx::query("DELETE FROM upstream_models WHERE provider_id = 'p'")

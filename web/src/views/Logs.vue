@@ -110,12 +110,18 @@ function latencyPct(ms: any): number {
   return Math.round((v / maxLatency.value) * 100)
 }
 
-// 拆 user-agent 为 { product, version }：取首个空白前的 token，再按 '/' 分产品 / 版本。
-// 例：'claude-cli/2.1.201 (external, cli)' -> { product: 'claude-cli', version: '2.1.201' }
+// 拆 user-agent 为 { product, version }：
+// - 取首个空白前的 token，再按 '/' 分产品 / 版本。
+// - 例：'claude-cli/2.1.201 (external, cli)' -> { product: 'claude-cli', version: '2.1.201' }
+// - 'OpenAI/JS 5.20.1' -> { product: 'openai-js',  version: '5.20.1' }
+// - 'node'                -> { product: 'node',     version: null }
 function parseClient(ua: any): { product: string; version: string | null } | null {
   if (!ua) return null
   const s = String(ua).trim()
   if (!s) return null
+  // OpenAI/JS x.y.z: product 为 openai-js，version 为数字部分
+  const openaiJs = s.match(/^OpenAI\/JS\s+([\d.]+)/)
+  if (openaiJs) return { product: 'openai-js', version: openaiJs[1] || null }
   const sp = s.search(/\s/)
   const head = sp >= 0 ? s.slice(0, sp) : s
   const slash = head.indexOf('/')

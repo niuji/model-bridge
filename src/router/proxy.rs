@@ -80,7 +80,6 @@ pub async fn anthropic_handler(
     request: Request,
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
-    tracing::info!("Anthropic request: method={}, path={}, api_key_id={}", method, path, api_key_id.as_deref().unwrap_or("none"));
     let headers = request.headers().clone();
     let body_bytes = match axum::body::to_bytes(request.into_body(), MAX_PROXY_BODY).await {
         Ok(b) => b,
@@ -111,6 +110,30 @@ async fn handle_request(
     } else {
         "openai"
     };
+
+    // 记录客户端请求头，用于后续判断客户端类型
+    let header_str: String = headers
+        .iter()
+        .map(|(k, v)| {
+            let key = k.as_str();
+            let value = if key.eq_ignore_ascii_case("authorization")
+                || key.eq_ignore_ascii_case("x-api-key")
+            {
+                "***"
+            } else {
+                v.to_str().unwrap_or("<non-utf8>")
+            };
+            format!("{}: {}", key, value)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::info!(
+        "Proxy request: channel={}, method={}, path=/v1/{}, headers=[{}]",
+        channel,
+        method,
+        path,
+        header_str
+    );
 
     // GET /v1/models → 各端点返回各自路由表的模型列表
     if method == Method::GET && path == "models" {

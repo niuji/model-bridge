@@ -179,8 +179,8 @@ A separate periodic task (`probe_upstream_models`, on its own `bridge.probe_inte
 
 Drift is **derived on read, not stored**: `compute_drift` takes the symmetric difference of the current `upstream_models` snapshot vs `upstream_models_seen` — the **baseline**, i.e. the upstream list as of the last time the user opened that provider's "上游变更" modal. New = upstream has / baseline lacks; Removed = baseline has / upstream lacks. Comparison is per-channel + case-insensitive on `model_id`; `model_name`-only differences are ignored (renames skipped). **`provider_models` (the user's curated selection) is not part of the diff** — only routing + actionability — so deliberately-unadopted models are never flagged as "new".
 
-- `GET /api/admin/providers` adds `drift: {new, removed}` per provider (count only; omitted when the baseline is empty / never viewed, to avoid a first-view flood).
-- `GET /api/admin/providers/{id}/model-changes` returns per-channel `{added, removed}` lists and **lands the baseline** (`upstream_models_seen := upstream_models`) as a side effect — opening the modal clears the card badge until the next upstream change. First view (empty baseline) returns no drift and just lands the baseline.
+- `GET /api/admin/providers` adds `drift: {new, removed}` per provider (count only). `compute_drift` is the symmetric diff of current `upstream_models` vs `upstream_models_seen` (baseline). When baseline is empty (never opened), all current models are flagged as new — this is intentional so first-time users see all upstream models at a glance.
+- `GET /api/admin/providers/{id}/model-changes` returns per-channel `{added, removed}` lists and **lands the baseline** (`upstream_models_seen := upstream_models`) as a side effect — opening the modal clears the card badge until the next upstream change.
 - The card badge (`✚N ✖M`) opens a read-only "上游变更" modal listing the changes; adopting/removing models still happens in the existing config modal — this feature only *notices* changes, it doesn't apply them.
 
 ### Key Design Decisions
