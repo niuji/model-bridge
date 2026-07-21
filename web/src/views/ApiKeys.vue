@@ -57,11 +57,11 @@ onMounted(loadKeys)
 .create-btn { font-weight: 600; }
 .table-container { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; overflow: hidden; }
 .keys-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; }
-.key-preview-cell { display: flex; align-items: center; gap: 8px; }
-.key-preview { font-size: 12px; color: #74695a; background: #f4efe3; padding: 3px 10px; border: 1px solid #d9cfbf; border-radius: 8px; }
-.copy-btn { opacity: 0.3; transition: opacity 0.15s; color: #1d7a4c; }
-.copy-btn:hover { opacity: 1; }
-.time-cell { font-size: 12px; color: #74695a; }
+:deep(.key-preview-cell) { display: flex; align-items: center; gap: 8px; }
+:deep(.key-preview) { font-size: 12px; color: #74695a; background: #f4efe3; padding: 3px 10px; border: 1px solid #d9cfbf; border-radius: 8px; }
+:deep(.copy-btn) { opacity: 0.3; transition: opacity 0.15s; color: #1d7a4c; }
+:deep(.copy-btn:hover) { opacity: 1; }
+:deep(.time-cell) { font-size: 12px; color: #74695a; }
 :deep(.name-cell) { display: flex; align-items: center; gap: 8px; }
 :deep(.name-cell .key-name) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #17140f; }
 :deep(.rename-icon-btn) { flex-shrink: 0; opacity: 0.35; transition: opacity 0.15s; color: #74695a; }
