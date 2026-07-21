@@ -294,10 +294,12 @@ pub async fn update_provider(
         .await?;
     }
 
-    // 替换模型列表（按通道）
+    // 替换模型列表（按通道）。DELETE+INSERT 包在事务里：任一 INSERT 失败整体回滚，
+    // 避免 DELETE 已提交、列表只写回一半导致模型丢失。
+    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM provider_models WHERE provider_id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     for (channel_type, model_id, model_name) in models {
@@ -313,9 +315,10 @@ pub async fn update_provider(
         .bind(channel_type)
         .bind(model_id)
         .bind(model_name)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
 
     Ok(())
 }
@@ -870,5 +873,49 @@ mod drift_tests {
         // 第三次：baseline 已={b,c}、current={b,c} → 无变化
         let d3 = get_model_changes(&pool, "p").await.unwrap();
         assert!(d3.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod update_provider_tests {
+    use super::*;
+    use sqlx::SqlitePool;
+
+    async fn mempool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn failed_model_replace_rolls_back_delete() {
+        let pool = mempool().await;
+        // 初始：p 已有模型 m1
+        update_provider(
+            &pool,
+            "p",
+            "k",
+            true,
+            &[],
+            &[("anthropic".into(), "m1".into(), "M1".into())],
+        )
+        .await
+        .unwrap();
+
+        // 传入重复 (channel_type, model_id) → 第二条 INSERT 触发 UNIQUE 冲突，整体必须报错
+        let dup = vec![
+            ("anthropic".to_string(), "m2".to_string(), "M2".to_string()),
+            ("anthropic".to_string(), "m2".to_string(), "dup".to_string()),
+        ];
+        let res = update_provider(&pool, "p", "k", true, &[], &dup).await;
+        assert!(res.is_err());
+
+        // 关键断言：DELETE 必须随事务回滚，原有 m1 不能丢
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT model_id FROM provider_models WHERE provider_id = 'p'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, vec!["m1".to_string()]);
     }
 }
