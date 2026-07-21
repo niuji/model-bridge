@@ -42,7 +42,7 @@ cd web && npm install && npm run dev
 cd web && npm run build
 ```
 
-After `npm run build`, rebuild the Rust binary to embed the updated frontend — the binary embeds `web/dist/` at compile time via `include_dir!`. The admin server serves this embedded UI at all non-`/api/` paths.
+After `npm run build`, rebuild the Rust binary to embed the updated frontend — the binary embeds `web/dist/` at compile time via `include_dir!`. The admin server serves this embedded UI at all non-`/api/` paths. `web/dist/` is a build artifact and is **not tracked in git** — on a fresh clone you must run the frontend build before `cargo build`, otherwise `include_dir!` fails to compile.
 
 ### Client API key encryption (`encryption_key`, optional)
 

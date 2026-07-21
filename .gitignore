@@ -4,4 +4,5 @@
 *.db-wal
 *.db-journal
 web/node_modules
+web/dist
 .superpowers/
