@@ -186,7 +186,10 @@ async fn proxy_to_provider(
     // channel（usage_records 的归属通道）由入口端点唯一决定：
     // /openai-chat→openai_chat、/openai-responses→openai_responses、/anthropic→anthropic，
     // 与建表时的 channel type 1:1 对应，比 api_format 更细。
-    // 1. 从请求体提取 model 名（转小写用于路由查找）
+    // 1. 从请求体提取 model 名（转小写用于路由查找）。
+    // 此处刻意不剥 [1m]/[1M] 后缀：/v1/models 下发的后缀只是 Claude Code 在本地
+    // 开启 1M 上下文的标记，客户端请求前会自行剥除，线上模型名本就不带后缀。
+    // 照列表值原样回发的非 Claude-Code 客户端会 404，属已知取舍。
     let model = extract_model_from_body(body).unwrap_or_default();
     let model_lower = model.to_lowercase();
 

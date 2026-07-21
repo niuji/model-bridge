@@ -157,7 +157,7 @@ Before forwarding, the proxy makes these modifications to the client's request:
 3. **Auth header rewrite**: The client's `mb-xxx` key is replaced with the upstream provider's API key, formatted as `Bearer` (OpenAI-style upstreams) or `x-api-key` (Anthropic-style upstreams).
 4. **Header passthrough**: Only `content-type` and `anthropic-version` are forwarded from the client; all other client headers are dropped.
 
-Upstream request timeout is **480 seconds**. Error responses from the proxy:
+Upstream request timeout is **720 seconds**. Error responses from the proxy:
 - **413** — request body exceeds 64 MiB
 - **502** — upstream connection failed or generic upstream error
 - **504** — upstream request timed out
