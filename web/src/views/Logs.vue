@@ -382,12 +382,12 @@ onMounted(init)
 /* Token */
 .logs :deep(.token-info) { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .logs :deep(.token-main) { line-height: 1.3; font-size: 12px; }
-.logs :deep(.token-in) { color: #F59E0B; }
+.logs :deep(.token-in) { color: #475569; }
 .logs :deep(.token-arrow) { color: #CBD5E1; margin: 0 4px; }
 .logs :deep(.token-out) { color: #06B6D4; }
 .logs :deep(.token-cache) { font-size: 10px; line-height: 1.2; white-space: nowrap; }
 .logs :deep(.cache-label) { color: #94A3B8; margin-right: 6px; }
-.logs :deep(.cache-read) { color: #06B6D4; }
+.logs :deep(.cache-read) { color: #16A34A; }
 .logs :deep(.cache-sep) { color: #CBD5E1; margin: 0 4px; }
 .logs :deep(.cache-write) { color: #F59E0B; }
 
