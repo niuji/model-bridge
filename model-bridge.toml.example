@@ -32,3 +32,5 @@ refresh_interval_min = 10
 # 后台探测上游 /v1/models 的间隔（分钟），与路由刷新解耦。
 # 模型目录变化是天/周级，默认 1440（1 天）。探测成功才更新快照；失败保留旧快照。
 probe_interval_min = 1440
+# 日志保留天数（超过此天数的 usage_records 行会被每天自动清理，0 禁用自动清理）
+log_retention_days = 730

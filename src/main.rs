@@ -144,6 +144,26 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // 启动后台日志清理任务（每天一次）。
+    let cleanup_state = state.clone();
+    let retention_days = app_config.bridge.log_retention_days;
+    if retention_days > 0 {
+        tokio::spawn(async move {
+            // 首次 tick 延迟 5 分钟，避免与启动时的其他任务争抢。
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+            // 跳过首次立即 tick
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                match admin::stats_svc::prune_old_records(&cleanup_state.db, retention_days).await {
+                    Ok(0) => {} // 无过期行，不记日志
+                    Ok(n) => tracing::info!("pruned {} old usage_records (retention: {} days)", n, retention_days),
+                    Err(e) => tracing::error!("failed to prune old usage_records: {}", e),
+                }
+            }
+        });
+    }
+
     // 构建路由
     let proxy_router = router::create_proxy_router(state.clone());
     let admin_router = router::create_admin_router(state);

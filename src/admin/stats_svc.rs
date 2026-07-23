@@ -1,6 +1,18 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+/// 删除超过 retention_days 天的 usage_records。
+/// 返回被删除的行数。
+pub async fn prune_old_records(pool: &SqlitePool, retention_days: u64) -> anyhow::Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM usage_records WHERE created_at < datetime('now', ? || ' days')",
+    )
+    .bind(format!("-{}", retention_days))
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 #[derive(Serialize)]
 pub struct StatsOverview {
     pub total_requests: i64,

@@ -42,12 +42,20 @@ pub struct BridgeConfig {
     /// serde default 保证旧配置文件（无此字段）仍可解析为 1440。
     #[serde(default = "default_probe_interval_min")]
     pub probe_interval_min: u64,
+    /// 日志保留天数。超过此天数的 usage_records 行将被自动清理。
+    /// 设为 0 禁用自动清理。默认 730（2 年）。
+    #[serde(default = "default_log_retention_days")]
+    pub log_retention_days: u64,
 }
 
 /// `probe_interval_min` 的 serde 默认值：缺省时取 1 天，而非 u64::default()=0
 /// （否则旧配置会让探测退化为每分钟一次）。
 fn default_probe_interval_min() -> u64 {
     1440
+}
+
+fn default_log_retention_days() -> u64 {
+    730
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -90,6 +98,7 @@ impl Default for AppConfig {
             bridge: BridgeConfig {
                 refresh_interval_min: 10,
                 probe_interval_min: 1440,
+                log_retention_days: 730,
             },
         }
     }
@@ -151,6 +160,7 @@ mod tests {
         let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\n").unwrap();
         assert_eq!(cfg.refresh_interval_min, 5);
         assert_eq!(cfg.probe_interval_min, 1440);
+        assert_eq!(cfg.log_retention_days, 730);
     }
 
     #[test]

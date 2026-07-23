@@ -18,3 +18,5 @@ encryption_key = ""
 refresh_interval_min = 10
 # 上游模型变更探测间隔（分钟）
 probe_interval_min = 120
+# 日志保留天数（超过此天数的 usage_records 会被自动清理，0 禁用自动清理）
+log_retention_days = 730
