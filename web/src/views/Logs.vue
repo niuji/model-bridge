@@ -156,7 +156,7 @@ const columns = [
       ])
     } },
   // 「调用方」：一行排列——终端图标 + 客户端名 + 版本徽标 · 钥匙图标 + key 名。
-  // 客户端为主（#5d564b）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。
+  // 客户端为主（#475569）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。
   { title: '调用方', key: 'caller', width: 216, titleAlign: 'center' as const, render: (row: any) => {
       let keyTextClass = 'mono caller-key'
       let keyText: string
@@ -295,29 +295,29 @@ onMounted(init)
 /* ====== 模板层元素：scoped 正常生效 ====== */
 .logs { display: flex; flex-direction: column; gap: 18px; }
 
-.page-header { display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 16px; border-bottom: 1px solid #ece6da; }
-.page-title { font-size: 28px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; line-height: 1; }
-.page-subtitle { margin: 7px 0 0; color: #a89e8c; font-size: 13px; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 16px; border-bottom: 1px solid #F1F5F9; }
+.page-title { font-size: 28px; font-weight: 600; color: #0F172A; margin: 0; letter-spacing: -0.02em; line-height: 1; }
+.page-subtitle { margin: 7px 0 0; color: #94A3B8; font-size: 13px; }
 .count-block { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.count-label { font-size: 11px; color: #a89e8c; letter-spacing: 0.04em; }
-.count-num { font-size: 26px; font-weight: 600; color: #17140f; line-height: 1; }
-.count-num::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #2ea86a; margin-left: 8px; vertical-align: 5px; box-shadow: 0 0 6px rgba(46,168,106,0.5); }
+.count-label { font-size: 11px; color: #94A3B8; letter-spacing: 0.04em; }
+.count-num { font-size: 26px; font-weight: 600; color: #0F172A; line-height: 1; }
+.count-num::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #22C55E; margin-left: 8px; vertical-align: 5px; box-shadow: 0 0 6px rgba(34,197,94,0.5); }
 
-.table-container { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; overflow: hidden; }
-.logs-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; --n-td-color-hover: #f9f5ec; min-height: 200px; }
+.table-container { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden; }
+.logs-table { --n-td-color: #FFFFFF; --n-th-color: #F8FAFC; --n-td-color-hover: #F1F5F9; min-height: 200px; }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 70px 20px 80px; text-align: center; }
-.empty-icon { width: 56px; height: 56px; border-radius: 50%; background: #f4efe3; border: 1px solid #ece6da; display: flex; align-items: center; justify-content: center; color: #c9c0b0; margin-bottom: 18px; }
-.empty-text { margin: 0; font-size: 18px; font-weight: 500; color: #74695a; }
-.empty-hint { margin: 8px 0 0; font-size: 13px; color: #a89e8c; }
+.empty-icon { width: 56px; height: 56px; border-radius: 50%; background: #F8FAFC; border: 1px solid #F1F5F9; display: flex; align-items: center; justify-content: center; color: #CBD5E1; margin-bottom: 18px; }
+.empty-text { margin: 0; font-size: 18px; font-weight: 500; color: #475569; }
+.empty-hint { margin: 8px 0 0; font-size: 13px; color: #94A3B8; }
 
 .ledger-footer { display: flex; justify-content: space-between; align-items: center; }
-.range-text { font-size: 12px; color: #a89e8c; }
+.range-text { font-size: 12px; color: #94A3B8; }
 
 /* ====== 骨架屏（模板层） ====== */
 .skeleton { padding: 4px 0 8px; }
 .sk-row { display: flex; align-items: center; gap: 14px; padding: 12px 24px; }
-.sk-bar { height: 10px; border-radius: 4px; background: linear-gradient(90deg, #f4efe3 0%, #ece6da 40%, #f4efe3 80%); background-size: 200% 100%; animation: sk-shimmer 1.5s ease-in-out infinite; animation-delay: var(--sk-d, 0s); }
+.sk-bar { height: 10px; border-radius: 4px; background: linear-gradient(90deg, #F8FAFC 0%, #F1F5F9 40%, #F8FAFC 80%); background-size: 200% 100%; animation: sk-shimmer 1.5s ease-in-out infinite; animation-delay: var(--sk-d, 0s); }
 .w-time { width: 88px; }
 .w-key { width: 90px; }
 .w-model { width: 120px; }
@@ -336,84 +336,84 @@ onMounted(init)
 <style scoped>
 .logs :deep(.n-data-table-th) { font-weight: 600; }
 .logs :deep(.n-data-table-td) { padding-top: 9px; padding-bottom: 9px; }
-.logs :deep(.n-data-table-tr:hover .n-data-table-td) { background: #f9f5ec; }
+.logs :deep(.n-data-table-tr:hover .n-data-table-td) { background: #F1F5F9; }
 
 .logs :deep(.cell-icon) { flex-shrink: 0; }
 
 /* 时间 */
 .logs :deep(.time-cell) { display: flex; flex-direction: column; align-items: center; gap: 1px; line-height: 1.25; }
-.logs :deep(.time-date) { font-size: 11px; color: #a89e8c; }
-.logs :deep(.time-time) { font-size: 12px; color: #5d564b; font-weight: 500; }
-.logs :deep(.time-na) { font-size: 12px; color: #a89e8c; }
+.logs :deep(.time-date) { font-size: 11px; color: #94A3B8; }
+.logs :deep(.time-time) { font-size: 12px; color: #475569; font-weight: 500; }
+.logs :deep(.time-na) { font-size: 12px; color: #94A3B8; }
 
 /* 调用方：一行排列——终端图标 + 客户端名 + 版本徽标 · 钥匙图标 + key 名。
-   客户端为主（#5d564b）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。 */
+   客户端为主（#475569）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。 */
 .logs :deep(.caller-body) { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; line-height: 1.25; padding: 2px 0; }
 
-.logs :deep(.caller-client-icon) { flex-shrink: 0; color: #b3a98f; }
-.logs :deep(.caller-client-product) { flex: 0 1 auto; font-size: 13px; font-weight: 500; color: #5d564b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; letter-spacing: -0.01em; }
-.logs :deep(.caller-client-version) { flex-shrink: 0; font-size: 10px; color: #a89e8c; background: #f4efe3; border: 1px solid #ece6da; padding: 0 5px; border-radius: 4px; line-height: 1.4; white-space: nowrap; }
-.logs :deep(.caller-client-na) { flex-shrink: 0; font-size: 13px; color: #a89e8c; }
+.logs :deep(.caller-client-icon) { flex-shrink: 0; color: #94A3B8; }
+.logs :deep(.caller-client-product) { flex: 0 1 auto; font-size: 13px; font-weight: 500; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; letter-spacing: -0.01em; }
+.logs :deep(.caller-client-version) { flex-shrink: 0; font-size: 10px; color: #94A3B8; background: #F8FAFC; border: 1px solid #F1F5F9; padding: 0 5px; border-radius: 4px; line-height: 1.4; white-space: nowrap; }
+.logs :deep(.caller-client-na) { flex-shrink: 0; font-size: 13px; color: #94A3B8; }
 
-.logs :deep(.caller-sep) { flex-shrink: 0; color: #ddd6c8; }
-.logs :deep(.caller-key-icon) { flex-shrink: 0; color: #c9c0b0; }
-.logs :deep(.caller-key) { flex: 0 1 auto; font-size: 11px; color: #a89e8c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.logs :deep(.caller-key-anon) { color: #c9c0b0; }
-.logs :deep(.caller-key-na) { color: #d3ccc0; }
-.logs :deep(.caller-key-deleted) { flex: 0 1 auto; font-size: 11px; color: #b3261e; text-decoration: line-through; text-decoration-color: rgba(179,38,30,0.5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.logs :deep(.caller-sep) { flex-shrink: 0; color: #F1F5F9; }
+.logs :deep(.caller-key-icon) { flex-shrink: 0; color: #CBD5E1; }
+.logs :deep(.caller-key) { flex: 0 1 auto; font-size: 11px; color: #94A3B8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.logs :deep(.caller-key-anon) { color: #CBD5E1; }
+.logs :deep(.caller-key-na) { color: #F1F5F9; }
+.logs :deep(.caller-key-deleted) { flex: 0 1 auto; font-size: 11px; color: #EF4444; text-decoration: line-through; text-decoration-color: rgba(239,68,68,0.5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* 模型：供应商图标 + model id（省略号）。flex 行，图标固定不缩、id 收缩省略。 */
 .logs :deep(.model-cell) { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; max-width: 100%; }
-.logs :deep(.model-id) { font-size: 12px; color: #5d564b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.logs :deep(.model-id) { font-size: 12px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* 供应商图标：并入「模型」列前缀，缩小为 18px 内联贴片。 */
-.logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; background: #faf7f0; border: 1px solid #ece6da; transition: border-color 0.15s, background 0.15s; }
+.logs :deep(.prov-icon-wrap) { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; background: #F8FAFC; border: 1px solid #F1F5F9; transition: border-color 0.15s, background 0.15s; }
 .logs :deep(.prov-icon) { width: 13px; height: 13px; object-fit: contain; display: block; }
-.logs :deep(.prov-mono-wrap) { background: #f4efe3; }
-.logs :deep(.prov-mono) { font-size: 8px; font-weight: 600; color: #0d6e6b; letter-spacing: 0.02em; }
-.logs :deep(.n-data-table-tr:hover .prov-icon-wrap) { border-color: #bfe6cf; background: #f4fbf6; }
+.logs :deep(.prov-mono-wrap) { background: #F8FAFC; }
+.logs :deep(.prov-mono) { font-size: 8px; font-weight: 600; color: #06B6D4; letter-spacing: 0.02em; }
+.logs :deep(.n-data-table-tr:hover .prov-icon-wrap) { border-color: #F0FDF4; background: #FFFFFF; }
 
 /* 通道标签：按协议族着色（openai 系青、anthropic 赭），hover 显完整 channel 类型。 */
 .logs :deep(.ch-tag) { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.02em; white-space: nowrap; line-height: 1.4; }
-.logs :deep(.ch-tag.ch-openai) { color: #0d6e6b; background: rgba(13,110,107,0.08); border: 1px solid rgba(13,110,107,0.18); }
-.logs :deep(.ch-tag.ch-anthropic) { color: #b5842b; background: rgba(181,132,43,0.08); border: 1px solid rgba(181,132,43,0.18); }
-.logs :deep(.ch-tag.ch-na) { color: #a89e8c; }
+.logs :deep(.ch-tag.ch-openai) { color: #06B6D4; background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.18); }
+.logs :deep(.ch-tag.ch-anthropic) { color: #F59E0B; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.18); }
+.logs :deep(.ch-tag.ch-na) { color: #94A3B8; }
 
 /* Token */
 .logs :deep(.token-info) { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .logs :deep(.token-main) { line-height: 1.3; font-size: 12px; }
-.logs :deep(.token-in) { color: #9c6c00; }
-.logs :deep(.token-arrow) { color: #c9c0b0; margin: 0 4px; }
-.logs :deep(.token-out) { color: #0d6e6b; }
+.logs :deep(.token-in) { color: #F59E0B; }
+.logs :deep(.token-arrow) { color: #CBD5E1; margin: 0 4px; }
+.logs :deep(.token-out) { color: #06B6D4; }
 .logs :deep(.token-cache) { font-size: 10px; line-height: 1.2; white-space: nowrap; }
-.logs :deep(.cache-label) { color: #a89e8c; margin-right: 6px; }
-.logs :deep(.cache-read) { color: #0d6e6b; }
-.logs :deep(.cache-sep) { color: #c9c0b0; margin: 0 4px; }
-.logs :deep(.cache-write) { color: #b5842b; }
+.logs :deep(.cache-label) { color: #94A3B8; margin-right: 6px; }
+.logs :deep(.cache-read) { color: #06B6D4; }
+.logs :deep(.cache-sep) { color: #CBD5E1; margin: 0 4px; }
+.logs :deep(.cache-write) { color: #F59E0B; }
 
 /* 延迟 */
 .logs :deep(.latency-cell) { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
 .logs :deep(.latency-num) { font-size: 12px; font-weight: 500; }
-.logs :deep(.latency-num.tier-fast) { color: #1d7a4c; }
-.logs :deep(.latency-num.tier-mid) { color: #9c6c00; }
-.logs :deep(.latency-num.tier-slow) { color: #b3261e; }
-.logs :deep(.latency-num.tier-na) { color: #a89e8c; }
-.logs :deep(.latency-track) { width: 64px; height: 3px; border-radius: 999px; background: #ece6da; overflow: hidden; }
+.logs :deep(.latency-num.tier-fast) { color: #16A34A; }
+.logs :deep(.latency-num.tier-mid) { color: #F59E0B; }
+.logs :deep(.latency-num.tier-slow) { color: #EF4444; }
+.logs :deep(.latency-num.tier-na) { color: #94A3B8; }
+.logs :deep(.latency-track) { width: 64px; height: 3px; border-radius: 999px; background: #F1F5F9; overflow: hidden; }
 .logs :deep(.latency-fill) { height: 100%; border-radius: 999px; min-width: 2px; }
-.logs :deep(.latency-fill.tier-fast) { background: #2ea86a; }
-.logs :deep(.latency-fill.tier-mid) { background: #b5842b; }
-.logs :deep(.latency-fill.tier-slow) { background: #b3261e; }
+.logs :deep(.latency-fill.tier-fast) { background: #22C55E; }
+.logs :deep(.latency-fill.tier-mid) { background: #F59E0B; }
+.logs :deep(.latency-fill.tier-slow) { background: #EF4444; }
 
 /* 结果（合并状态 + 错误） */
 .logs :deep(.result-cell) { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
-.logs :deep(.result-cell .error-text) { font-size: 12px; color: #b3261e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.logs :deep(.result-cell .error-text) { font-size: 12px; color: #EF4444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .logs :deep(.status-badge) { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; flex-shrink: 0; }
-.logs :deep(.status-badge.success) { background: rgba(46,168,106,0.08); border: 1px solid rgba(46,168,106,0.22); }
-.logs :deep(.status-badge.error) { background: rgba(179,38,30,0.07); border: 1px solid rgba(179,38,30,0.22); }
+.logs :deep(.status-badge.success) { background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.22); }
+.logs :deep(.status-badge.error) { background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.22); }
 .logs :deep(.status-dot-sm) { width: 5px; height: 5px; border-radius: 50%; }
-.logs :deep(.status-badge.success .status-dot-sm) { background: #2ea86a; box-shadow: 0 0 4px rgba(46,168,106,0.5); }
-.logs :deep(.status-badge.error .status-dot-sm) { background: #b3261e; }
+.logs :deep(.status-badge.success .status-dot-sm) { background: #22C55E; box-shadow: 0 0 4px rgba(34,197,94,0.5); }
+.logs :deep(.status-badge.error .status-dot-sm) { background: #EF4444; }
 .logs :deep(.status-text) { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; }
-.logs :deep(.status-badge.success .status-text) { color: #1d7a4c; }
-.logs :deep(.status-badge.error .status-text) { color: #b3261e; }
+.logs :deep(.status-badge.success .status-text) { color: #16A34A; }
+.logs :deep(.status-badge.error .status-text) { color: #EF4444; }
 </style>

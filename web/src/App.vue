@@ -14,12 +14,7 @@
           >
             <div class="sidebar-brand">
               <div class="brand-icon">
-                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                  <rect x="3" y="3" width="22" height="22" rx="7" stroke="currentColor" stroke-width="1.5" />
-                  <path d="M9 10h4M9 14h8M9 18h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                  <circle cx="20" cy="14" r="3.5" stroke="currentColor" stroke-width="1.2" />
-                  <circle cx="20" cy="14" r="1.2" fill="currentColor" />
-                </svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
               </div>
               <span v-show="!collapsed" class="brand-text serif">Model Bridge</span>
             </div>
@@ -121,63 +116,63 @@ const menuOptions = [
 ]
 function navigate(key: string) { router.push(key) }
 
-// --- Editorial Ink + Fresh Data theme ---
+// --- AI SaaS · 浅底克制企业风 ---
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    fontFamily: "'IBM Plex Mono', monospace",
-    fontFamilyMono: "'IBM Plex Mono', monospace",
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    fontFamilyMono: "'JetBrains Mono', monospace",
     fontSize: '14px',
-    primaryColor: '#17140f',
-    primaryColorHover: '#2a2620',
-    primaryColorPressed: '#000000',
-    primaryColorSuppl: '#17140f',
-    infoColor: '#159b96',
-    infoColorHover: '#1aab9f',
-    successColor: '#2ea86a',
-    successColorHover: '#36bb78',
-    warningColor: '#b5842b',
-    errorColor: '#b3261e',
-    bodyColor: '#faf7f0',
-    baseColor: '#faf7f0',
-    cardColor: '#ffffff',
-    modalColor: '#ffffff',
-    popoverColor: '#ffffff',
-    tableColor: '#ffffff',
-    borderColor: '#d9cfbf',
-    dividerColor: '#ece6da',
-    textColorBase: '#17140f',
-    textColor1: '#17140f',
-    textColor2: '#74695a',
-    textColor3: '#a89e8c',
-    inputColor: '#ffffff',
-    hoverColor: 'rgba(23, 20, 15, 0.04)',
-    boxShadow1: '0 1px 2px rgba(23,20,15,0.05)',
-    boxShadow2: '0 4px 16px rgba(23,20,15,0.06)',
-    boxShadow3: '0 12px 40px rgba(23,20,15,0.08)',
-    borderRadius: '10px',
+    primaryColor: '#3B82F6',
+    primaryColorHover: '#2563EB',
+    primaryColorPressed: '#1D4ED8',
+    primaryColorSuppl: '#3B82F6',
+    infoColor: '#06B6D4',
+    infoColorHover: '#0891B2',
+    successColor: '#22C55E',
+    successColorHover: '#16A34A',
+    warningColor: '#F59E0B',
+    errorColor: '#EF4444',
+    bodyColor: '#F8FAFC',
+    baseColor: '#FFFFFF',
+    cardColor: '#FFFFFF',
+    modalColor: '#FFFFFF',
+    popoverColor: '#FFFFFF',
+    tableColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    dividerColor: '#F1F5F9',
+    textColorBase: '#0F172A',
+    textColor1: '#0F172A',
+    textColor2: '#475569',
+    textColor3: '#94A3B8',
+    inputColor: '#FFFFFF',
+    hoverColor: 'rgba(59, 130, 246, 0.06)',
+    boxShadow1: '0 1px 2px rgba(15,23,42,0.04)',
+    boxShadow2: '0 4px 16px rgba(15,23,42,0.06)',
+    boxShadow3: '0 12px 40px rgba(15,23,42,0.08)',
+    borderRadius: '14px',
     heightSmall: '30px',
     heightMedium: '34px',
     heightLarge: '40px',
   },
-  Layout: { siderColor: '#f4efe3', headerColor: '#faf7f0', footerColor: '#f4efe3' },
+  Layout: { siderColor: '#FFFFFF', headerColor: '#F8FAFC', footerColor: '#FFFFFF' },
   Menu: {
-    itemTextColor: '#74695a', itemTextColorHover: '#17140f', itemTextColorActive: '#1d7a4c',
-    itemIconColor: '#a89e8c', itemIconColorHover: '#17140f', itemIconColorActive: '#1d7a4c',
-    itemColorHover: 'rgba(23,20,15,0.04)',
-    itemColorActive: 'rgba(46,168,106,0.10)', itemColorActiveHover: 'rgba(46,168,106,0.14)',
+    itemTextColor: '#475569', itemTextColorHover: '#0F172A', itemTextColorActive: '#3B82F6',
+    itemIconColor: '#94A3B8', itemIconColorHover: '#0F172A', itemIconColorActive: '#3B82F6',
+    itemColorHover: 'rgba(15,23,42,0.04)',
+    itemColorActive: 'rgba(59,130,246,0.08)', itemColorActiveHover: 'rgba(59,130,246,0.12)',
     borderRadius: '8px',
   },
-  Card: { borderRadius: '12px', borderColor: '#d9cfbf', paddingMedium: '22px', titleTextColor: '#17140f', titleFontSize: '16px', titleFontWeight: '600', titleFontFamily: "'Fraunces', serif" },
+  Card: { borderRadius: '14px', borderColor: '#E2E8F0', paddingMedium: '22px', titleTextColor: '#0F172A', titleFontSize: '16px', titleFontWeight: '600', titleFontFamily: "'Inter', sans-serif" },
   Button: { borderRadiusSmall: '8px', borderRadiusMedium: '8px', borderRadiusLarge: '10px' },
-  Input: { borderRadius: '8px', border: '1px solid #d9cfbf', borderFocus: '1px solid #2ea86a', borderHover: '1px solid #bfb29a', boxShadowFocus: '0 0 0 3px rgba(46,168,106,0.12)' },
-  Switch: { railColorActive: '#2ea86a' },
-  Table: { tdColor: '#ffffff', thColor: '#f4efe3', thTextColor: '#74695a', tdTextColor: '#17140f', borderColor: '#ece6da', thFontWeight: '600', thFontSize: '11px', fontSizeSmall: '13px', borderRadius: '12px' },
-  DataTable: { tdColor: '#ffffff', thColor: '#f4efe3', thTextColor: '#74695a', tdTextColor: '#17140f', borderColor: '#ece6da' },
-  Modal: { borderRadius: '14px', textColor: '#17140f' },
+  Input: { borderRadius: '8px', border: '1px solid #E2E8F0', borderFocus: '1px solid #3B82F6', borderHover: '1px solid #CBD5E1', boxShadowFocus: '0 0 0 3px rgba(59,130,246,0.12)' },
+  Switch: { railColorActive: '#22C55E' },
+  Table: { tdColor: '#FFFFFF', thColor: '#F8FAFC', thTextColor: '#475569', tdTextColor: '#0F172A', borderColor: '#F1F5F9', thFontWeight: '600', thFontSize: '11px', fontSizeSmall: '13px', borderRadius: '14px' },
+  DataTable: { tdColor: '#FFFFFF', thColor: '#F8FAFC', thTextColor: '#475569', tdTextColor: '#0F172A', borderColor: '#F1F5F9' },
+  Modal: { borderRadius: '16px', textColor: '#0F172A' },
   Tag: { borderRadius: '999px' },
-  Pagination: { itemColor: '#ffffff', itemColorActive: 'rgba(23,20,15,0.06)', itemTextColorActive: '#17140f', itemBorder: '1px solid #d9cfbf', itemBorderActive: '1px solid #17140f', itemBorderRadius: '8px' },
-  Slider: { fillColor: '#17140f', fillColorHover: '#2a2620', handleColor: '#17140f' },
-  Spin: { color: '#1d7a4c' },
+  Pagination: { itemColor: '#FFFFFF', itemColorActive: 'rgba(59,130,246,0.06)', itemTextColorActive: '#3B82F6', itemBorder: '1px solid #E2E8F0', itemBorderActive: '1px solid #3B82F6', itemBorderRadius: '8px' },
+  Slider: { fillColor: '#3B82F6', fillColorHover: '#2563EB', handleColor: '#3B82F6' },
+  Spin: { color: '#3B82F6' },
 }
 </script>
 
@@ -186,38 +181,38 @@ const themeOverrides: GlobalThemeOverrides = {
 
 body {
   margin: 0; padding: 0;
-  background: #e7e3d7;
-  color: #17140f;
-  font-family: 'IBM Plex Mono', -apple-system, BlinkMacSystemFont, monospace;
+  background: #F8FAFC;
+  color: #0F172A;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #c9c0b0; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #1d7a4c; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 99px; border: 2px solid #F8FAFC; }
+::-webkit-scrollbar-thumb:hover { background: #3B82F6; }
 
 .app-wrapper {
   max-width: 1440px; margin: 0 auto;
-  background: #faf7f0; min-height: 100vh;
+  background: #F8FAFC; min-height: 100vh;
   position: relative; z-index: 1;
-  box-shadow: 0 0 60px rgba(23,20,15,0.06);
+  box-shadow: 0 0 60px rgba(15,23,42,0.04);
 }
 .app-shell { height: 100vh; position: relative; z-index: 1; }
 .main-area { background: transparent !important; overflow-y: auto; }
 
-.sidebar { background: #f4efe3 !important; border-right: 1px solid #d9cfbf !important; position: relative; }
-.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 22px 18px; border-bottom: 1px solid #d9cfbf; }
-.brand-icon { color: #17140f; display: flex; align-items: center; flex-shrink: 0; }
-.brand-text { font-size: 18px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; white-space: nowrap; }
+.sidebar { background: #FFFFFF !important; border-right: 1px solid #E2E8F0 !important; position: relative; }
+.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 22px 18px; border-bottom: 1px solid #E2E8F0; }
+.brand-icon { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: linear-gradient(135deg, #3B82F6, #06B6D4 50%, #22C55E); color: #FFFFFF; }
+.brand-text { font-size: 18px; font-weight: 600; color: #0F172A; letter-spacing: -0.01em; white-space: nowrap; }
 .sidebar-menu { padding: 8px 8px 48px 8px; background: transparent !important; }
-.sidebar-menu .n-menu-item-content { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 500; }
-.sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid #d9cfbf; background: #f4efe3; }
-.footer-version { font-size: 11px; color: #a89e8c; letter-spacing: 0.02em; }
+.sidebar-menu .n-menu-item-content { font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; }
+.sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid #E2E8F0; background: #FFFFFF; }
+.footer-version { font-size: 11px; color: #94A3B8; letter-spacing: 0.02em; }
 .status-indicator { display: flex; align-items: center; gap: 6px; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #2ea86a; box-shadow: 0 0 6px rgba(46,168,106,0.4); animation: status-pulse 3s ease-in-out infinite; }
-@keyframes status-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(46,168,106,0.4); } 50% { box-shadow: 0 0 12px rgba(46,168,106,0.6); } }
-.status-label { font-size: 12px; color: #a89e8c; letter-spacing: 0.02em; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #22C55E; box-shadow: 0 0 6px rgba(34,197,94,0.4); animation: status-pulse 3s ease-in-out infinite; }
+@keyframes status-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(34,197,94,0.4); } 50% { box-shadow: 0 0 12px rgba(34,197,94,0.6); } }
+.status-label { font-size: 12px; color: #94A3B8; letter-spacing: 0.02em; }
 
 .content { padding: 28px 32px; max-width: 1280px; position: relative; z-index: 1; }
 
@@ -226,7 +221,7 @@ body {
 .page-enter-from { opacity: 0; transform: translateY(8px); }
 .page-leave-to { opacity: 0; transform: translateY(-8px); }
 
-.mono { font-family: 'IBM Plex Mono', monospace; }
-.serif { font-family: 'Fraunces', 'Georgia', serif; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.serif { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
 .n-layout-sider-scroll-container { height: 100%; }
 </style>

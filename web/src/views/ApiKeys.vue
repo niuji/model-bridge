@@ -52,24 +52,24 @@ onMounted(loadKeys)
 
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
-.page-title { font-size: 28px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; }
-.page-subtitle { margin: 6px 0 0; color: #a89e8c; font-size: 13px; }
+.page-title { font-size: 28px; font-weight: 600; color: #0F172A; margin: 0; letter-spacing: -0.02em; }
+.page-subtitle { margin: 6px 0 0; color: #94A3B8; font-size: 13px; }
 .create-btn { font-weight: 600; }
-.table-container { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; overflow: hidden; }
-.keys-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; }
+.table-container { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden; }
+.keys-table { --n-td-color: #FFFFFF; --n-th-color: #F8FAFC; }
 :deep(.key-preview-cell) { display: flex; align-items: center; gap: 8px; }
-:deep(.key-preview) { font-size: 12px; color: #74695a; background: #f4efe3; padding: 3px 10px; border: 1px solid #d9cfbf; border-radius: 8px; }
-:deep(.copy-btn) { opacity: 0.3; transition: opacity 0.15s; color: #1d7a4c; }
+:deep(.key-preview) { font-size: 12px; color: #475569; background: #F8FAFC; padding: 3px 10px; border: 1px solid #E2E8F0; border-radius: 8px; }
+:deep(.copy-btn) { opacity: 0.3; transition: opacity 0.15s; color: #16A34A; }
 :deep(.copy-btn:hover) { opacity: 1; }
-:deep(.time-cell) { font-size: 12px; color: #74695a; }
+:deep(.time-cell) { font-size: 12px; color: #475569; }
 :deep(.name-cell) { display: flex; align-items: center; gap: 8px; }
-:deep(.name-cell .key-name) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #17140f; }
-:deep(.rename-icon-btn) { flex-shrink: 0; opacity: 0.35; transition: opacity 0.15s; color: #74695a; }
+:deep(.name-cell .key-name) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #0F172A; }
+:deep(.rename-icon-btn) { flex-shrink: 0; opacity: 0.35; transition: opacity 0.15s; color: #475569; }
 :deep(.rename-icon-btn:hover) { opacity: 1; }
 :deep(.delete-btn) { opacity: 0.4; transition: opacity 0.15s; }
 :deep(.delete-btn:hover) { opacity: 1; }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; text-align: center; }
-.empty-text { margin: 0; font-size: 16px; font-weight: 500; color: #74695a; }
-.empty-hint { margin: 6px 0 0; font-size: 13px; color: #a89e8c; }
-.create-modal { --n-title-text-color: #17140f; }
+.empty-text { margin: 0; font-size: 16px; font-weight: 500; color: #475569; }
+.empty-hint { margin: 6px 0 0; font-size: 13px; color: #94A3B8; }
+.create-modal { --n-title-text-color: #0F172A; }
 </style>
