@@ -28,7 +28,7 @@
         <div class="stat-value mono">{{ formatNum(overview.total_output_tokens) }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon ico-g">
+        <div class="stat-icon ico-l">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12,6 12,12 16,14" /></svg>
         </div>
         <div class="stat-label">平均延迟</div>
@@ -74,6 +74,14 @@ import { BarChart, HeatmapChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, DataZoomComponent, CalendarComponent, VisualMapComponent } from 'echarts/components'
 use([CanvasRenderer, BarChart, HeatmapChart, GridComponent, TooltipComponent, DataZoomComponent, CalendarComponent, VisualMapComponent])
 
+// AI SaaS 图表调色（集中定义，ECharts option 引用之）
+const CHART = {
+  ink: '#0F172A', text2: '#475569', text3: '#94A3B8',
+  border: '#E2E8F0', divider: '#F1F5F9', canvas: '#F8FAFC',
+  blue: '#3B82F6', cyan: '#06B6D4', green: '#22C55E', greenD: '#16A34A',
+  ramp: ['#F1F5F9', '#BFDBFE', '#67E8F9', '#4ADE80', '#16A34A'],
+  font: 'JetBrains Mono, monospace',
+}
 const API_BASE = '/api/admin'; const loading = ref(true)
 const overview = ref({ total_requests: 0, total_input_tokens: 0, total_output_tokens: 0, avg_latency_ms: 0, error_count: 0 })
 interface ModelRow { model_id: string; request_count: number; total_tokens: number; total_input_tokens: number; total_output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; cache_hit_rate: number }
@@ -81,19 +89,19 @@ const modelData = ref<ModelRow[]>([])
 
 const hourlyOption = ref({
   backgroundColor: 'transparent',
-  tooltip: { trigger: 'axis' as const, backgroundColor: '#ffffff', borderColor: '#d9cfbf', textStyle: { color: '#17140f', fontFamily: 'IBM Plex Mono, monospace', fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(23,20,15,0.06);' },
-  grid: { left: 85, right: 24, bottom: 90, top: 30, borderColor: '#d9cfbf' },
-  xAxis: { type: 'category' as const, data: [] as string[], axisLabel: { rotate: 45, fontSize: 10, fontFamily: 'IBM Plex Mono, monospace', color: '#74695a' }, axisLine: { lineStyle: { color: '#d9cfbf' } }, axisTick: { lineStyle: { color: '#d9cfbf' } } },
-  yAxis: { type: 'value' as const, name: 'Token', nameLocation: 'middle' as const, nameGap: 40, nameTextStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 }, axisLabel: { fontFamily: 'IBM Plex Mono, monospace', fontSize: 10, color: '#74695a', formatter: (v: number) => formatNum(v) }, splitLine: { lineStyle: { color: '#ece6da', type: 'dashed' as const } } },
-  dataZoom: [{ type: 'slider' as const, start: 0, end: 100, height: 20, bottom: 12, backgroundColor: '#f4efe3', borderColor: '#d9cfbf', borderRadius: 8, dataBackground: { lineStyle: { color: '#2ea86a', opacity: 0.15 }, areaStyle: { color: '#2ea86a', opacity: 0.04 } }, selectedDataBackground: { lineStyle: { color: '#2ea86a' }, areaStyle: { color: '#2ea86a', opacity: 0.08 } }, handleStyle: { color: '#2ea86a', borderRadius: 4 }, textStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 10 } }],
-  series: [{ name: 'Token 用量', type: 'bar' as const, data: [] as number[], barWidth: '60%', itemStyle: { borderRadius: [4, 4, 0, 0], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#2ea86a' }, { offset: 1, color: '#8dd8ae' }]) }, emphasis: { itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#1d7a4c' }, { offset: 1, color: '#2ea86a' }]) } } }],
+  tooltip: { trigger: 'axis' as const, backgroundColor: '#FFFFFF', borderColor: CHART.border, textStyle: { color: CHART.ink, fontFamily: CHART.font, fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 1px 2px rgba(15,23,42,0.04);' },
+  grid: { left: 85, right: 24, bottom: 90, top: 30, borderColor: CHART.border },
+  xAxis: { type: 'category' as const, data: [] as string[], axisLabel: { rotate: 45, fontSize: 10, fontFamily: CHART.font, color: CHART.text2 }, axisLine: { lineStyle: { color: CHART.border } }, axisTick: { lineStyle: { color: CHART.border } } },
+  yAxis: { type: 'value' as const, name: 'Token', nameLocation: 'middle' as const, nameGap: 40, nameTextStyle: { color: CHART.text2, fontFamily: CHART.font, fontSize: 11 }, axisLabel: { fontFamily: CHART.font, fontSize: 10, color: CHART.text2, formatter: (v: number) => formatNum(v) }, splitLine: { lineStyle: { color: CHART.divider, type: 'dashed' as const } } },
+  dataZoom: [{ type: 'slider' as const, start: 0, end: 100, height: 20, bottom: 12, backgroundColor: CHART.canvas, borderColor: CHART.border, borderRadius: 8, dataBackground: { lineStyle: { color: CHART.blue, opacity: 0.15 }, areaStyle: { color: CHART.blue, opacity: 0.04 } }, selectedDataBackground: { lineStyle: { color: CHART.blue }, areaStyle: { color: CHART.blue, opacity: 0.08 } }, handleStyle: { color: CHART.blue, borderRadius: 4 }, textStyle: { color: CHART.text2, fontFamily: CHART.font, fontSize: 10 } }],
+  series: [{ name: 'Token 用量', type: 'bar' as const, data: [] as number[], barWidth: '60%', itemStyle: { borderRadius: [4, 4, 0, 0], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: CHART.blue }, { offset: 0.52, color: CHART.cyan }, { offset: 1, color: CHART.green }]) }, emphasis: { itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#2563EB' }, { offset: 0.52, color: CHART.cyan }, { offset: 1, color: CHART.greenD }]) } } }],
 })
 
 const heatmapOption = ref({
   backgroundColor: 'transparent',
-  tooltip: { formatter: (p: any) => `${p.value[0]}<br/>Token: <b>${formatNum(p.value[1] as number)}</b>`, backgroundColor: '#ffffff', borderColor: '#d9cfbf', textStyle: { color: '#17140f', fontFamily: 'IBM Plex Mono, monospace', fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(23,20,15,0.06);' },
-  visualMap: { min: 0, max: 1, type: 'continuous' as const, orient: 'vertical' as const, right: 10, top: 'middle', itemWidth: 10, itemHeight: 90, inRange: { color: ['#ece6da', '#bfe6cf', '#5bbf8a', '#2ea86a', '#1d7a4c'] }, textStyle: { color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 9 }, formatter: (v: number) => formatNum(v) },
-  calendar: { range: ['2026-01-01', '2026-01-31'], cellSize: [13, 13], left: 36, right: 56, top: 24, bottom: 8, orient: 'horizontal', itemStyle: { borderWidth: 2, borderColor: '#fff', color: '#faf7f0' }, yearLabel: { show: false }, monthLabel: { nameMap: 'cn', color: '#74695a', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, margin: 8 }, dayLabel: { firstDay: 1, nameMap: 'cn', color: '#a89e8c', fontFamily: 'IBM Plex Mono, monospace', fontSize: 10 }, splitLine: { show: false } },
+  tooltip: { formatter: (p: any) => `${p.value[0]}<br/>Token: <b>${formatNum(p.value[1] as number)}</b>`, backgroundColor: '#FFFFFF', borderColor: CHART.border, textStyle: { color: CHART.ink, fontFamily: CHART.font, fontSize: 12 }, extraCssText: 'border-radius: 8px; box-shadow: 0 1px 2px rgba(15,23,42,0.04);' },
+  visualMap: { min: 0, max: 1, type: 'continuous' as const, orient: 'vertical' as const, right: 10, top: 'middle', itemWidth: 10, itemHeight: 90, inRange: { color: CHART.ramp }, textStyle: { color: CHART.text2, fontFamily: CHART.font, fontSize: 9 }, formatter: (v: number) => formatNum(v) },
+  calendar: { range: ['2026-01-01', '2026-01-31'], cellSize: [13, 13], left: 36, right: 56, top: 24, bottom: 8, orient: 'horizontal', itemStyle: { borderWidth: 2, borderColor: '#fff', color: '#FFFFFF' }, yearLabel: { show: false }, monthLabel: { nameMap: 'cn', color: CHART.text2, fontFamily: CHART.font, fontSize: 11, margin: 8 }, dayLabel: { firstDay: 1, nameMap: 'cn', color: CHART.text3, fontFamily: CHART.font, fontSize: 10 }, splitLine: { show: false } },
   series: [{ type: 'heatmap' as const, coordinateSystem: 'calendar', data: [] as any[] }],
 })
 import * as echarts from 'echarts/core'
@@ -106,7 +114,7 @@ const modelColumns: DataTableColumns<ModelRow> = [
   { title: '输出', key: 'total_output_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.total_output_tokens)) },
   { title: '缓存读取', key: 'cache_read_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.cache_read_tokens)) },
   { title: '缓存写入', key: 'cache_write_tokens', width: 110, align: 'right', render: (row) => h('span', { class: 'mono' }, formatNum(row.cache_write_tokens)) },
-  { title: '命中率', key: 'cache_hit_rate', width: 90, align: 'right', render: (row) => h('span', { class: 'mono', style: { color: row.cache_hit_rate > 0 ? '#1d7a4c' : '#a89e8c', fontWeight: row.cache_hit_rate > 0 ? '600' : '400' } }, `${row.cache_hit_rate}%`) },
+  { title: '命中率', key: 'cache_hit_rate', width: 90, align: 'right', render: (row) => h('span', { class: 'mono', style: { color: row.cache_hit_rate > 0 ? CHART.greenD : CHART.text3, fontWeight: row.cache_hit_rate > 0 ? '600' : '400' } }, `${row.cache_hit_rate}%`) },
 ]
 // 列宽总和：交给 n-data-table 的 scroll-x，窄屏时表格内部横向滚动（表头跟随），
 // 不再被 .card 的 overflow:hidden 裁掉右侧列。
@@ -145,36 +153,37 @@ onMounted(loadData)
 <style scoped>
 .dashboard { display: flex; flex-direction: column; gap: 20px; }
 .page-header { margin-bottom: 4px; }
-.page-title { font-size: 28px; font-weight: 600; color: #17140f; margin: 0; letter-spacing: -0.02em; }
-.page-subtitle { margin: 6px 0 0; color: #a89e8c; font-size: 13px; }
+.page-title { font-size: 28px; font-weight: 600; color: #0F172A; margin: 0; letter-spacing: -0.02em; }
+.page-subtitle { margin: 6px 0 0; color: #94A3B8; font-size: 13px; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.stat-card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; padding: 22px; transition: box-shadow 0.2s, transform 0.2s; }
-.stat-card:hover { box-shadow: 0 6px 22px rgba(23,20,15,0.06); transform: translateY(-1px); }
+.stat-card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 14px; padding: 22px; transition: box-shadow 0.2s, transform 0.2s; }
+.stat-card:hover { box-shadow: 0 4px 16px rgba(15,23,42,0.06); transform: translateY(-1px); }
 .stat-icon { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
 .stat-icon svg { width: 20px; height: 20px; }
-.stat-icon.ico-g { background: #bfe6cf; color: #1d7a4c; }
-.stat-icon.ico-a { background: #f6e6b6; color: #9c6c00; }
-.stat-icon.ico-t { background: #c2e8e6; color: #0d6e6b; }
-.stat-label { font-size: 12px; font-weight: 500; color: #a89e8c; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-.stat-value { font-size: 28px; font-weight: 600; color: #17140f; line-height: 1; }
-.stat-unit { font-size: 16px; color: #a89e8c; font-weight: 400; margin-left: 3px; }
+.stat-icon.ico-g { background: #EFF6FF; color: #3B82F6; }
+.stat-icon.ico-a { background: #ECFEFF; color: #06B6D4; }
+.stat-icon.ico-t { background: #F0FDF4; color: #16A34A; }
+.stat-icon.ico-l { background: #FFFBEB; color: #F59E0B; }
+.stat-label { font-size: 12px; font-weight: 500; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.stat-value { font-size: 28px; font-weight: 600; color: #0F172A; line-height: 1; }
+.stat-unit { font-size: 16px; color: #94A3B8; font-weight: 400; margin-left: 3px; }
 
-.card { background: #ffffff; border: 1px solid #d9cfbf; border-radius: 12px; overflow: hidden; }
-.card-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #ece6da; }
+.card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 14px; overflow: hidden; }
+.card-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #F1F5F9; }
 .chart-header-right { display: flex; align-items: center; gap: 12px; }
-.card-title { margin: 0; font-family: 'Fraunces', 'Georgia', serif; font-size: 17px; font-weight: 600; color: #17140f; letter-spacing: -0.01em; }
-.card-badge { font-size: 11px; color: #74695a; padding: 4px 10px; background: #f4efe3; border: 1px solid #d9cfbf; border-radius: 999px; }
+.card-title { margin: 0; font-family: 'Inter', sans-serif; font-size: 17px; font-weight: 600; color: #0F172A; letter-spacing: -0.01em; }
+.card-badge { font-size: 11px; color: #475569; padding: 4px 10px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 999px; }
 .card-badges { display: flex; align-items: center; gap: 8px; }
 .card-body { padding: 24px; }
 
 .chart { height: 320px; }
 .chart-bar { height: 380px; }
 .chart-heatmap { height: 170px; }
-.dashboard-table { --n-td-color: #ffffff; --n-th-color: #f4efe3; }
+.dashboard-table { --n-td-color: #FFFFFF; --n-th-color: #F8FAFC; }
 /* column.render 产生的 VNode 不带本组件 scoped id，plain scoped 命中不到，必须 :deep（同 Logs.vue） */
-.dashboard :deep(.model-id-cell) { font-size: 12px; color: #74695a; }
-.dashboard :deep(.token-cell) { color: #1d7a4c; font-weight: 500; }
+.dashboard :deep(.model-id-cell) { font-size: 12px; color: #475569; }
+.dashboard :deep(.token-cell) { color: #16A34A; font-weight: 500; }
 
 @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .stat-grid { grid-template-columns: 1fr; } .content { padding: 16px; } }
