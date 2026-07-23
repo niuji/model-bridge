@@ -29,3 +29,8 @@ bytes = "1"
 include_dir = "0.7"
 mime_guess = "2"
 dirs = "5"
+
+[dev-dependencies]
+# 路由级 HTTP 行为测试（tests/proxy_route_tests）用的上游 mock 服务。dev-only，
+# 不进入 release 二进制，不影响发布产物体积。
+wiremock = "0.6"

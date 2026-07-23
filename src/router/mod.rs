@@ -2,6 +2,9 @@ pub mod admin;
 pub mod models_list;
 pub mod proxy;
 
+#[cfg(test)]
+mod proxy_route_tests;
+
 use axum::{extract::Request, middleware, response::{Html, IntoResponse, Response}, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
