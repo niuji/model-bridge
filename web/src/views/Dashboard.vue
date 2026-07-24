@@ -82,14 +82,14 @@ const CHART = computed(() => isDark.value ? {
   border: '#1E293B', divider: '#0F172A', canvas: '#1E293B',
   card: '#0F172A', tooltipBg: '#0F172A',
   blue: '#3B82F6', cyan: '#06B6D4', green: '#22C55E', greenD: '#16A34A',
-  ramp: ['#1E293B', '#1E3A8A', '#0E7490', '#4ADE80', '#16A34A'],
+  ramp: ['#1E293B', '#1D4ED8', '#0891B2', '#22C55E', '#86EFAC'],
   font: 'JetBrains Mono, monospace',
 } : {
   ink: '#0F172A', text2: '#475569', text3: '#94A3B8',
   border: '#E2E8F0', divider: '#F1F5F9', canvas: '#F8FAFC',
   card: '#FFFFFF', tooltipBg: '#FFFFFF',
   blue: '#3B82F6', cyan: '#06B6D4', green: '#22C55E', greenD: '#16A34A',
-  ramp: ['#F1F5F9', '#BFDBFE', '#67E8F9', '#4ADE80', '#16A34A'],
+  ramp: ['#F1F5F9', '#86EFAC', '#22D3EE', '#3B82F6', '#1D4ED8'],
   font: 'JetBrains Mono, monospace',
 })
 const API_BASE = '/api/admin'; const loading = ref(true)
