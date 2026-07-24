@@ -155,8 +155,8 @@ const columns = [
         h('div', { class: 'time-time mono' }, time),
       ])
     } },
-  // 「调用方」：一行排列——终端图标 + 客户端名 + 版本徽标 · 钥匙图标 + key 名。
-  // 客户端为主（#475569）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。
+  // 「调用方」：两行排列——上行客户端（终端图标 + 客户端名 + 版本徽标），
+  // 下行密钥（钥匙图标 + key 名），小号淡色。
   { title: '调用方', key: 'caller', width: 216, titleAlign: 'center' as const, render: (row: any) => {
       let keyTextClass = 'mono caller-key'
       let keyText: string
@@ -175,15 +175,17 @@ const columns = [
         h('path', { d: 'M18 12v3' }),
         h('path', { d: 'M15 12v2' }),
       ])
-      const children: any[] = [clientIcon]
+      const clientChildren: any[] = [clientIcon]
       if (parsed) {
-        children.push(h('span', { class: 'caller-client-product' }, parsed.product))
-        if (parsed.version) children.push(h('span', { class: 'caller-client-version' }, `v${parsed.version}`))
+        clientChildren.push(h('span', { class: 'caller-client-product' }, parsed.product))
+        if (parsed.version) clientChildren.push(h('span', { class: 'caller-client-version' }, `v${parsed.version}`))
       } else {
-        children.push(h('span', { class: 'caller-client-na' }, '—'))
+        clientChildren.push(h('span', { class: 'caller-client-na' }, '—'))
       }
-      children.push(h('span', { class: 'caller-sep' }, '·'), keyIcon, h('span', { class: keyTextClass }, keyText))
-      const inner = h('div', { class: 'caller-body mono' }, children)
+      const inner = h('div', { class: 'caller-body mono' }, [
+        h('div', { class: 'caller-main' }, clientChildren),
+        h('div', { class: 'caller-sub' }, [keyIcon, h('span', { class: keyTextClass }, keyText)]),
+      ])
       if (!parsed) return inner
       return h(NTooltip, { placement: 'top' }, { trigger: () => inner, default: () => row.client })
     } },
@@ -346,16 +348,17 @@ onMounted(init)
 .logs :deep(.time-time) { font-size: 12px; color: var(--mb-text-2); font-weight: 500; }
 .logs :deep(.time-na) { font-size: 12px; color: var(--mb-text-3); }
 
-/* 调用方：一行排列——终端图标 + 客户端名 + 版本徽标 · 钥匙图标 + key 名。
-   客户端为主（次级文本）、key 为次（小号淡色），用 · 分隔；两段文本各自省略号。 */
-.logs :deep(.caller-body) { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; line-height: 1.25; padding: 2px 0; }
+/* 调用方：两行排列——上行客户端（终端图标 + 客户端名 + 版本徽标），
+   下行密钥（钥匙图标 + key 名），小号淡色。 */
+.logs :deep(.caller-body) { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 100%; padding: 2px 0; }
+.logs :deep(.caller-main) { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.logs :deep(.caller-sub) { display: flex; align-items: center; gap: 4px; min-width: 0; }
 
 .logs :deep(.caller-client-icon) { flex-shrink: 0; color: var(--mb-text-3); }
 .logs :deep(.caller-client-product) { flex: 0 1 auto; font-size: 13px; font-weight: 500; color: var(--mb-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; letter-spacing: -0.01em; }
 .logs :deep(.caller-client-version) { flex-shrink: 0; font-size: 10px; color: var(--mb-text-3); background: var(--mb-surface-inset); border: 1px solid var(--mb-divider); padding: 0 5px; border-radius: 4px; line-height: 1.4; white-space: nowrap; }
 .logs :deep(.caller-client-na) { flex-shrink: 0; font-size: 13px; color: var(--mb-text-3); }
 
-.logs :deep(.caller-sep) { flex-shrink: 0; color: var(--mb-divider); }
 .logs :deep(.caller-key-icon) { flex-shrink: 0; color: var(--mb-muted); }
 .logs :deep(.caller-key) { flex: 0 1 auto; font-size: 11px; color: var(--mb-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .logs :deep(.caller-key-anon) { color: var(--mb-muted); }
