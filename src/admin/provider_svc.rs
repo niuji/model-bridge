@@ -603,45 +603,37 @@ pub fn select_probe_targets(
     out
 }
 
-async fn fetch_current_snapshot(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<UpstreamModelRow>> {
-    Ok(sqlx::query_as::<_, UpstreamModelRow>(
+/// 计算并返回 drift（current vs 旧 baseline），然后落地 baseline（打开即清零）。
+/// 初始化场景：baseline 为空时，所有 current 模型视为新增，确保首次打开即有提醒。
+/// drift 读取与 baseline 落地在同一事务内：探针若在两者之间提交，要么整笔先于本事务
+///（current 与 baseline 一致地纳入）、要么晚于本事务提交（下次再报），不会静默吞掉新模型。
+pub async fn get_model_changes(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<ChannelDrift>> {
+    let mut tx = pool.begin().await?;
+    let current = sqlx::query_as::<_, UpstreamModelRow>(
         "SELECT provider_id, channel_type, model_id, model_name FROM upstream_models WHERE provider_id = ?",
     )
     .bind(provider_id)
-    .fetch_all(pool)
-    .await?)
-}
-
-async fn fetch_baseline_snapshot(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<UpstreamModelRow>> {
-    Ok(sqlx::query_as::<_, UpstreamModelRow>(
+    .fetch_all(&mut *tx)
+    .await?;
+    let baseline = sqlx::query_as::<_, UpstreamModelRow>(
         "SELECT provider_id, channel_type, model_id, model_name FROM upstream_models_seen WHERE provider_id = ?",
     )
     .bind(provider_id)
-    .fetch_all(pool)
-    .await?)
-}
-
-/// 落地 baseline := 当前 upstream_models（per provider，事务）
-async fn land_baseline(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    .fetch_all(&mut *tx)
+    .await?;
+    let drift = compute_drift(&current, &baseline);
     sqlx::query("DELETE FROM upstream_models_seen WHERE provider_id = ?")
-        .bind(provider_id).execute(&mut *tx).await?;
+        .bind(provider_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "INSERT INTO upstream_models_seen (provider_id, channel_type, model_id, model_name)
          SELECT provider_id, channel_type, model_id, model_name FROM upstream_models WHERE provider_id = ?",
     )
-    .bind(provider_id).execute(&mut *tx).await?;
+    .bind(provider_id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(())
-}
-
-/// 计算并返回 drift（current vs 旧 baseline），然后落地 baseline（打开即清零）。
-/// 初始化场景：baseline 为空时，所有 current 模型视为新增，确保首次打开即有提醒。
-pub async fn get_model_changes(pool: &SqlitePool, provider_id: &str) -> anyhow::Result<Vec<ChannelDrift>> {
-    let current = fetch_current_snapshot(pool, provider_id).await?;
-    let baseline = fetch_baseline_snapshot(pool, provider_id).await?;
-    let drift = compute_drift(&current, &baseline);
-    land_baseline(pool, provider_id).await?;
     Ok(drift)
 }
 
