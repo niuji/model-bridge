@@ -45,8 +45,20 @@
 
 - 冲突处理（`Entry::Occupied`）保留——限定名 key 下 provider_id 相同才可能冲突（同一 provider 内部模型重复），保留先入者 + warn 正确。
 
-**Anthropic 通道**（`:177-196`）：现有检索 key 逻辑（剥 `[1m]` 后缀、非 claude/anthropic 补 `claude-` 前缀，`:187-193`）保留，key 变为 `format!("{}/{}", def.id, 检索key)`。
+**Anthropic 通道**（`:177-196`）：key 派生逻辑顺序调整为——**先拼 provider 前缀，再执行补 `claude-` 前缀的判定**：
 
+```rust
+let lower = route.model_id.to_lowercase();
+let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);          // 剥 [1m] 后缀
+let qualified = format!("{}/{}", def.id, clean);                    // 先拼 provider 前缀
+let key = if qualified.starts_with("claude") || qualified.starts_with("anthropic") {
+    qualified.to_string()                                            // claude/anthropic 限定名不加前缀
+} else {
+    format!("claude-{}", qualified)                                  // 非 claude 限定名在最前补 claude-
+};
+```
+
+- 关键差异：`claude-` 前缀加在**整个限定名最前**（如 `claude-deepseek/deepseek-chat`），而非 `provider/model` 中间。这使 `claude-` 成为「限定名整体的检索名前缀」——Claude Code 据此识别 1M 变体。
 - 裸 `insert`（`:194`）改为与 OpenAI 一致的 `Entry::Occupied` 保留先入者 + warn（修复静默覆盖）。
 
 ### 2. 查找逻辑（`src/router/proxy.rs:199`）
@@ -58,7 +70,7 @@
 `openai_models_list` 与 `get_anthropic_models` 现在直接用路由表 key 作为列表 id。key 变成限定名后，列表**自动就是限定名**。仅需：
 
 - 去掉 `dedup_by(|a, b| a.id == b.id)`（限定名天然唯一，去重反而掩盖问题）。
-- Anthropic 的 `[1m]` 后缀补回逻辑（`:58-64`）改为在限定名之后拼接：`format!("{}{}", key, suffix)`（key 已含 provider_id 前缀，直接拼接即 `{provider_id}/{模型}{suffix}`）。
+- Anthropic 的 `[1m]` 后缀补回逻辑（`:58-64`）改为在 key 之后拼接：`format!("{}{}", key, suffix)`（key 已含 provider_id 前缀，直接拼接即 `{provider_id}/{模型}{suffix}`，`claude-` 前缀若存在则在最前）。
 
 ### 4. 上游名回写（`src/router/proxy.rs:261-271`）
 
