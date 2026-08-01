@@ -29,6 +29,9 @@ cargo clippy
 # Run tests
 cargo test
 
+# Run a single test (e.g. one function in proxy.rs) with output
+cargo test proxy::tests::extract_model -- --nocapture
+
 # Run with default config (model-bridge.toml)
 cargo run
 
@@ -173,6 +176,8 @@ Routes are rebuilt by `provider_svc::refresh_routes()`, which:
 
 Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refresh_interval_min`), and after any provider update via the admin API.
 
+A third background task (independent of route refresh) prunes `usage_records` older than `bridge.log_retention_days` (default 730; 0 disables). Both new `bridge` fields (`probe_interval_min`, `log_retention_days`) need `#[serde(default = "fn")]` — not a bare default — so old configs without them still parse.
+
 ### Upstream Drift Detection
 
 A separate periodic task (`probe_upstream_models`, on its own `bridge.probe_interval_min` — default 1440 min / 1 day, decoupled from route refresh) probes each enabled channel's `/v1/models` via the existing `fetch_models_from_api` (using the stored provider key) and transactionally overwrites that (provider, channel) row set in `upstream_models` (DELETE+INSERT; on failure the old snapshot is kept, only a warn is logged). `upstream_models` holds the latest successful upstream list per channel.
@@ -193,28 +198,32 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 - **SSE streaming support.** Upstream SSE responses are proxied through a tokio mpsc channel with line-buffered parsing. Usage is accumulated via "last non-zero value" (not summation) to handle providers where multiple SSE events carry cumulative totals. See [SSE Streaming & Usage Extraction](#sse-streaming--usage-extraction) above for details.
 - **SSRF hardening.** HTTP redirects are disabled on the shared `reqwest::Client`. `refresh_routes()` skips channels whose `base_url` is not `http(s)` (`is_safe_base_url` check), logging a warning — this prevents `file://` or other local-protocol URLs from being used as upstream targets.
 - **Upstream drift detection.** A separate `probe_interval_min` (default 1 day) task probes each enabled channel's `/v1/models` into an `upstream_models` snapshot; drift is the symmetric diff vs `upstream_models_seen` (the last-viewed baseline) — **not** vs `provider_models` (the curated set). A card badge + read-only "上游变更" modal surface it; opening the modal lands the baseline and clears the badge. See [Upstream Drift Detection](#upstream-drift-detection).
-- **Tests.** The `crypto` module has unit tests (seal/reveal roundtrip, key parsing, legacy fallback). The `proxy.rs` module has unit tests covering all pure functions: SSE data-line parsing, model extraction from request bodies, model name canonicalization, `stream_options` injection, usage extraction/normalization across both protocols, SSE event usage parsing, API key masking, and base URL safety checks. Use `cargo test` to run all tests.
+- **Tests.** The `crypto` module has unit tests (seal/reveal roundtrip, key parsing, legacy fallback). The `proxy.rs` module has unit tests covering all pure functions: SSE data-line parsing, model extraction from request bodies, model name canonicalization, `stream_options` injection, usage extraction/normalization across both protocols, SSE event usage parsing, API key masking, and base URL safety checks. `src/router/proxy_route_tests.rs` (dev-only, uses `wiremock`) covers route-level HTTP behavior: auth 401, per-endpoint path 404, model-not-found 404, `/v1/models` per-endpoint isolation, 413 body-limit, 502 upstream connect failure, and 200 forwarding for all three endpoints. Use `cargo test` to run all tests.
 
 ## Source Structure
 
 | Path | Purpose |
 |------|---------|
-| `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh interval, encryption key |
+| `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh/probe intervals, log retention, encryption key |
 | `providers.json` | Static provider definitions (id, name, icon, channels with type/base_url/models_endpoint), embedded at compile time |
-| `src/main.rs` | Entry point: config loading, DB init, route table init, background refresh spawn, dual-server launch |
+| `src/main.rs` | Entry point: config loading, DB init, route table init, background task spawn (route/key refresh, upstream model probe, daily log pruning), dual-server launch |
 | `src/config.rs` | CLI args (clap), TOML config parsing, `providers.json` loading, `ProviderDef`/`ChannelDef` types |
+| `src/crypto.rs` | AES-256-GCM seal/reveal for client `mb-` keys (falls back to plaintext when unset / decrypt fails) |
 | `src/state.rs` | `AppState` (in-memory route tables, provider defs, DB pool, HTTP client), model list response types |
 | `src/router/mod.rs` | Router assembly: proxy router (`/openai-chat/`, `/openai-responses/`, `/anthropic/`), admin router (`/api/admin/`, SPA fallback), CORS |
 | `src/router/proxy.rs` | Core proxy: model extraction, route lookup, upstream forwarding, SSE streaming, usage recording |
 | `src/router/models_list.rs` | Returns cached model lists (openai-chat / openai-responses / anthropic) from in-memory route tables |
 | `src/router/admin.rs` | Admin HTTP handlers: provider CRUD, API key CRUD, stats queries |
 | `src/admin/provider_svc.rs` | Provider business logic: JSON+DB merge, route refresh, `/models` endpoint probing, CRUD |
-| `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly |
+| `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly; `prune_old_records()` daily log retention cleanup |
+| `src/router/proxy_route_tests.rs` | Route-level HTTP tests (wiremock dev-dep): auth 401, per-endpoint path 404, model-not-found 404, `models` endpoint isolation, 413/502, model-case normalization + `stream_options` injection + `x-api-key` upstream auth |
 | `src/db/schema.rs` | SQLite migrations: `provider_config`, `provider_channel_config`, `provider_models`, `api_keys`, `usage_records`, `upstream_models`, `upstream_models_seen` |
 | `src/db/models.rs` | SQLx `FromRow` structs and merge-result DTOs (`ProviderDetail`, `ProviderSummary`, `ChannelDetail`) |
 | `src/middleware/mod.rs` + `auth.rs` | API key auth: `auth_middleware` (wired onto the proxy router), `refresh_api_key_cache()`, `AuthenticatedKey` extension type |
 | `web/src/` | Vue 3 SPA: `Dashboard.vue`, `Providers.vue`, `ApiKeys.vue`, `Logs.vue`, `Help.vue` (接入指南). Naive UI components, ECharts charts |
 | `web/dist/` | Built frontend assets; embedded into the Rust binary via `include_dir!` |
+| `scripts/install-user.sh` | One-shot user-level systemd install: build/download binary, auto-generate `encryption_key`, write unit at `~/.config/systemd/user/`, enable+start. `--uninstall` removes everything (incl. data dir) |
+| `docs/superpowers/` | Design specs + implementation plans for past features (drift detection, theme redesigns); read before modifying those subsystems |
 
 ## Admin API Endpoints
 
