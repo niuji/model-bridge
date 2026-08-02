@@ -387,9 +387,9 @@ async fn anthropic_forwards_sse_and_uses_x_api_key_header() {
     assert!(text.contains("[DONE]"));
 }
 
-/// 验证 anthropic 建表的「裸名 + 限定名」双 key：
-/// 两个 provider 各声明一个同名模型，refresh_routes() 应插入裸名 key（保留先入者）
-/// 与 `claude-{provider}/{model}` 限定名 key。客户端用限定名请求时命中对应 provider。
+/// 验证 anthropic 建表的冲突场景：多个 provider 声明同名模型时，只创建限定名 key
+/// `claude-{provider}/{model}`，不创建裸名 key。客户端必须用限定名请求才能命中对应 provider，
+/// 裸名请求返回 404。
 #[tokio::test(flavor = "multi_thread")]
 async fn anthropic_qualified_name_routes_to_correct_provider() {
     // 两个上游，各自只认识自己的 model
@@ -630,5 +630,87 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     // 上游收到干净 model_id：claude-kimi-k3（[1M] 后缀被剥除，保留 claude- 前缀，无 provider 前缀）
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+/// 验证非冲突场景：单 provider 单模型只建裸名 key（无限定名 key），display_name 无前缀。
+#[tokio::test(flavor = "multi_thread")]
+async fn anthropic_non_conflicting_uses_only_bare_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-sonnet-4"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let defs = vec![ProviderDef {
+        id: "alpha".into(),
+        name: "Alpha".into(),
+        icon: None,
+        channels: vec![ChannelDef {
+            channel_type: "anthropic".into(),
+            base_url: server.uri(),
+            models_endpoint: None,
+        }],
+    }];
+    let state = build_state_with_defs(defs).await;
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    // 路由表只含裸名 key，不含限定名 key
+    {
+        let routes = state.anthropic_routes.read().await;
+        assert!(routes.contains_key("claude-sonnet-4"), "bare key present: {:?}", routes.keys().collect::<Vec<_>>());
+        assert!(
+            !routes.contains_key("claude-alpha/sonnet-4"),
+            "qualified key must NOT exist for non-conflicting model: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(routes.len(), 1);
+    }
+
+    // display_name 无 [provider_id] 前缀
+    let base = spawn_proxy(state).await;
+    let r = http()
+        .get(format!("{base}/anthropic/v1/models"))
+        .headers(auth_headers())
+        .send()
+        .await
+        .unwrap();
+    let b: serde_json::Value = r.json().await.unwrap();
+    let names: Vec<&str> = b["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["display_name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Claude Sonnet 4"), "display_name unprefixed: {:?}", names);
+
+    // 裸名请求 200
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
