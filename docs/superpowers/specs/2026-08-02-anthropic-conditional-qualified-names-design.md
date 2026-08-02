@@ -38,6 +38,8 @@ Date: 2026-08-02
 
 冲突模型的裸名 key **完全不建**。
 
+**同 provider `[1m]` 变体优先**：当限定名 key 撞车且两条路由属于同一 provider 时（典型场景：同一 provider 同时声明 `claude-sonnet-4` 与 `claude-sonnet-4[1M]`，两者归一化裸名相同），优先保留 `[1m]`-后缀变体——若 incoming 带 `[1m]` 而 existing 不带，则用 incoming 覆盖 existing；其余撞车情况仍保留先入者 + warn。这样无论 DB 返回行的顺序如何，`[1M]` 变体始终胜出，避免 Claude Code 因 `[1M]` 变体从 `/v1/models` 消失而无法开启 1M 上下文。跨 provider 不会撞车（qualified_key 含 provider_id）。
+
 ## 列表侧（无新字段方案）
 
 `ProviderRoute.model_name` 的唯一消费点是 `models_list.rs` 的 display_name（`proxy.rs` 转发链路不读 `model_name`，已确认）。因此**不加 `is_ambiguous` 字段**，改为建表时直接改写 `model_name`：

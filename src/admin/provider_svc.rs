@@ -245,19 +245,32 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     // 冲突：只用限定名 key；model_name 打上 [{provider_id}] 前缀（列表侧区分来源）
                     let clean_id = clean.strip_prefix("claude-").unwrap_or(clean);
                     let qualified_key = format!("claude-{}/{}", def.id, clean_id);
-                    // 同 provider 归一化同名等边缘场景下限定名 key 可能撞车，保留先入者 + warn
+                    // 先把 model_name 打上 [{provider_id}] 前缀（Vacant 入库与 Occupied 覆盖均需此前缀）
+                    let mut prefixed_route = route;
+                    prefixed_route.model_name = format!("[{}]{}", def.id, prefixed_route.model_name);
+                    // 同 provider 归一化同名（如 claude-sonnet-4 与 claude-sonnet-4[1M]）等边缘场景下
+                    // 限定名 key 会撞车：优先保留 [1m] 变体（让 Claude Code 在客户端开启 1M 上下文），
+                    // 其余情况保留先入者 + warn。跨 provider 不会撞车（qualified_key 含 provider_id）。
                     match anthropic_routes.entry(qualified_key) {
                         Entry::Vacant(v) => {
-                            let mut route = route;
-                            route.model_name = format!("[{}]{}", def.id, route.model_name);
-                            v.insert(route);
+                            v.insert(prefixed_route);
                         }
-                        Entry::Occupied(o) => {
+                        Entry::Occupied(mut o) => {
                             let existing = o.get();
-                            tracing::warn!(
-                                "model '{}' on 'anthropic' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
-                                model.model_id, existing.provider_id, existing.base_url, def.id
-                            );
+                            let incoming_is_1m = prefixed_route.model_id.to_lowercase().ends_with("[1m]");
+                            let existing_is_1m = existing.model_id.to_lowercase().ends_with("[1m]");
+                            if incoming_is_1m && !existing_is_1m && existing.provider_id == def.id {
+                                tracing::debug!(
+                                    "same-provider [1m] variant preferred: replacing model '{}' with '{}' on 'anthropic' channel for provider '{}'",
+                                    existing.model_id, prefixed_route.model_id, def.id
+                                );
+                                o.insert(prefixed_route);
+                            } else {
+                                tracing::warn!(
+                                    "model '{}' on 'anthropic' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
+                                    model.model_id, existing.provider_id, existing.base_url, def.id
+                                );
+                            }
                         }
                     }
                 }

@@ -480,7 +480,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
 
     let base = spawn_proxy(state).await;
 
-    // 模型列表的 display_name 应带 {provider_id}| 前缀（仅展示用，区分同名模型来源）
+    // 模型列表的 display_name 应带 [{provider_id}] 前缀（仅展示用，区分同名模型来源）
     let r = http()
         .get(format!("{base}/anthropic/v1/models"))
         .headers(auth_headers())
@@ -705,6 +705,107 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
         .headers(auth_headers())
         .json(&serde_json::json!({
             "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+/// 验证同 provider 声明 claude-sonnet-4 与 claude-sonnet-4[1M] 时，[1M] 变体优先保留：
+/// 路由表只含一条限定名 key，其 model_id 为 [1M] 后缀变体；/v1/models 只暴露一个带 [1M] 后缀的 id；
+/// 限定名请求转发上游时收到剥后缀的 claude-sonnet-4。无论 DB 返回行的顺序如何都应一致。
+#[tokio::test(flavor = "multi_thread")]
+async fn anthropic_same_provider_1m_variant_preferred() {
+    let server = MockServer::start().await;
+    // 上游应收到干净 model_id：claude-sonnet-4（[1M] 后缀被 proxy 剥除）
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-sonnet-4"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let defs = vec![ProviderDef {
+        id: "alpha".into(),
+        name: "Alpha".into(),
+        icon: None,
+        channels: vec![ChannelDef {
+            channel_type: "anthropic".into(),
+            base_url: server.uri(),
+            models_endpoint: None,
+        }],
+    }];
+    let state = build_state_with_defs(defs).await;
+    // 同一 provider 声明两个归一化同名模型：claude-sonnet-4 与 claude-sonnet-4[1M]
+    // 两者 bare 均为 claude-sonnet-4 → count==2 → 冲突 → 走限定名 key
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[
+            ("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into()),
+            ("anthropic".into(), "claude-sonnet-4[1M]".into(), "Claude Sonnet 4".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    // 路由表应只含一条限定名 key：claude-alpha/sonnet-4，且 model_id 为 [1M] 变体
+    // （无论 DB 返回行的顺序，[1M] 变体都应胜出）
+    {
+        let routes = state.anthropic_routes.read().await;
+        assert_eq!(
+            routes.len(), 1,
+            "only one qualified-name key: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        let route = routes.get("claude-alpha/sonnet-4").expect("qualified key present");
+        assert!(
+            route.model_id.to_lowercase().ends_with("[1m]"),
+            "route.model_id should be the [1M] variant, got: {}",
+            route.model_id
+        );
+    }
+
+    let base = spawn_proxy(state).await;
+
+    // /v1/models 只暴露一个 id，且以 [1M] 后缀结尾（让 Claude Code 开启 1M 上下文）
+    let r = http()
+        .get(format!("{base}/anthropic/v1/models"))
+        .headers(auth_headers())
+        .send()
+        .await
+        .unwrap();
+    let b: serde_json::Value = r.json().await.unwrap();
+    let ids: Vec<&str> = b["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 1, "exactly one model listed: {:?}", ids);
+    assert!(
+        ids[0].to_lowercase().ends_with("[1m]"),
+        "model id should end with [1M] suffix, got: {}",
+        ids[0]
+    );
+
+    // 限定名请求 → 上游收到干净 claude-sonnet-4（[1M] 后缀被 proxy 剥除）
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-alpha/sonnet-4",
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 10
         }))
