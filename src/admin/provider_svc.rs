@@ -127,6 +127,45 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     let mut openai_responses_routes: HashMap<String, ProviderRoute> = HashMap::new();
     let mut anthropic_routes: HashMap<String, ProviderRoute> = HashMap::new();
 
+    // 预计算 anthropic 裸名冲突表（跨所有 provider）：
+    // bare_counts 必须在主循环之前完成，否则单 provider 视角无法识别跨 provider 同名冲突。
+    let mut bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for def in &state.provider_defs {
+        let config = get_provider_config(&state.db, &def.id).await;
+        let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
+        if !is_enabled {
+            continue;
+        }
+        let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
+        if api_key.is_empty() {
+            continue;
+        }
+        let channel_configs = get_channel_configs(&state.db, &def.id).await;
+        let channels = merge_channels(&def.channels, &channel_configs);
+        let enabled: Vec<&ChannelDetail> = channels
+            .iter()
+            .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
+            .collect();
+        let models = sqlx::query_as::<_, ProviderModel>(
+            "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
+        )
+        .bind(&def.id)
+        .fetch_all(&state.db)
+        .await?;
+        for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
+            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+                let lower = model.model_id.to_lowercase();
+                let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
+                let bare = if clean.starts_with("claude") || clean.starts_with("anthropic") {
+                    clean.to_string()
+                } else {
+                    format!("claude-{}", clean)
+                };
+                *bare_counts.entry(bare).or_insert(0) += 1;
+            }
+        }
+    }
+
     for def in &state.provider_defs {
         let config = get_provider_config(&state.db, &def.id).await;
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
@@ -177,10 +216,11 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         // 检索 key 由 model_id 派生（剥 [1m] 后缀；非 claude/anthropic 开头的补 claude- 前缀），
         // 与 proxy 转发剥除 [1m] 的逻辑配套。
         //
-        // 双 key 插入：先插裸名 key，再插 `{provider}/{model}` 限定名 key。
-        //   - 裸名 key：兼容现状，同名多 provider 场景沿用「保留先入者 + warn」语义。
-        //   - 限定名 key：客户端用 `{provider}/{model}` 显式选 provider（绕过裸名冲突）。
-        // 两条 key 指向同一个 ProviderRoute，转发/列表逻辑零改动。
+        // 两遍构建：先统计归一化裸名出现次数判定冲突，再按冲突与否生成 key。
+        //   - 非冲突模型：只用裸名 key（count==1 保证唯一，直接 insert）。
+        //   - 冲突模型（归一化裸名 count>1，含同 provider 归一化同名）：
+        //     只用 `claude-{provider}/{model}` 限定名 key，裸名 key 完全不建；
+        //     model_name 改写为带 [{provider_id}] 前缀（列表侧区分同名来源，转发不看它）。
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
             for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let route = ProviderRoute {
@@ -191,7 +231,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
                 };
-                // 裸名 key 派生管线：lowercase → 剥 [1m] 后缀 → 非 claude/anthropic 开头补 claude- 前缀
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
                 let bare = if clean.starts_with("claude") || clean.starts_with("anthropic") {
@@ -199,26 +238,29 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                 } else {
                     format!("claude-{}", clean)
                 };
-                // 1) 裸名 key：同名冲突保留先入者（与 OpenAI 端点一致），避免静默覆盖
-                match anthropic_routes.entry(bare.clone()) {
-                    Entry::Vacant(v) => {
-                        v.insert(route.clone());
-                    }
-                    Entry::Occupied(o) => {
-                        let existing = o.get();
-                        tracing::warn!(
-                            "model '{}' on 'anthropic' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
-                            model.model_id, existing.provider_id, existing.base_url, def.id
-                        );
+                if bare_counts.get(&bare).copied().unwrap_or(0) == 1 {
+                    // 非冲突：裸名 key（count==1 保证唯一，无冲突分支）
+                    anthropic_routes.insert(bare, route);
+                } else {
+                    // 冲突：只用限定名 key；model_name 打上 [{provider_id}] 前缀（列表侧区分来源）
+                    let clean_id = clean.strip_prefix("claude-").unwrap_or(clean);
+                    let qualified_key = format!("claude-{}/{}", def.id, clean_id);
+                    // 同 provider 归一化同名等边缘场景下限定名 key 可能撞车，保留先入者 + warn
+                    match anthropic_routes.entry(qualified_key) {
+                        Entry::Vacant(v) => {
+                            let mut route = route;
+                            route.model_name = format!("[{}]{}", def.id, route.model_name);
+                            v.insert(route);
+                        }
+                        Entry::Occupied(o) => {
+                            let existing = o.get();
+                            tracing::warn!(
+                                "model '{}' on 'anthropic' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
+                                model.model_id, existing.provider_id, existing.base_url, def.id
+                            );
+                        }
                     }
                 }
-                // 2) `{provider}/{model}` 限定名 key：管线为「{provider}/{model_id} → 剥 [1m] →
-                //    若 model_id 自带 claude- 前缀则剥掉 → 始终在最前补 claude-」。
-                //    与裸名 key 不同：claude- 前缀加在限定名整体最前（claude-{provider}/{model}），
-                //    model_id 自带的 claude- 前缀必须去除，避免重复，故不能复用 bare，必须重新计算。
-                let clean_id = clean.strip_prefix("claude-").unwrap_or(clean);
-                let qualified_key = format!("claude-{}/{}", def.id, clean_id);
-                anthropic_routes.insert(qualified_key, route);
             }
         }
 

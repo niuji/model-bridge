@@ -65,9 +65,9 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
         models.push(AnthropicModelEntry {
             id,
             entry_type: "model".to_string(),
-            // display_name 加 {provider_id}| 前缀，用于在列表中区分同名模型来自哪个 provider；
-            // 仅展示用，不影响路由 key（id）与上游转发（route.model_id）
-            display_name: format!("{}|{}", route.provider_id, route.model_name),
+            // display_name 直接用 model_name：冲突模型的 [{provider_id}] 前缀已在建表时写入，
+            // 非冲突模型是纯 model_name。仅展示用，不影响路由 key（id）与上游转发（route.model_id）
+            display_name: route.model_name.clone(),
             created_at: String::new(),
         });
     }

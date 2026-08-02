@@ -462,10 +462,14 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
     // 触发建表
     refresh_routes(&state).await.unwrap();
 
-    // 路由表应同时含裸名 key 与两条限定名 key
+    // 路由表应含两条限定名 key、不含裸名 key（冲突模型只用限定名）
     {
         let routes = state.anthropic_routes.read().await;
-        assert!(routes.contains_key("claude-sonnet-4"), "bare key present");
+        assert!(
+            !routes.contains_key("claude-sonnet-4"),
+            "bare key must NOT exist for conflicting model: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
         assert!(
             routes.contains_key("claude-alpha/sonnet-4"),
             "qualified alpha key present: {:?}",
@@ -491,13 +495,13 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
         .map(|m| m["display_name"].as_str().unwrap())
         .collect();
     assert!(
-        display_names.contains(&"alpha|Claude Sonnet 4"),
-        "display_name has alpha| prefix: {:?}",
+        display_names.contains(&"[alpha]Claude Sonnet 4"),
+        "display_name has [alpha] prefix: {:?}",
         display_names
     );
     assert!(
-        display_names.contains(&"beta|Claude Sonnet 4"),
-        "display_name has beta| prefix: {:?}",
+        display_names.contains(&"[beta]Claude Sonnet 4"),
+        "display_name has [beta] prefix: {:?}",
         display_names
     );
 
@@ -532,13 +536,29 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
     assert_eq!(resp.status(), 200);
     assert_eq!(server_a.received_requests().await.unwrap().len(), 1);
     assert_eq!(server_b.received_requests().await.unwrap().len(), 1);
+
+    // 裸名请求 → 404（冲突模型无裸名 key）
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(server_a.received_requests().await.unwrap().len(), 1);
+    assert_eq!(server_b.received_requests().await.unwrap().len(), 1);
 }
 
-/// 验证限定名请求上游 body 中 model 被回写为干净 model_id（不带 provider 前缀、不带 claude- 前缀、不带 [1M]）。
+/// 验证冲突场景下限定名请求上游 body 中 model 被回写为干净 model_id（剥 [1M] 后缀、无 provider 前缀、保留 claude- 前缀）。
 #[tokio::test(flavor = "multi_thread")]
 async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
     let server = MockServer::start().await;
-    // 上游应收到干净 model_id：claude-kimi-k3（剥 [1M] 后缀后的 model_id，无 provider 前缀、保留 claude- 前缀）
+    // 上游应收到干净 model_id：claude-kimi-k3（剥 [1M] 后缀后的 model_id，保留 claude- 前缀，无 provider 前缀）
     Mock::given(method("POST"))
         .and(path("/messages"))
         .and(body_partial_json(serde_json::json!({"model": "claude-kimi-k3"})))
@@ -549,21 +569,43 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
         .mount(&server)
         .await;
 
-    // provider=kimi，声明「自带 claude- 前缀 + [1M] 后缀」的模型
-    let defs = vec![ProviderDef {
-        id: "kimi".into(),
-        name: "Kimi".into(),
-        icon: None,
-        channels: vec![ChannelDef {
-            channel_type: "anthropic".into(),
-            base_url: server.uri(),
-            models_endpoint: None,
-        }],
-    }];
+    // 两个 provider 声明相同的「自带 claude- 前缀 + [1M] 后缀」模型 → 冲突 → 只走限定名
+    let defs = vec![
+        ProviderDef {
+            id: "kimi".into(),
+            name: "Kimi".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server.uri(),
+                models_endpoint: None,
+            }],
+        },
+        ProviderDef {
+            id: "kimi2".into(),
+            name: "Kimi2".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server.uri(),
+                models_endpoint: None,
+            }],
+        },
+    ];
     let state = build_state_with_defs(defs).await;
     update_provider(
         &state.db,
         "kimi",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-kimi-k3[1M]".into(), "Kimi K3".into())],
+    )
+    .await
+    .unwrap();
+    update_provider(
+        &state.db,
+        "kimi2",
         UPSTREAM_KEY,
         true,
         &[("anthropic".into(), true)],
