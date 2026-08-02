@@ -24,6 +24,8 @@ use tokio::sync::RwLock;
 use crate::db::schema::run_migrations;
 use crate::router::create_proxy_router;
 use crate::state::{AppState, ProviderRoute};
+use crate::config::{ChannelDef, ProviderDef};
+use crate::admin::provider_svc::{refresh_routes, update_provider};
 
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -47,6 +49,29 @@ fn route(model_id: &str, base_url: &str) -> ProviderRoute {
         base_url: base_url.into(),
         api_key: UPSTREAM_KEY.into(),
     }
+}
+
+/// 构造带 provider_defs 的 AppState（供 refresh_routes 建表）。
+async fn build_state_with_defs(defs: Vec<ProviderDef>) -> Arc<AppState> {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    run_migrations(&pool).await.unwrap();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let mut cache = HashMap::new();
+    cache.insert(hex_sha256(TEST_KEY), "key-1".to_string());
+    Arc::new(AppState {
+        openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
+        openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
+        anthropic_routes: Arc::new(RwLock::new(HashMap::new())),
+        provider_defs: defs,
+        db: pool,
+        client,
+        api_key_cache: Arc::new(RwLock::new(cache)),
+        encryption_key: None,
+        proxy_base_url: "http://test".into(),
+    })
 }
 
 /// 构建带内存 SQLite（已建表）+ 一个已缓存测试 key 的 AppState。
@@ -360,4 +385,208 @@ async fn anthropic_forwards_sse_and_uses_x_api_key_header() {
     assert!(text.contains("message_start"));
     assert!(text.contains("message_delta"));
     assert!(text.contains("[DONE]"));
+}
+
+/// 验证 anthropic 建表的「裸名 + 限定名」双 key：
+/// 两个 provider 各声明一个同名模型，refresh_routes() 应插入裸名 key（保留先入者）
+/// 与 `claude-{provider}/{model}` 限定名 key。客户端用限定名请求时命中对应 provider。
+#[tokio::test(flavor = "multi_thread")]
+async fn anthropic_qualified_name_routes_to_correct_provider() {
+    // 两个上游，各自只认识自己的 model
+    let server_a = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-sonnet-4"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_a)
+        .await;
+    let server_b = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-sonnet-4"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_b)
+        .await;
+
+    // 两个 provider 声明同名模型 claude-sonnet-4，channel 均启用、base_url 各自指向自己的 mock
+    let defs = vec![
+        ProviderDef {
+            id: "alpha".into(),
+            name: "Alpha".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server_a.uri(),
+                models_endpoint: None,
+            }],
+        },
+        ProviderDef {
+            id: "beta".into(),
+            name: "Beta".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server_b.uri(),
+                models_endpoint: None,
+            }],
+        },
+    ];
+    let state = build_state_with_defs(defs).await;
+    // 写入两个 provider 的启用配置 + anthropic 模型
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+    )
+    .await
+    .unwrap();
+    update_provider(
+        &state.db,
+        "beta",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+    )
+    .await
+    .unwrap();
+    // 触发建表
+    refresh_routes(&state).await.unwrap();
+
+    // 路由表应同时含裸名 key 与两条限定名 key
+    {
+        let routes = state.anthropic_routes.read().await;
+        assert!(routes.contains_key("claude-sonnet-4"), "bare key present");
+        assert!(
+            routes.contains_key("claude-alpha/sonnet-4"),
+            "qualified alpha key present: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        assert!(routes.contains_key("claude-beta/sonnet-4"), "qualified beta key present");
+    }
+
+    let base = spawn_proxy(state).await;
+
+    // 模型列表的 display_name 应带 {provider_id}| 前缀（仅展示用，区分同名模型来源）
+    let r = http()
+        .get(format!("{base}/anthropic/v1/models"))
+        .headers(auth_headers())
+        .send()
+        .await
+        .unwrap();
+    let b: serde_json::Value = r.json().await.unwrap();
+    let display_names: Vec<&str> = b["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["display_name"].as_str().unwrap())
+        .collect();
+    assert!(
+        display_names.contains(&"alpha|Claude Sonnet 4"),
+        "display_name has alpha| prefix: {:?}",
+        display_names
+    );
+    assert!(
+        display_names.contains(&"beta|Claude Sonnet 4"),
+        "display_name has beta| prefix: {:?}",
+        display_names
+    );
+
+    // 限定名请求 → 精确命中 beta（server_b）
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-beta/sonnet-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server_b.received_requests().await.unwrap().len(), 1);
+    assert_eq!(server_a.received_requests().await.unwrap().len(), 0);
+
+    // 限定名请求 → alpha（server_a）
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-alpha/sonnet-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server_a.received_requests().await.unwrap().len(), 1);
+    assert_eq!(server_b.received_requests().await.unwrap().len(), 1);
+}
+
+/// 验证限定名请求上游 body 中 model 被回写为干净 model_id（不带 provider 前缀、不带 claude- 前缀、不带 [1M]）。
+#[tokio::test(flavor = "multi_thread")]
+async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
+    let server = MockServer::start().await;
+    // 上游应收到干净 model_id：claude-kimi-k3（剥 [1M] 后缀后的 model_id，无 provider 前缀、保留 claude- 前缀）
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-kimi-k3"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    // provider=kimi，声明「自带 claude- 前缀 + [1M] 后缀」的模型
+    let defs = vec![ProviderDef {
+        id: "kimi".into(),
+        name: "Kimi".into(),
+        icon: None,
+        channels: vec![ChannelDef {
+            channel_type: "anthropic".into(),
+            base_url: server.uri(),
+            models_endpoint: None,
+        }],
+    }];
+    let state = build_state_with_defs(defs).await;
+    update_provider(
+        &state.db,
+        "kimi",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-kimi-k3[1M]".into(), "Kimi K3".into())],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+    let base = spawn_proxy(state).await;
+
+    // 限定名 key：claude-kimi/kimi-k3（claude- 前缀已从 model_id 剥除、[1M] 已剥除、最前补 claude-）
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-kimi/kimi-k3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // 上游收到干净 model_id：claude-kimi-k3（[1M] 后缀被剥除，保留 claude- 前缀，无 provider 前缀）
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

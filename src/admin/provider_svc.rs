@@ -163,6 +163,8 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
             .collect();
 
+        use std::collections::hash_map::Entry;
+
         // 模型按通道隔离：channel_type 为空（迁移残留）的跳过路由并告警
         for m in models.iter().filter(|m| m.channel_type.is_empty()) {
             tracing::warn!(
@@ -174,6 +176,11 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         // ---- anthropic 路由：每个启用的 anthropic 通道，插入「归属该通道」的模型 ----
         // 检索 key 由 model_id 派生（剥 [1m] 后缀；非 claude/anthropic 开头的补 claude- 前缀），
         // 与 proxy 转发剥除 [1m] 的逻辑配套。
+        //
+        // 双 key 插入：先插裸名 key，再插 `{provider}/{model}` 限定名 key。
+        //   - 裸名 key：兼容现状，同名多 provider 场景沿用「保留先入者 + warn」语义。
+        //   - 限定名 key：客户端用 `{provider}/{model}` 显式选 provider（绕过裸名冲突）。
+        // 两条 key 指向同一个 ProviderRoute，转发/列表逻辑零改动。
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
             for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let route = ProviderRoute {
@@ -184,14 +191,34 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
                 };
+                // 裸名 key 派生管线：lowercase → 剥 [1m] 后缀 → 非 claude/anthropic 开头补 claude- 前缀
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
-                let key = if clean.starts_with("claude") || clean.starts_with("anthropic") {
+                let bare = if clean.starts_with("claude") || clean.starts_with("anthropic") {
                     clean.to_string()
                 } else {
                     format!("claude-{}", clean)
                 };
-                anthropic_routes.insert(key, route);
+                // 1) 裸名 key：同名冲突保留先入者（与 OpenAI 端点一致），避免静默覆盖
+                match anthropic_routes.entry(bare.clone()) {
+                    Entry::Vacant(v) => {
+                        v.insert(route.clone());
+                    }
+                    Entry::Occupied(o) => {
+                        let existing = o.get();
+                        tracing::warn!(
+                            "model '{}' on 'anthropic' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
+                            model.model_id, existing.provider_id, existing.base_url, def.id
+                        );
+                    }
+                }
+                // 2) `{provider}/{model}` 限定名 key：管线为「{provider}/{model_id} → 剥 [1m] →
+                //    若 model_id 自带 claude- 前缀则剥掉 → 始终在最前补 claude-」。
+                //    与裸名 key 不同：claude- 前缀加在限定名整体最前（claude-{provider}/{model}），
+                //    model_id 自带的 claude- 前缀必须去除，避免重复，故不能复用 bare，必须重新计算。
+                let clean_id = clean.strip_prefix("claude-").unwrap_or(clean);
+                let qualified_key = format!("claude-{}/{}", def.id, clean_id);
+                anthropic_routes.insert(qualified_key, route);
             }
         }
 
@@ -199,7 +226,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         // 每个启用的 openai 通道单独成一张路由表：openai_chat → openai_chat_routes，
         // openai_responses → openai_responses_routes。模型归属哪个通道就进哪张表，转发用该通道 base_url，
         // 无需按 path 过滤。跨 provider 同名 model_id 冲突时保留先入者并告警。
-        use std::collections::hash_map::Entry;
         for ch in enabled.iter().copied().filter(|c| c.channel_type != "anthropic") {
             let table: &mut HashMap<String, ProviderRoute> = match ch.channel_type.as_str() {
                 "openai_chat" => &mut openai_chat_routes,
