@@ -38,26 +38,20 @@ Date: 2026-08-02
 
 冲突模型的裸名 key **完全不建**。
 
-## 列表侧
+## 列表侧（无新字段方案）
 
-`models_list.rs` 的 `get_anthropic_models` 遍历路由表时，根据 route 是否冲突决定 display_name：
+`ProviderRoute.model_name` 的唯一消费点是 `models_list.rs` 的 display_name（`proxy.rs` 转发链路不读 `model_name`，已确认）。因此**不加 `is_ambiguous` 字段**，改为建表时直接改写 `model_name`：
 
-- 冲突模型：`format!("[{}]{}", route.provider_id, route.model_name)`
-- 不冲突模型：`route.model_name` 原样
+- 冲突模型：建表时 `model_name` 直接设为 `format!("[{}]{}", provider_id, model_name)`，前缀在源头打上。
+- 非冲突模型：`model_name` 原样。
 
-`id`（检索 key）与 `[1m]` 后缀补回逻辑不变。
+列表侧 `get_anthropic_models` 的 display_name 从 `format!("[{}]{}", route.provider_id, route.model_name)` 改为 `route.model_name.clone()`（前缀已在建表时写入）。
 
-### ProviderRoute 新增字段
-
-路由表不记录"是否冲突"，需要在 `ProviderRoute` 上新增 `is_ambiguous: bool`（`#[derive(Debug, Clone)]` 自动覆盖），由 `refresh_routes()` 建表时写入。构造点三处：
-
-- `provider_svc.rs` anthropic 建表处（唯一会被用到该字段的路径）
-- `provider_svc.rs` openai 建表处（填 `false`，该端点不用此字段）
-- `proxy_route_tests.rs` 测试 helper `route()`（填 `false`）
+`state.rs` 不改动；`id`（检索 key）与 `[1m]` 后缀补回逻辑不变。
 
 ## 转发逻辑
 
-**零改动**。`proxy.rs` 用检索 key 查表，`route.model_id` 剥 `[1m]` 后缀后发上游，与 key 形态无关。
+**零改动**。`proxy.rs` 用检索 key 查表，`route.model_id` 剥 `[1m]` 后缀后发上游，与 key 形态及 `model_name` 无关。
 
 ## 测试改动（`proxy_route_tests.rs`）
 
@@ -67,7 +61,6 @@ Date: 2026-08-02
 
 ## 受影响文件
 
-- `src/state.rs`：`ProviderRoute` 加 `is_ambiguous` 字段
-- `src/admin/provider_svc.rs`：anthropic 建表改两遍构建
-- `src/router/models_list.rs`：display_name 按 `is_ambiguous` 决定前缀
+- `src/admin/provider_svc.rs`：anthropic 建表改两遍构建 + 冲突模型改写 `model_name`
+- `src/router/models_list.rs`：display_name 改为直接取 `route.model_name`
 - `src/router/proxy_route_tests.rs`：改两个用例 + 新增一个
