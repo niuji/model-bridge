@@ -815,3 +815,108 @@ async fn anthropic_same_provider_1m_variant_preferred() {
     assert_eq!(resp.status(), 200);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
+
+/// 回归：限定名 key 嵌入 provider id 时必须转小写，否则 /v1/models 下发的 id 与
+/// 代理查找侧 to_lowercase 后的 key 对不上，冲突模型彻底不可达（任何拼写都 404）。
+#[tokio::test(flavor = "multi_thread")]
+async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
+    let server_a = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-sonnet-4"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_a)
+        .await;
+    let server_b = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_partial_json(serde_json::json!({"model": "claude-sonnet-4"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_b)
+        .await;
+
+    // 大写 provider id（用户自定义 provider 合法形态）声明同名模型 → 冲突 → 走限定名 key
+    let defs = vec![
+        ProviderDef {
+            id: "alpha".into(),
+            name: "Alpha".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server_a.uri(),
+                models_endpoint: None,
+            }],
+        },
+        ProviderDef {
+            id: "MyClaude".into(),
+            name: "MyClaude".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server_b.uri(),
+                models_endpoint: None,
+            }],
+        },
+    ];
+    let state = build_state_with_defs(defs).await;
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+    )
+    .await
+    .unwrap();
+    update_provider(
+        &state.db,
+        "MyClaude",
+        UPSTREAM_KEY,
+        true,
+        &[("anthropic".into(), true)],
+        &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    // 限定名 key 必须是小写 provider id（代理查找侧总是 to_lowercase）
+    {
+        let routes = state.anthropic_routes.read().await;
+        assert!(
+            routes.contains_key("claude-myclaude/sonnet-4"),
+            "lowercased qualified key present: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !routes.contains_key("claude-MyClaude/sonnet-4"),
+            "uppercase-id key must not exist: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+    }
+
+    let base = spawn_proxy(state).await;
+
+    // 按 /v1/models 下发的 id 原样回发 → 必须命中（回归前 404）
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "claude-myclaude/sonnet-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server_b.received_requests().await.unwrap().len(), 1);
+    assert_eq!(server_a.received_requests().await.unwrap().len(), 0);
+}
