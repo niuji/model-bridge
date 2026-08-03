@@ -168,7 +168,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
 
     // 预计算 openai 裸名冲突表（chat/responses 各自独立，跨 provider 同名冲突）：
     // openai 的 bare 归一化就是纯 to_lowercase（无 [1m] 剥离、无 claude- 前缀补全）。
-    // 与 anthropic 预扫描共用同一批 DB 查询（enabled/channels/models），但按通道分别计数。
+    // 与 anthropic 预扫描使用相同的查询与过滤条件（enabled/channels/models），但按通道分别计数。
     let mut openai_chat_bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut openai_responses_bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for def in &state.provider_defs {
