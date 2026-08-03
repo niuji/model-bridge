@@ -127,9 +127,14 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     let mut openai_responses_routes: HashMap<String, ProviderRoute> = HashMap::new();
     let mut anthropic_routes: HashMap<String, ProviderRoute> = HashMap::new();
 
-    // 预计算 anthropic 裸名冲突表（跨所有 provider）：
-    // bare_counts 必须在主循环之前完成，否则单 provider 视角无法识别跨 provider 同名冲突。
-    let mut bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // 单遍加载所有启用 provider 的配置/通道/模型，避免预扫描与主循环重复查询（3N → N 次 DB 查询）。
+    struct LoadedProvider<'a> {
+        def: &'a ProviderDef,
+        api_key: String,
+        channels: Vec<ChannelDetail>,
+        models: Vec<ProviderModel>,
+    }
+    let mut loaded: Vec<LoadedProvider> = Vec::new();
     for def in &state.provider_defs {
         let config = get_provider_config(&state.db, &def.id).await;
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
@@ -142,18 +147,28 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
         let channel_configs = get_channel_configs(&state.db, &def.id).await;
         let channels = merge_channels(&def.channels, &channel_configs);
-        let enabled: Vec<&ChannelDetail> = channels
-            .iter()
-            .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
-            .collect();
         let models = sqlx::query_as::<_, ProviderModel>(
             "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
         )
         .bind(&def.id)
         .fetch_all(&state.db)
         .await?;
+        loaded.push(LoadedProvider { def, api_key, channels, models });
+    }
+
+    // ---- 预扫描：跨所有 provider 统计归一化裸名冲突 ----
+    // anthropic 统一统计（bare = to_lowercase → 剥 [1m] → 非 claude/anthropic 开头补 claude- 前缀）；
+    // openai chat/responses 各自独立统计（bare = 纯 to_lowercase）。
+    let mut bare_counts: HashMap<String, usize> = HashMap::new();
+    let mut openai_chat_bare_counts: HashMap<String, usize> = HashMap::new();
+    let mut openai_responses_bare_counts: HashMap<String, usize> = HashMap::new();
+    for lp in &loaded {
+        let enabled: Vec<&ChannelDetail> = lp.channels
+            .iter()
+            .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
+            .collect();
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
-            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+            for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let lower = model.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
                 let bare = if clean.starts_with("claude") || clean.starts_with("anthropic") {
@@ -164,88 +179,39 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                 *bare_counts.entry(bare).or_insert(0) += 1;
             }
         }
-    }
-
-    // 预计算 openai 裸名冲突表（chat/responses 各自独立，跨 provider 同名冲突）：
-    // openai 的 bare 归一化就是纯 to_lowercase（无 [1m] 剥离、无 claude- 前缀补全）。
-    // 与 anthropic 预扫描使用相同的查询与过滤条件（enabled/channels/models），但按通道分别计数。
-    let mut openai_chat_bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut openai_responses_bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for def in &state.provider_defs {
-        let config = get_provider_config(&state.db, &def.id).await;
-        let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
-        if !is_enabled {
-            continue;
-        }
-        let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
-        if api_key.is_empty() {
-            continue;
-        }
-        let channel_configs = get_channel_configs(&state.db, &def.id).await;
-        let channels = merge_channels(&def.channels, &channel_configs);
-        let enabled: Vec<&ChannelDetail> = channels
-            .iter()
-            .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
-            .collect();
-        let models = sqlx::query_as::<_, ProviderModel>(
-            "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
-        )
-        .bind(&def.id)
-        .fetch_all(&state.db)
-        .await?;
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "openai_chat" || c.channel_type == "openai_responses") {
-            let table: &mut std::collections::HashMap<String, usize> = match ch.channel_type.as_str() {
+            let table: &mut HashMap<String, usize> = match ch.channel_type.as_str() {
                 "openai_chat" => &mut openai_chat_bare_counts,
                 "openai_responses" => &mut openai_responses_bare_counts,
                 _ => unreachable!(),
             };
-            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+            for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let bare = model.model_id.to_lowercase();
                 *table.entry(bare).or_insert(0) += 1;
             }
         }
     }
 
-    for def in &state.provider_defs {
-        let config = get_provider_config(&state.db, &def.id).await;
-        let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
-        if !is_enabled {
-            continue;
-        }
-        let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
-        if api_key.is_empty() {
-            continue;
-        }
-
-        let channel_configs = get_channel_configs(&state.db, &def.id).await;
-        let channels = merge_channels(&def.channels, &channel_configs);
-
-        let models = sqlx::query_as::<_, ProviderModel>(
-            "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
-        )
-        .bind(&def.id)
-        .fetch_all(&state.db)
-        .await?;
+    // ---- 主循环：按冲突与否生成 key，构建三张路由表 ----
+    use std::collections::hash_map::Entry;
+    for lp in &loaded {
+        let def = lp.def;
+        let api_key = &lp.api_key;
 
         // 拒绝非 http(s) 的 base_url（file:// 等），避免被导向本地资源
-        for c in channels
-            .iter()
-            .filter(|c| c.is_enabled && !is_safe_base_url(&c.base_url))
-        {
+        for c in lp.channels.iter().filter(|c| c.is_enabled && !is_safe_base_url(&c.base_url)) {
             tracing::warn!(
                 "provider '{}' channel '{}' base_url '{}' is not http(s), excluded from routing",
                 def.id, c.channel_type, c.base_url
             );
         }
-        let enabled: Vec<&ChannelDetail> = channels
+        let enabled: Vec<&ChannelDetail> = lp.channels
             .iter()
             .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
             .collect();
 
-        use std::collections::hash_map::Entry;
-
         // 模型按通道隔离：channel_type 为空（迁移残留）的跳过路由并告警
-        for m in models.iter().filter(|m| m.channel_type.is_empty()) {
+        for m in lp.models.iter().filter(|m| m.channel_type.is_empty()) {
             tracing::warn!(
                 "provider '{}' model '{}' has empty channel_type, skipped from routing",
                 def.id, m.model_id
@@ -262,7 +228,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         //     只用 `claude-{provider}/{model}` 限定名 key，裸名 key 完全不建；
         //     model_name 改写为带 [{provider_id}] 前缀（列表侧区分同名来源，转发不看它）。
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
-            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+            for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let route = ProviderRoute {
                     provider_id: def.id.clone(),
                     provider_name: def.name.clone(),
@@ -342,7 +308,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                 "openai_responses" => &openai_responses_bare_counts,
                 _ => unreachable!(),
             };
-            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+            for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let key_lower = model.model_id.to_lowercase();
                 let route = ProviderRoute {
                     provider_id: def.id.clone(),
