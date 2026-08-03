@@ -364,6 +364,22 @@ async fn proxy_buffered_response(
         Ok(body_bytes) => {
             // 异步写入 usage
             let usage = extract_usage_from_response(&body_bytes, api_format);
+            let (record_status, error_msg) = if status.is_success() {
+                ("success", None)
+            } else {
+                // 上游返回非成功状态（429/5xx 等）：记录状态码 + body 摘要，并输出 warn 日志。
+                // body 截断 500 字符，避免存整页 HTML 错误页。
+                let body_preview: String =
+                    String::from_utf8_lossy(&body_bytes).chars().take(500).collect();
+                tracing::warn!(
+                    "upstream non-success: model={}, provider={}, url={}, status={}, latency_ms={}, body={}",
+                    model, provider_id, target_url, status.as_u16(), latency_ms, body_preview
+                );
+                (
+                    "error",
+                    Some(format!("HTTP {}: {}", status.as_u16(), body_preview)),
+                )
+            };
             tokio::spawn(write_usage(
                 state.clone(),
                 model.to_string(),
@@ -373,8 +389,8 @@ async fn proxy_buffered_response(
                 usage.2,
                 usage.3,
                 latency_ms,
-                if status.is_success() { "success" } else { "error" },
-                None,
+                record_status,
+                error_msg,
                 api_key_id,
                 client,
                 api_format.to_string(),
