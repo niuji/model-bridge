@@ -920,3 +920,312 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
     assert_eq!(server_b.received_requests().await.unwrap().len(), 1);
     assert_eq!(server_a.received_requests().await.unwrap().len(), 0);
 }
+
+/// openai_chat 跨 provider 同名冲突模型用限定名 key：路由表只含 `{provider}/{model}` 两个限定名 key、
+/// 不含裸名；/v1/models 下发限定名 id；限定名请求精确命中；裸名请求 404。
+#[tokio::test(flavor = "multi_thread")]
+async fn openai_chat_conflicting_models_use_qualified_key() {
+    let server_a = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"model": "gpt-4o"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_a)
+        .await;
+    let server_b = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"model": "gpt-4o"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_b)
+        .await;
+
+    // 两个 provider 在 chat 通道声明同名 gpt-4o → 冲突 → 走限定名 key
+    let defs = vec![
+        ProviderDef {
+            id: "alpha".into(),
+            name: "Alpha".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "openai_chat".into(),
+                base_url: server_a.uri(),
+                models_endpoint: None,
+            }],
+        },
+        ProviderDef {
+            id: "beta".into(),
+            name: "Beta".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "openai_chat".into(),
+                base_url: server_b.uri(),
+                models_endpoint: None,
+            }],
+        },
+    ];
+    let state = build_state_with_defs(defs).await;
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("openai_chat".into(), true)],
+        &[("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into())],
+    )
+    .await
+    .unwrap();
+    update_provider(
+        &state.db,
+        "beta",
+        UPSTREAM_KEY,
+        true,
+        &[("openai_chat".into(), true)],
+        &[("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into())],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    // 路由表应含两条限定名 key、不含裸名 key（冲突模型只用限定名）
+    {
+        let routes = state.openai_chat_routes.read().await;
+        assert!(
+            !routes.contains_key("gpt-4o"),
+            "bare key must NOT exist for conflicting model: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            routes.contains_key("alpha/gpt-4o"),
+            "qualified alpha key present: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        assert!(routes.contains_key("beta/gpt-4o"), "qualified beta key present");
+    }
+
+    let base = spawn_proxy(state).await;
+
+    // /v1/models 下发两个限定名 id
+    let r = http()
+        .get(format!("{base}/openai-chat/v1/models"))
+        .headers(auth_headers())
+        .send()
+        .await
+        .unwrap();
+    let b: serde_json::Value = r.json().await.unwrap();
+    let ids: Vec<&str> = b["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"alpha/gpt-4o"), "models list has alpha/gpt-4o: {:?}", ids);
+    assert!(ids.contains(&"beta/gpt-4o"), "models list has beta/gpt-4o: {:?}", ids);
+    assert!(!ids.contains(&"gpt-4o"), "bare gpt-4o not listed: {:?}", ids);
+
+    // 限定名请求 alpha → 命中 server_a
+    let resp = http()
+        .post(format!("{base}/openai-chat/v1/chat/completions"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "alpha/gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server_a.received_requests().await.unwrap().len(), 1);
+    assert_eq!(server_b.received_requests().await.unwrap().len(), 0);
+
+    // 裸名请求 → 404（冲突模型无裸名 key）
+    let resp = http()
+        .post(format!("{base}/openai-chat/v1/chat/completions"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(server_a.received_requests().await.unwrap().len(), 1);
+}
+
+/// openai_chat 非冲突模型只用裸名 key：路由表只含裸名、不含限定名；/v1/models 下发裸名 id；
+/// 裸名请求 200。
+#[tokio::test(flavor = "multi_thread")]
+async fn openai_chat_non_conflicting_uses_only_bare_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"model": "gpt-4o"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let defs = vec![ProviderDef {
+        id: "alpha".into(),
+        name: "Alpha".into(),
+        icon: None,
+        channels: vec![ChannelDef {
+            channel_type: "openai_chat".into(),
+            base_url: server.uri(),
+            models_endpoint: None,
+        }],
+    }];
+    let state = build_state_with_defs(defs).await;
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("openai_chat".into(), true)],
+        &[("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into())],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    // 路由表只含裸名 key，不含限定名 key
+    {
+        let routes = state.openai_chat_routes.read().await;
+        assert!(routes.contains_key("gpt-4o"), "bare key present: {:?}", routes.keys().collect::<Vec<_>>());
+        assert!(
+            !routes.contains_key("alpha/gpt-4o"),
+            "qualified key must NOT exist for non-conflicting model: {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(routes.len(), 1);
+    }
+
+    let base = spawn_proxy(state).await;
+
+    // 裸名请求 200
+    let resp = http()
+        .post(format!("{base}/openai-chat/v1/chat/completions"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+/// openai_chat 与 openai_responses 冲突检测各自独立：单 provider 在两个通道各声明同名 gpt-4o，
+/// 两表互不干扰——各只有一个裸名 key，跨表同名不算冲突。
+#[tokio::test(flavor = "multi_thread")]
+async fn openai_chat_responses_conflict_independent() {
+    let server_chat = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"model": "gpt-4o"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_chat)
+        .await;
+    let server_resp = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_partial_json(serde_json::json!({"model": "gpt-4o"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".as_bytes(), "text/event-stream"),
+        )
+        .mount(&server_resp)
+        .await;
+
+    // 单 provider，chat 与 responses 两通道各声明 gpt-4o → 跨表同名不冲突，各用裸名 key
+    let defs = vec![ProviderDef {
+        id: "alpha".into(),
+        name: "Alpha".into(),
+        icon: None,
+        channels: vec![
+            ChannelDef {
+                channel_type: "openai_chat".into(),
+                base_url: server_chat.uri(),
+                models_endpoint: None,
+            },
+            ChannelDef {
+                channel_type: "openai_responses".into(),
+                base_url: server_resp.uri(),
+                models_endpoint: None,
+            },
+        ],
+    }];
+    let state = build_state_with_defs(defs).await;
+    update_provider(
+        &state.db,
+        "alpha",
+        UPSTREAM_KEY,
+        true,
+        &[("openai_chat".into(), true), ("openai_responses".into(), true)],
+        &[
+            ("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into()),
+            ("openai_responses".into(), "gpt-4o".into(), "GPT-4o".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    // 两表各只有一个裸名 key（跨表同名不算冲突）
+    {
+        let chat = state.openai_chat_routes.read().await;
+        assert!(chat.contains_key("gpt-4o"), "chat bare key: {:?}", chat.keys().collect::<Vec<_>>());
+        assert_eq!(chat.len(), 1, "chat table only bare key");
+        let resp = state.openai_responses_routes.read().await;
+        assert!(resp.contains_key("gpt-4o"), "responses bare key: {:?}", resp.keys().collect::<Vec<_>>());
+        assert_eq!(resp.len(), 1, "responses table only bare key");
+    }
+
+    let base = spawn_proxy(state).await;
+
+    // chat 裸名请求 → 命中 server_chat
+    let resp = http()
+        .post(format!("{base}/openai-chat/v1/chat/completions"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server_chat.received_requests().await.unwrap().len(), 1);
+
+    // responses 裸名请求 → 命中 server_resp
+    let resp = http()
+        .post(format!("{base}/openai-responses/v1/responses"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server_resp.received_requests().await.unwrap().len(), 1);
+}
