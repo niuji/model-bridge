@@ -166,6 +166,46 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
     }
 
+    // 预计算 openai 裸名冲突表（chat/responses 各自独立，跨 provider 同名冲突）：
+    // openai 的 bare 归一化就是纯 to_lowercase（无 [1m] 剥离、无 claude- 前缀补全）。
+    // 与 anthropic 预扫描共用同一批 DB 查询（enabled/channels/models），但按通道分别计数。
+    let mut openai_chat_bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut openai_responses_bare_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for def in &state.provider_defs {
+        let config = get_provider_config(&state.db, &def.id).await;
+        let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
+        if !is_enabled {
+            continue;
+        }
+        let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
+        if api_key.is_empty() {
+            continue;
+        }
+        let channel_configs = get_channel_configs(&state.db, &def.id).await;
+        let channels = merge_channels(&def.channels, &channel_configs);
+        let enabled: Vec<&ChannelDetail> = channels
+            .iter()
+            .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
+            .collect();
+        let models = sqlx::query_as::<_, ProviderModel>(
+            "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
+        )
+        .bind(&def.id)
+        .fetch_all(&state.db)
+        .await?;
+        for ch in enabled.iter().copied().filter(|c| c.channel_type == "openai_chat" || c.channel_type == "openai_responses") {
+            let table: &mut std::collections::HashMap<String, usize> = match ch.channel_type.as_str() {
+                "openai_chat" => &mut openai_chat_bare_counts,
+                "openai_responses" => &mut openai_responses_bare_counts,
+                _ => unreachable!(),
+            };
+            for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
+                let bare = model.model_id.to_lowercase();
+                *table.entry(bare).or_insert(0) += 1;
+            }
+        }
+    }
+
     for def in &state.provider_defs {
         let config = get_provider_config(&state.db, &def.id).await;
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
@@ -244,7 +284,9 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                 } else {
                     // 冲突：只用限定名 key；model_name 打上 [{provider_id}] 前缀（列表侧区分来源）
                     let clean_id = clean.strip_prefix("claude-").unwrap_or(clean);
-                    let qualified_key = format!("claude-{}/{}", def.id, clean_id);
+                    // def.id 必须转小写：代理查找侧总是 to_lowercase，限定名 key 若嵌入
+                    // 大写 id（用户自定义 provider 合法形态），冲突模型将彻底不可达
+                    let qualified_key = format!("claude-{}/{}", def.id.to_lowercase(), clean_id);
                     // 先把 model_name 打上 [{provider_id}] 前缀（Vacant 入库与 Occupied 覆盖均需此前缀）
                     let mut prefixed_route = route;
                     prefixed_route.model_name = format!("[{}]{}", def.id, prefixed_route.model_name);
@@ -280,7 +322,8 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         // ---- openai 路由：chat 与 responses 各自独立建表，不再合并 ----
         // 每个启用的 openai 通道单独成一张路由表：openai_chat → openai_chat_routes，
         // openai_responses → openai_responses_routes。模型归属哪个通道就进哪张表，转发用该通道 base_url，
-        // 无需按 path 过滤。跨 provider 同名 model_id 冲突时保留先入者并告警。
+        // 无需按 path 过滤。跨 provider 同名 model_id 冲突时（按通道独立统计）改用限定名 key
+        // `{provider_id}/{model_id}`，裸名 key 不建；不冲突的模型仍用裸名 key。
         for ch in enabled.iter().copied().filter(|c| c.channel_type != "anthropic") {
             let table: &mut HashMap<String, ProviderRoute> = match ch.channel_type.as_str() {
                 "openai_chat" => &mut openai_chat_routes,
@@ -293,8 +336,14 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     continue;
                 }
             };
+            // 冲突计数表：按通道选对应的预扫描结果
+            let bare_counts: &HashMap<String, usize> = match ch.channel_type.as_str() {
+                "openai_chat" => &openai_chat_bare_counts,
+                "openai_responses" => &openai_responses_bare_counts,
+                _ => unreachable!(),
+            };
             for model in models.iter().filter(|m| m.channel_type == ch.channel_type) {
-                let key = model.model_id.to_lowercase();
+                let key_lower = model.model_id.to_lowercase();
                 let route = ProviderRoute {
                     provider_id: def.id.clone(),
                     provider_name: def.name.clone(),
@@ -303,16 +352,37 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
                 };
-                match table.entry(key) {
-                    Entry::Vacant(v) => {
-                        v.insert(route);
+                if bare_counts.get(&key_lower).copied().unwrap_or(0) == 1 {
+                    // 非冲突：裸名 key（count==1 保证唯一，无冲突分支）
+                    match table.entry(key_lower) {
+                        Entry::Vacant(v) => {
+                            v.insert(route);
+                        }
+                        Entry::Occupied(o) => {
+                            // 理论上不可达（count==1），防御性保留
+                            let existing = o.get();
+                            tracing::warn!(
+                                "model '{}' on '{}' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
+                                model.model_id, ch.channel_type, existing.provider_id, existing.base_url, def.id
+                            );
+                        }
                     }
-                    Entry::Occupied(o) => {
-                        let existing = o.get();
-                        tracing::warn!(
-                            "model '{}' on '{}' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
-                            model.model_id, ch.channel_type, existing.provider_id, existing.base_url, def.id
-                        );
+                } else {
+                    // 冲突：只用限定名 key；model_name 打上 [{provider_id}] 前缀（列表侧区分来源）
+                    let mut prefixed_route = route;
+                    prefixed_route.model_name = format!("[{}]{}", def.id, prefixed_route.model_name);
+                    let qualified_key = format!("{}/{}", def.id.to_lowercase(), key_lower);
+                    match table.entry(qualified_key) {
+                        Entry::Vacant(v) => {
+                            v.insert(prefixed_route);
+                        }
+                        Entry::Occupied(o) => {
+                            let existing = o.get();
+                            tracing::warn!(
+                                "model '{}' on '{}' channel already routed by provider '{}' (base '{}'); keeping first, provider '{}' skipped",
+                                model.model_id, ch.channel_type, existing.provider_id, existing.base_url, def.id
+                            );
+                        }
                     }
                 }
             }
