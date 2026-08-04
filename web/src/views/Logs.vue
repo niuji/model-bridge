@@ -51,12 +51,36 @@
       <span class="range-text mono">{{ `显示 ${rangeStart.toLocaleString('en-US')}–${rangeEnd.toLocaleString('en-US')} 条` }}</span>
       <n-pagination v-model:page="page" :page-size="pageSize" :item-count="total" @update:page="loadLogs" />
     </footer>
+
+    <n-modal
+      v-model:show="showError"
+      title="错误详情"
+      preset="card"
+      style="width: 560px"
+      class="error-modal"
+      :bordered="false"
+    >
+      <div v-if="errorRow" class="error-detail">
+        <div class="error-meta">
+          <span class="status-badge error">
+            <span class="status-dot-sm" />
+            <span class="mono status-text">ERR</span>
+          </span>
+          <span class="error-time mono">{{ formatLocalTime(errorRow.created_at) }}</span>
+          <span class="error-model mono">{{ errorRow.model_id }}</span>
+        </div>
+        <pre class="error-body mono">{{ errorRow.error_msg || '未知错误' }}</pre>
+      </div>
+      <template #footer>
+        <n-space justify="end"><n-button @click="showError = false">关闭</n-button></n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, h } from 'vue'
-import { NDataTable, NPagination, NTooltip } from 'naive-ui'
+import { NDataTable, NPagination, NTooltip, NModal, NButton, NSpace } from 'naive-ui'
 import { formatLocalTime } from '../utils'
 
 const API_BASE = '/api/admin'
@@ -65,6 +89,14 @@ const loading = ref(true)
 const page = ref(1)
 const pageSize = 50
 const total = ref(0)
+
+// 错误详情弹窗：错误信息太长会撑大表格行高，改为点击 ERR 单元格弹出展示。
+const showError = ref(false)
+const errorRow = ref<any>(null)
+function openError(row: any) {
+  errorRow.value = row
+  showError.value = true
+}
 
 // 供应商 id -> {name, icon} 查表：启动时拉一次，用于把 provider_id 渲染成图标。
 const providerMap = ref<Record<string, { name: string; icon?: string }>>({})
@@ -241,21 +273,21 @@ const columns = [
         ]),
       ])
     } },
-  // 结果：合并原「状态」+「错误」。成功只显 OK 徽标；
-  // 失败显 ERR 徽标 + 截断错误信息，hover 看完整错误。少一列、少一组图标噪音。
-  { title: '结果', key: 'result', width: 220, titleAlign: 'center' as const, render: (row: any) => {
+  // 结果：成功只显 OK 徽标；失败显 ERR 徽标 + 一个「详情」按钮（点击弹出完整错误，
+  // 不再把错误详情直接渲染在行内——长错误信息会撑大整行高度）。
+  { title: '结果', key: 'result', width: 130, titleAlign: 'center' as const, render: (row: any) => {
       const ok = row.status === 'success'
       const badge = h('span', { class: `status-badge ${ok ? 'success' : 'error'}` }, [
         h('span', { class: 'status-dot-sm' }),
         h('span', { class: 'mono status-text' }, ok ? 'OK' : 'ERR'),
       ])
       if (ok) return h('div', { class: 'result-cell' }, badge)
-      const msg = row.error_msg || '未知错误'
-      const inner = h('div', { class: 'result-cell' }, [
+      return h('div', { class: 'result-cell' }, [
         badge,
-        h('span', { class: 'mono error-text' }, msg),
+        h(NButton, { size: 'tiny', text: true, class: 'error-detail-btn', onClick: () => openError(row) }, {
+          default: () => h('span', { class: 'mono error-detail-label' }, '详情'),
+        }),
       ])
-      return h(NTooltip, { placement: 'top' }, { trigger: () => inner, default: () => msg })
     } },
 ]
 
@@ -315,6 +347,20 @@ onMounted(init)
 
 .ledger-footer { display: flex; justify-content: space-between; align-items: center; }
 .range-text { font-size: 12px; color: var(--mb-text-3); }
+
+/* ====== 错误详情弹窗 ====== */
+/* NModal 内容默认 teleport 到 body，模板元素仍携带 scoped id，故此处用普通 scoped 规则即可命中；
+   注意不能依赖上方 :deep(.status-badge) 那组规则——它编译为 .logs[data-v] .status-badge，
+   弹窗在 .logs 之外，命中不到。 */
+.error-modal { --n-title-text-color: var(--mb-text-1); }
+.error-detail { display: flex; flex-direction: column; gap: 12px; }
+.error-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.error-time { font-size: 12px; color: var(--mb-text-3); }
+.error-model { font-size: 12px; color: var(--mb-text-2); }
+.error-modal .status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; flex-shrink: 0; background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.22); }
+.error-modal .status-badge .status-dot-sm { width: 5px; height: 5px; border-radius: 50%; background: var(--mb-error); }
+.error-modal .status-badge .status-text { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; color: var(--mb-error); }
+.error-body { margin: 0; padding: 12px 14px; background: var(--mb-surface-inset); border: 1px solid var(--mb-divider); border-radius: 8px; font-size: 12px; line-height: 1.55; color: var(--mb-error); white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
 
 /* ====== 骨架屏（模板层） ====== */
 .skeleton { padding: 4px 0 8px; }
@@ -407,9 +453,11 @@ onMounted(init)
 .logs :deep(.latency-fill.tier-mid) { background: var(--mb-warning); }
 .logs :deep(.latency-fill.tier-slow) { background: var(--mb-error); }
 
-/* 结果（合并状态 + 错误） */
-.logs :deep(.result-cell) { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; }
-.logs :deep(.result-cell .error-text) { font-size: 12px; color: var(--mb-error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* 结果（状态徽标 + 错误详情按钮） */
+.logs :deep(.result-cell) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; min-width: 0; }
+.logs :deep(.result-cell .error-detail-btn) { flex-shrink: 0; }
+.logs :deep(.error-detail-label) { font-size: 11px; color: var(--mb-error); }
+.logs :deep(.result-cell .error-detail-btn:hover .error-detail-label) { color: var(--mb-error); text-decoration: underline; }
 .logs :deep(.status-badge) { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; flex-shrink: 0; }
 .logs :deep(.status-badge.success) { background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.22); }
 .logs :deep(.status-badge.error) { background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.22); }
