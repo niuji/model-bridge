@@ -230,9 +230,9 @@ const themeOpts: { key: ThemeMode; label: string; svg: string }[] = [
   { key: 'dark', label: '暗色', svg: SVG.moon },
   { key: 'auto', label: '跟随系统', svg: SVG.monitor },
 ]
-// 折叠态：显示当前生效图标（非 auto 时即模式本身；auto 时随系统翻为实际亮/暗）。
+// 折叠态：显示当前模式图标。auto 显示 monitor 以区别于显式 light/dark。
 const modeLabel = computed(() => mode.value === 'light' ? '浅色' : mode.value === 'dark' ? '暗色' : '跟随系统')
-const collapsedIcon = computed(() => (mode.value === 'dark' || (mode.value === 'auto' && isDark.value)) ? SVG.moon : SVG.sun)
+const collapsedIcon = computed(() => mode.value === 'auto' ? SVG.monitor : mode.value === 'dark' ? SVG.moon : SVG.sun)
 const cycleTitle = computed(() => `${modeLabel.value}（点击切换）`)
 </script>
 
@@ -328,6 +328,8 @@ body {
 
 .sidebar { background: var(--mb-surface) !important; border-right: 1px solid var(--mb-border) !important; position: relative; transition: background-color 0.2s ease, border-color 0.2s ease; }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 22px 18px; border-bottom: 1px solid var(--mb-border); transition: border-color 0.2s ease; }
+/* 折叠态（64px）时品牌图标水平居中：64 = 34 图标 + 15×2 padding */
+.sidebar.n-layout-sider--collapsed .sidebar-brand { justify-content: center; padding: 22px 15px; }
 .brand-icon { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: linear-gradient(135deg, #3B82F6, #06B6D4 50%, #22C55E); color: #FFFFFF; }
 .brand-text { font-size: 18px; font-weight: 600; color: var(--mb-text-1); letter-spacing: -0.01em; white-space: nowrap; transition: color 0.2s ease; }
 .sidebar-menu { padding: 8px 8px 48px 8px; background: transparent !important; }
@@ -340,14 +342,19 @@ body {
 @keyframes status-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(34,197,94,0.4); } 50% { box-shadow: 0 0 12px rgba(34,197,94,0.6); } }
 .status-label { font-size: 12px; color: var(--mb-text-3); letter-spacing: 0.02em; }
 
-/* 主题切换控件 */
-.theme-switch { display: flex; gap: 4px; padding: 4px; background: var(--mb-surface-inset); border: 1px solid var(--mb-border); border-radius: 10px; transition: background-color 0.2s ease, border-color 0.2s ease; }
-.ts-btn { flex: 1; display: flex; align-items: center; justify-content: center; height: 30px; border: none; background: transparent; color: var(--mb-text-3); border-radius: 7px; cursor: pointer; transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease; }
-.ts-btn:hover { color: var(--mb-text-1); background: var(--mb-surface); }
-.ts-btn.active { color: var(--mb-primary); background: var(--mb-surface); box-shadow: var(--mb-shadow-1); }
-.ts-btn:focus-visible { outline: 2px solid var(--mb-primary); outline-offset: 2px; }
+/* 主题切换控件：扁平三态图标按钮。无容器、无内凹底——与菜单高亮同语法（主色 + 浅蓝 tint）。
+   激活态 = 主色图标 + 蓝色浅底，视觉上是菜单项的高亮延续，而非独立控件。 */
+.theme-switch { display: flex; gap: 2px; padding: 2px; }
+.ts-btn { flex: 1; display: flex; align-items: center; justify-content: center; height: 30px; border: none; background: transparent; color: var(--mb-text-3); border-radius: 7px; cursor: pointer; transition: color 0.15s ease, background-color 0.15s ease; }
+.ts-btn:hover { color: var(--mb-text-1); background: var(--mb-item-hover); }
+.ts-btn.active { color: var(--mb-primary); background: var(--mb-tint-blue); }
+.ts-btn:focus-visible { outline: 2px solid var(--mb-primary); outline-offset: 1px; }
 .ts-cycle { flex: none; width: 36px; height: 36px; margin: 0 auto; color: var(--mb-text-2); }
-.ts-cycle:hover { color: var(--mb-primary); background: var(--mb-surface-inset); }
+.ts-cycle:hover { color: var(--mb-primary); background: var(--mb-tint-blue); }
+/* 折叠态：页脚元素全部居中，循环按钮与其下方的状态绿点垂直对齐成一条线 */
+.sidebar.n-layout-sider--collapsed .sidebar-footer { align-items: center; }
+.sidebar.n-layout-sider--collapsed .footer-row { width: 100%; justify-content: center; }
+.sidebar.n-layout-sider--collapsed .status-indicator { gap: 0; }
 
 .content { padding: 28px 32px; max-width: 1280px; position: relative; z-index: 1; }
 
@@ -360,7 +367,6 @@ body {
 @media (max-width: 1024px) {
   .sidebar-footer { padding: 12px 8px; }
 }
-
 @media (prefers-reduced-motion: reduce) {
   .status-dot { animation: none; }
   .page-enter-active, .page-leave-active { transition: none; }
