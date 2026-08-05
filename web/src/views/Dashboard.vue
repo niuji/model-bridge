@@ -89,7 +89,7 @@ const CHART = computed(() => isDark.value ? {
   border: '#E2E8F0', divider: '#F1F5F9', canvas: '#F8FAFC',
   card: '#FFFFFF', tooltipBg: '#FFFFFF',
   blue: '#3B82F6', cyan: '#06B6D4', green: '#22C55E', greenD: '#16A34A',
-  ramp: ['#F1F5F9', '#86EFAC', '#22D3EE', '#3B82F6', '#1D4ED8'],
+  ramp: ['#F1F5F9', '#BFDBFE', '#3B82F6', '#0D9488', '#14532D'],
   font: 'JetBrains Mono, monospace',
 })
 const API_BASE = '/api/admin'; const loading = ref(true)
