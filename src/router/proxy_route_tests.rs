@@ -425,6 +425,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
                 base_url: server_a.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
         ProviderDef {
             id: "beta".into(),
@@ -435,6 +436,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
                 base_url: server_b.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
     ];
     let state = build_state_with_defs(defs).await;
@@ -580,6 +582,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
                 base_url: server.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
         ProviderDef {
             id: "kimi2".into(),
@@ -590,6 +593,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
                 base_url: server.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
     ];
     let state = build_state_with_defs(defs).await;
@@ -656,6 +660,7 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
             base_url: server.uri(),
             models_endpoint: None,
         }],
+        usage: None,
     }];
     let state = build_state_with_defs(defs).await;
     update_provider(
@@ -741,6 +746,7 @@ async fn anthropic_same_provider_1m_variant_preferred() {
             base_url: server.uri(),
             models_endpoint: None,
         }],
+        usage: None,
     }];
     let state = build_state_with_defs(defs).await;
     // 同一 provider 声明两个归一化同名模型：claude-sonnet-4 与 claude-sonnet-4[1M]
@@ -852,6 +858,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
                 base_url: server_a.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
         ProviderDef {
             id: "MyClaude".into(),
@@ -862,6 +869,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
                 base_url: server_b.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
     ];
     let state = build_state_with_defs(defs).await;
@@ -957,6 +965,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
                 base_url: server_a.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
         ProviderDef {
             id: "beta".into(),
@@ -967,6 +976,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
                 base_url: server_b.uri(),
                 models_endpoint: None,
             }],
+            usage: None,
         },
     ];
     let state = build_state_with_defs(defs).await;
@@ -1084,6 +1094,7 @@ async fn openai_chat_non_conflicting_uses_only_bare_key() {
             base_url: server.uri(),
             models_endpoint: None,
         }],
+        usage: None,
     }];
     let state = build_state_with_defs(defs).await;
     update_provider(
@@ -1170,6 +1181,7 @@ async fn openai_chat_responses_conflict_independent() {
                 models_endpoint: None,
             },
         ],
+        usage: None,
     }];
     let state = build_state_with_defs(defs).await;
     update_provider(

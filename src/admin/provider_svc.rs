@@ -901,7 +901,7 @@ mod drift_tests {
         ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from) }
     }
     fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
-        ProviderDef { id: id.into(), name: id.into(), icon: None, channels: chans }
+        ProviderDef { id: id.into(), name: id.into(), icon: None, channels: chans, usage: None }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -67,6 +67,18 @@ pub struct ProviderDef {
     pub icon: Option<String>,
     #[serde(default)]
     pub channels: Vec<ChannelDef>,
+    /// 余额查询适配声明（可选）：adapter 为内置实现名（见 balance_svc），params 为该 adapter 的自定义参数。
+    /// 注意 ~/.mb/providers.json 对同 id provider 是整体替换：覆盖时若不带 usage 会一并丢失余额查询。
+    #[serde(default)]
+    pub usage: Option<UsageDef>,
+}
+
+/// 余额查询适配声明。params 接受哪些 key 由各 adapter 自行定义并严格校验（未知 key 报错）。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsageDef {
+    pub adapter: String,
+    #[serde(default)]
+    pub params: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -167,5 +179,34 @@ mod tests {
     fn bridge_respects_explicit_probe_interval() {
         let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\nprobe_interval_min = 30\n").unwrap();
         assert_eq!(cfg.probe_interval_min, 30);
+    }
+
+    #[test]
+    fn usage_def_parses_adapter_and_params() {
+        let def: ProviderDef = serde_json::from_str(
+            r#"{"id":"x","name":"X","usage":{"adapter":"deepseek","params":{"endpoint":"https://gw.example.com/user/balance"}}}"#,
+        ).unwrap();
+        let usage = def.usage.unwrap();
+        assert_eq!(usage.adapter, "deepseek");
+        assert_eq!(usage.params["endpoint"], "https://gw.example.com/user/balance");
+    }
+
+    #[test]
+    fn usage_absent_is_none_and_params_default_empty() {
+        let def: ProviderDef = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
+        assert!(def.usage.is_none());
+        let def: ProviderDef =
+            serde_json::from_str(r#"{"id":"x","name":"X","usage":{"adapter":"openrouter"}}"#).unwrap();
+        assert!(def.usage.unwrap().params.is_empty());
+    }
+
+    #[test]
+    fn builtin_providers_json_parses_with_usage() {
+        // providers.json 编译期内嵌；deepseek/openrouter 已预置 usage 块
+        let defs: Vec<ProviderDef> = serde_json::from_str(include_str!("../providers.json")).unwrap();
+        let ds = defs.iter().find(|d| d.id == "deepseek").unwrap();
+        assert_eq!(ds.usage.as_ref().unwrap().adapter, "deepseek");
+        let or = defs.iter().find(|d| d.id == "openrouter").unwrap();
+        assert_eq!(or.usage.as_ref().unwrap().adapter, "openrouter");
     }
 }

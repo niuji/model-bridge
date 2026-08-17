@@ -16,7 +16,8 @@
       { "type": "openai_chat", "base_url": "https://api.deepseek.com/v1", "models_endpoint": "https://api.deepseek.com/v1/models" },
       { "type": "openai_responses", "base_url": "https://api.deepseek.com", "models_endpoint": "https://api.deepseek.com/v1/models" },
       { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic/v1", "models_endpoint": "https://api.deepseek.com/v1/models" }
-    ]
+    ],
+    "usage": { "adapter": "deepseek" }
   },
   {
     "id": "kimi",
@@ -70,6 +71,7 @@
       { "type": "openai_chat", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" },
       { "type": "openai_responses", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" },
       { "type": "anthropic", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" }
-    ]
+    ],
+    "usage": { "adapter": "openrouter" }
   }
 ]
