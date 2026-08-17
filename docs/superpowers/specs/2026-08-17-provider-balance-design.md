@@ -112,12 +112,12 @@ API key 用 `provider_config` 里已存的 key（后台任务场景；不同于 
 `main.rs` 新增余额探测循环，与 drift probe 同构：
 
 - `[bridge] balance_interval_min`，`#[serde(default = "default_balance_interval_min")]` 默认 **10**（本仓库铁律：新字段必须 fn 默认值，否则旧配置解析失败）。运行时 `.max(1)` 钳制。
-- 启动即探一次，之后按间隔重复。每轮遍历所有配置了 `usage` 的 provider（**不看 `is_enabled`**：停用的 provider 余额同样有展示价值，且探测成本可忽略），逐个调 adapter，UPSERT `provider_balance`；单个失败只记该行 error，不中断整轮。
+- 启动即探一次，之后按间隔重复。每轮遍历配置了 `usage` **且 `is_enabled`** 的 provider（停用的不探；已有快照行保留，UI 显示旧值），逐个调 adapter，UPSERT `provider_balance`；单个失败只记该行 error，不中断整轮。
 
 ## Admin API
 
 - `GET /api/admin/providers`：每个 provider 附带 `balance` 字段。有行为 `{adapter, status, data, error_msg, fetched_at}`（`data` 为解析后的 JSON 对象），无行为 `null`。与 `drift` 同嵌列表响应，前端一次拿全。
-- `POST /api/admin/providers/{id}/balance/refresh`：立即重探单个 provider，返回更新后的快照（同 `balance` 字段形状）。用于充值后即时刷新与 adapter 配置验证。provider 未配置 `usage` 时返回 400。
+- `POST /api/admin/providers/{id}/balance/refresh`：立即重探单个 provider，返回更新后的快照（同 `balance` 字段形状）。用于充值后即时刷新与 adapter 配置验证。provider 未配置 `usage` 或已停用时返回 400。
 
 provider 对象本身已含定义层字段，`usage` 配置随 `ProviderDef` 序列化自动带出，前端据此区分"未配置"与"已配置暂无快照"。
 
