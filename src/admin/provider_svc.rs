@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use crate::config::{ChannelDef, ProviderDef};
 use crate::db::models::{
-    ChannelDetail, ChannelDrift, DriftSummary, ModelEntry, ProviderChannelConfigRow, ProviderConfigRow,
-    ProviderDetail, ProviderModel, ProviderSummary, UpstreamModelRow,
+    BalanceRow, BalanceSummary, ChannelDetail, ChannelDrift, DriftSummary, ModelEntry,
+    ProviderChannelConfigRow, ProviderConfigRow, ProviderDetail, ProviderModel, ProviderSummary,
+    UpstreamModelRow,
 };
 use crate::state::{AppState, ProviderRoute};
 
@@ -34,6 +35,16 @@ pub async fn list_providers(
     let mut base_by_prov: HashMap<String, Vec<UpstreamModelRow>> = HashMap::new();
     for r in baseline_all {
         base_by_prov.entry(r.provider_id.clone()).or_default().push(r);
+    }
+
+    let balance_all: Vec<BalanceRow> = sqlx::query_as::<_, BalanceRow>(
+        "SELECT provider_id, adapter, status, data, error_msg, fetched_at FROM provider_balance",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut balance_by_prov: HashMap<String, BalanceRow> = HashMap::new();
+    for r in balance_all {
+        balance_by_prov.insert(r.provider_id.clone(), r);
     }
 
     for def in defs {
@@ -72,6 +83,8 @@ pub async fn list_providers(
             is_enabled,
             channels,
             drift,
+            usage: def.usage.clone(),
+            balance: balance_by_prov.remove(&def.id).map(BalanceSummary::from),
         });
     }
     Ok(result)
@@ -576,7 +589,7 @@ pub async fn backfill_model_channels(pool: &SqlitePool, defs: &[ProviderDef]) ->
 
 // ===== 内部辅助函数 =====
 
-async fn get_provider_config(pool: &SqlitePool, id: &str) -> Option<ProviderConfigRow> {
+pub(crate) async fn get_provider_config(pool: &SqlitePool, id: &str) -> Option<ProviderConfigRow> {
     sqlx::query_as::<_, ProviderConfigRow>(
         "SELECT provider_id, api_key, is_enabled FROM provider_config WHERE provider_id = ?",
     )

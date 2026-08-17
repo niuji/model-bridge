@@ -66,6 +66,12 @@ pub struct ProviderSummary {
     /// 自上次打开"上游变更"弹窗以来的变化计数（baseline 为空/未查看过时为 None）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drift: Option<DriftSummary>,
+    /// 余额查询配置（来自定义层 usage 块；未配置则缺省）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::config::UsageDef>,
+    /// 最新余额快照（未探测过则缺省）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance: Option<BalanceSummary>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -140,4 +146,28 @@ pub struct BalanceRow {
     pub error_msg: Option<String>,
     /// 最近一次探测时间 RFC3339（含失败）
     pub fetched_at: String,
+}
+
+/// 列表响应的余额摘要：data 解析为 JSON 对象（前端按 adapter 渲染）
+#[derive(Debug, Clone, Serialize)]
+pub struct BalanceSummary {
+    pub adapter: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_msg: Option<String>,
+    pub fetched_at: String,
+}
+
+impl From<BalanceRow> for BalanceSummary {
+    fn from(r: BalanceRow) -> Self {
+        BalanceSummary {
+            adapter: r.adapter,
+            status: r.status,
+            data: r.data.and_then(|s| serde_json::from_str(&s).ok()),
+            error_msg: r.error_msg,
+            fetched_at: r.fetched_at,
+        }
+    }
 }

@@ -72,6 +72,10 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
             axum::routing::post(admin::refresh_provider),
         )
         .route(
+            "/providers/{id}/balance/refresh",
+            axum::routing::post(admin::refresh_balance),
+        )
+        .route(
             "/api-keys",
             axum::routing::get(admin::list_api_keys).post(admin::create_api_key),
         )

@@ -210,6 +210,46 @@ pub async fn model_changes(
     }
 }
 
+/// 实时重探单个 provider 余额并返回最新快照。未配置 usage 或 provider 停用时 400；
+/// fetch 失败不是 HTTP 错误——快照行以 status='error' 返回，前端据此展示错误态。
+pub async fn refresh_balance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let Some(def) = state.provider_defs.iter().find(|d| d.id == id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "provider not found"})),
+        )
+            .into_response();
+    };
+    if def.usage.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "usage adapter not configured"})),
+        )
+            .into_response();
+    }
+    let config = provider_svc::get_provider_config(&state.db, &id).await;
+    let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
+    if !is_enabled {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "provider is disabled"})),
+        )
+            .into_response();
+    }
+    let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
+    match crate::admin::balance_svc::probe_one(&state, def, &api_key).await {
+        Ok(row) => Json(crate::db::models::BalanceSummary::from(row)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 // ===== API Key handlers =====
 
 pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {
