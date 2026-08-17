@@ -144,6 +144,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // 启动后台 provider 余额探测（独立节奏，默认 10 分钟）。首次 tick 立即触发→启动即播种快照。
+    let balance_state = state.clone();
+    let balance_interval_min = app_config.bridge.balance_interval_min.max(1);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(balance_interval_min * 60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = admin::balance_svc::probe_balances(&balance_state).await {
+                tracing::error!("Scheduled balance probe failed: {}", e);
+            }
+        }
+    });
+
     // 启动后台日志清理任务（每天一次）。
     let cleanup_state = state.clone();
     let retention_days = app_config.bridge.log_retention_days;

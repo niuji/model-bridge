@@ -34,3 +34,5 @@ refresh_interval_min = 10
 probe_interval_min = 1440
 # 日志保留天数（超过此天数的 usage_records 行会被每天自动清理，0 禁用自动清理）
 log_retention_days = 730
+# 后台探测 provider 余额的间隔（分钟）。仅探测配置了 usage 且启用的 provider；失败保留旧快照。
+balance_interval_min = 10

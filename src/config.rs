@@ -46,6 +46,10 @@ pub struct BridgeConfig {
     /// 设为 0 禁用自动清理。默认 730（2 年）。
     #[serde(default = "default_log_retention_days")]
     pub log_retention_days: u64,
+    /// 后台探测 provider 余额的间隔（分钟）。默认 10。
+    /// serde default 保证旧配置文件（无此字段）仍可解析。
+    #[serde(default = "default_balance_interval_min")]
+    pub balance_interval_min: u64,
 }
 
 /// `probe_interval_min` 的 serde 默认值：缺省时取 1 天，而非 u64::default()=0
@@ -56,6 +60,10 @@ fn default_probe_interval_min() -> u64 {
 
 fn default_log_retention_days() -> u64 {
     730
+}
+
+fn default_balance_interval_min() -> u64 {
+    10
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -111,6 +119,7 @@ impl Default for AppConfig {
                 refresh_interval_min: 10,
                 probe_interval_min: 1440,
                 log_retention_days: 730,
+                balance_interval_min: 10,
             },
         }
     }
@@ -168,17 +177,25 @@ mod tests {
 
     #[test]
     fn bridge_defaults_probe_interval_when_absent() {
-        // 旧配置（无 probe_interval_min）应解析成功并默认 1440
+        // 旧配置（无 probe_interval_min / balance_interval_min）应解析成功并取默认
         let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\n").unwrap();
         assert_eq!(cfg.refresh_interval_min, 5);
         assert_eq!(cfg.probe_interval_min, 1440);
         assert_eq!(cfg.log_retention_days, 730);
+        assert_eq!(cfg.balance_interval_min, 10);
     }
 
     #[test]
     fn bridge_respects_explicit_probe_interval() {
         let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\nprobe_interval_min = 30\n").unwrap();
         assert_eq!(cfg.probe_interval_min, 30);
+    }
+
+    #[test]
+    fn bridge_respects_explicit_balance_interval() {
+        let cfg: BridgeConfig =
+            toml::from_str("refresh_interval_min = 5\nbalance_interval_min = 3\n").unwrap();
+        assert_eq!(cfg.balance_interval_min, 3);
     }
 
     #[test]
