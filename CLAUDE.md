@@ -45,7 +45,7 @@ cd web && npm install && npm run dev
 cd web && npm run build
 ```
 
-After `npm run build`, rebuild the Rust binary to embed the updated frontend — the binary embeds `web/dist/` at compile time via `include_dir!`. The admin server serves this embedded UI at all non-`/api/` paths. `web/dist/` is a build artifact and is **not tracked in git** — on a fresh clone you must run the frontend build before `cargo build`, otherwise `include_dir!` fails to compile.
+After `npm run build`, rebuild the Rust binary to embed the updated frontend — the binary embeds `web/dist/` at compile time via `include_dir!`. The admin server serves this embedded UI at all non-`/api/` paths. For **frontend-only changes**, run `cargo clean -p model-bridge` before rebuilding: rustc may cache the macro expansion and silently embed the stale `dist/` (verify by comparing the asset hash served at `/` with `web/dist/index.html`). `web/dist/` is a build artifact and is **not tracked in git** — on a fresh clone you must run the frontend build before `cargo build`, otherwise `include_dir!` fails to compile.
 
 ### Client API key encryption (`encryption_key`, optional)
 
@@ -123,7 +123,15 @@ Auth header format is set per API format: Bearer token for OpenAI, `x-api-key` f
 
 ### Case-Insensitive Model Lookup
 
-Route table `HashMap` keys are lowercased (`model.model_id.to_lowercase()`), so a client request with any-case `model` matches. The route stores the original `model_id`, and `replace_model_in_body()` rewrites the request body's `model` field back to that canonical value before forwarding upstream — so the upstream always sees the exact case stored in `provider_models`.
+Route table `HashMap` keys are lowercased, so a client request with any-case `model` matches. The route stores the original `model_id`, and `replace_model_in_body()` rewrites the request body's `model` field back to that canonical value before forwarding upstream — so the upstream always sees the exact case stored in `provider_models`. OpenAI channels use the plain lowercased `model_id` as the key; the anthropic channel derives its key further (below).
+
+### Route Key Normalization (Anthropic Channel)
+
+Anthropic route-table keys are **not** the raw `model_id` — `refresh_routes()` derives them (provider_svc.rs) and both the models listing and the proxy depend on that derivation; changing one side requires changing the other two:
+
+- **Key derivation**: lowercase → strip a trailing `[1m]`/`[1M]` → prepend `claude-` if the remainder doesn't start with `claude`/`anthropic` (so non-Claude models like `kimi-k3` are routable as `claude-kimi-k3`).
+- **`[1M]` suffix round-trip**: `GET /anthropic/v1/models` re-appends the original-case suffix to the key (`models_list.rs`) — it is a marker for Claude Code to enable 1M context locally. Claude Code strips it before requesting; the proxy looks up the stripped name and forwards `route.model_id` minus the trailing 4 bytes (`proxy.rs`). A client that echoes the advertised `[1M]` id verbatim gets a 404 — accepted trade-off.
+- **Conflicts**: if the normalized bare name appears more than once across enabled providers/channels, the bare key is dropped and only a qualified key is built — `claude-{provider_id}/{model}` for anthropic (`provider_id` must be lowercased or the lookup misses), `{provider_id}/{model}` for OpenAI channels. The route's `model_name` gets a `[{provider_id}]` prefix for list-side disambiguation. Same-provider collision between a `[1m]` variant and the plain model prefers the `[1m]` variant.
 
 ### Endpoint Independence (OpenAI Paths)
 
@@ -165,6 +173,8 @@ Upstream request timeout is **720 seconds**. Error responses from the proxy:
 - **502** — upstream connection failed or generic upstream error
 - **504** — upstream request timed out
 
+Upstream **non-2xx responses (429/5xx/…) are passed through to the client as-is** (not rewritten to 502) and recorded in `usage_records` with `status = "error"` and `error_msg = "HTTP {status}: {first 500 chars of body}"`, plus a warn log.
+
 ### Route Table Refresh
 
 Routes are rebuilt by `provider_svc::refresh_routes()`, which:
@@ -177,6 +187,8 @@ Routes are rebuilt by `provider_svc::refresh_routes()`, which:
 Refresh triggers: on startup, on a periodic timer (configurable via `bridge.refresh_interval_min`), and after any provider update via the admin API.
 
 A third background task (independent of route refresh) prunes `usage_records` older than `bridge.log_retention_days` (default 730; 0 disables). Both new `bridge` fields (`probe_interval_min`, `log_retention_days`) need `#[serde(default = "fn")]` — not a bare default — so old configs without them still parse.
+
+`balance_interval_min`（余额探测，默认 10）同理。
 
 ### Upstream Drift Detection
 
@@ -198,6 +210,7 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 - **SSE streaming support.** Upstream SSE responses are proxied through a tokio mpsc channel with line-buffered parsing. Usage is accumulated via "last non-zero value" (not summation) to handle providers where multiple SSE events carry cumulative totals. See [SSE Streaming & Usage Extraction](#sse-streaming--usage-extraction) above for details.
 - **SSRF hardening.** HTTP redirects are disabled on the shared `reqwest::Client`. `refresh_routes()` skips channels whose `base_url` is not `http(s)` (`is_safe_base_url` check), logging a warning — this prevents `file://` or other local-protocol URLs from being used as upstream targets.
 - **Upstream drift detection.** A separate `probe_interval_min` (default 1 day) task probes each enabled channel's `/v1/models` into an `upstream_models` snapshot; drift is the symmetric diff vs `upstream_models_seen` (the last-viewed baseline) — **not** vs `provider_models` (the curated set). A card badge + read-only "上游变更" modal surface it; opening the modal lands the baseline and clears the badge. See [Upstream Drift Detection](#upstream-drift-detection).
+- **Provider balance probing.** `ProviderDef.usage`（providers.json / ~/.mb/providers.json）把 provider 绑定到内置余额 adapter（`balance_svc`，按名 match 分发；鉴权/endpoint/解析差异封在各 adapter 内）。后台任务按 `bridge.balance_interval_min`（默认 10）探测启用的 provider，UPSERT `provider_balance` 单行快照；载荷为 adapter 自定义 JSON，失败保留上次成功值。前端按 adapter 名分发渲染。
 - **Tests.** The `crypto` module has unit tests (seal/reveal roundtrip, key parsing, legacy fallback). The `proxy.rs` module has unit tests covering all pure functions: SSE data-line parsing, model extraction from request bodies, model name canonicalization, `stream_options` injection, usage extraction/normalization across both protocols, SSE event usage parsing, API key masking, and base URL safety checks. `src/router/proxy_route_tests.rs` (dev-only, uses `wiremock`) covers route-level HTTP behavior: auth 401, per-endpoint path 404, model-not-found 404, `/v1/models` per-endpoint isolation, 413 body-limit, 502 upstream connect failure, and 200 forwarding for all three endpoints. Use `cargo test` to run all tests.
 
 ## Source Structure
@@ -214,6 +227,7 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 | `src/router/proxy.rs` | Core proxy: model extraction, route lookup, upstream forwarding, SSE streaming, usage recording |
 | `src/router/models_list.rs` | Returns cached model lists (openai-chat / openai-responses / anthropic) from in-memory route tables |
 | `src/router/admin.rs` | Admin HTTP handlers: provider CRUD, API key CRUD, stats queries |
+| `src/admin/balance_svc.rs` | Provider 余额 adapter 注册表（deepseek/openrouter）、快照 UPSERT、定时探测循环 |
 | `src/admin/provider_svc.rs` | Provider business logic: JSON+DB merge, route refresh, `/models` endpoint probing, CRUD |
 | `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly; `prune_old_records()` daily log retention cleanup |
 | `src/router/proxy_route_tests.rs` | Route-level HTTP tests (wiremock dev-dep): auth 401, per-endpoint path 404, model-not-found 404, `models` endpoint isolation, 413/502, model-case normalization + `stream_options` injection + `x-api-key` upstream auth |
@@ -227,12 +241,13 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 
 ## Admin API Endpoints
 
-- `GET /api/admin/providers` — list providers (merged JSON + DB)
+- `GET /api/admin/providers` — list providers (merged JSON + DB)（含 usage 配置与最新 balance 快照）
 - `GET /api/admin/providers/{id}` — single provider detail (includes api_key, models)
 - `PUT /api/admin/providers/{id}` — update provider config (api_key, is_enabled, channel overrides, models)
 - `GET /api/admin/providers/{id}/fetch-models?api_key=...&channel=...` — probe upstream `/v1/models` endpoint on a specific channel using the supplied key (not the stored one), return `{models: [{model_id, model_name}]}`
 - `GET /api/admin/providers/{id}/model-changes` — return per-channel upstream drift (added/removed) since the last view and land the baseline (clearing the card badge); see [Upstream Drift Detection](#upstream-drift-detection)
 - `POST /api/admin/providers/{id}/refresh` — force full route table refresh
+- `POST /api/admin/providers/{id}/balance/refresh` — 实时重探单个 provider 余额并返回快照；未配置 usage 或 provider 停用时 400。上游失败不是 HTTP 错误，以 `status="error"` 快照返回
 - `GET /api/admin/api-keys` — list API keys (with masked preview, no full key)
 - `POST /api/admin/api-keys` — create API key (returns full `mb-{uuid}` key once)
 - `GET /api/admin/api-keys/{id}` — get full API key
