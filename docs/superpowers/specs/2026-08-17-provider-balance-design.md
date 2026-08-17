@@ -112,7 +112,7 @@ API key 用 `provider_config` 里已存的 key（后台任务场景；不同于 
 `main.rs` 新增余额探测循环，与 drift probe 同构：
 
 - `[bridge] balance_interval_min`，`#[serde(default = "default_balance_interval_min")]` 默认 **10**（本仓库铁律：新字段必须 fn 默认值，否则旧配置解析失败）。运行时 `.max(1)` 钳制。
-- 启动即探一次，之后按间隔重复。每轮遍历配置了 `usage` **且 `is_enabled`** 的 provider（停用的不探；已有快照行保留，UI 显示旧值），逐个调 adapter，UPSERT `provider_balance`；单个失败只记该行 error，不中断整轮。
+- 启动即探一次，之后按间隔重复。每轮遍历配置了 `usage` **且 `is_enabled`** 的 provider（停用的不探；已有快照行保留但 UI 不展示），逐个调 adapter，UPSERT `provider_balance`；单个失败只记该行 error，不中断整轮。
 
 ## Admin API
 
@@ -123,9 +123,11 @@ provider 对象本身已含定义层字段，`usage` 配置随 `ProviderDef` 序
 
 ## 前端（`web/src/views/Providers.vue`）
 
-- 卡片展示余额：按 `balance.adapter` 分发渲染（deepseek → `¥xx.xx`；openrouter → `$xx.xx` credits 形态；字段/格式各 adapter 前端自行定义）。
-- 状态：`status='error'` → 余额灰显 + hover 显示 `error_msg`；无 `usage` 配置（`balance === null` 且 defs 无 usage）→ 不显示；前端不认识的 adapter → 兜底文案。
-- 余额旁小刷新按钮 → `POST .../balance/refresh`，带 loading 态。
+卡片底部（通道列表之下）新增余额行，左侧展示最新快照，右侧「查询余额」按钮：
+
+- **展示**：按 `balance.adapter` 分发渲染（deepseek → `¥xx.xx`；openrouter → `$xx.xx` credits 形态；字段/格式各 adapter 前端自行定义）。
+- **「查询余额」按钮**：点击调 `POST .../balance/refresh`，实时向上游拉取并刷新展示（同时落库），请求期间 loading 态。定时任务的快照保证进页面即有值，按钮用于充值后即时刷新与主动核验。
+- 状态：`status='error'` → 余额灰显 + hover 显示 `error_msg`；provider 已停用或无 `usage` 配置 → 整行不渲染（不展示余额、不展示按钮）；前端不认识的 adapter → 兜底文案。
 
 ## 错误处理汇总
 
