@@ -218,5 +218,41 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // provider 余额最新快照：定时探测 UPSERT 单行。失败只覆写 status/error_msg/fetched_at，
+    // 保留上次成功的 data（上游抖动不清空余额展示）。
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS provider_balance (
+            provider_id TEXT PRIMARY KEY,
+            adapter     TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            data        TEXT,
+            error_msg   TEXT,
+            fetched_at  TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn migrations_idempotent_and_create_provider_balance() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap(); // 幂等：二次执行不报错
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_balance'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(name.as_deref(), Some("provider_balance"));
+    }
 }

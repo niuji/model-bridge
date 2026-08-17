@@ -126,3 +126,18 @@ pub struct DriftSummary {
     pub new: i64,
     pub removed: i64,
 }
+
+/// provider 余额最新快照（一行一 provider；仅配置了 usage 的 provider 会有行）
+#[derive(Debug, Clone, FromRow, Serialize)]
+#[allow(dead_code)]
+pub struct BalanceRow {
+    pub provider_id: String,
+    pub adapter: String,
+    /// 'ok' | 'error'
+    pub status: String,
+    /// 最近一次成功探测的 adapter JSON 载荷（文本）；失败时保留旧值
+    pub data: Option<String>,
+    pub error_msg: Option<String>,
+    /// 最近一次探测时间 RFC3339（含失败）
+    pub fetched_at: String,
+}
