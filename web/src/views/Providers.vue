@@ -66,6 +66,21 @@
               <span class="ch-count mono">{{ ch.model_count }}</span>
             </div>
           </div>
+
+          <div v-if="p.is_enabled && p.usage" class="card-balance">
+            <span
+              class="bal-value mono"
+              :class="{ err: p.balance?.status === 'error' }"
+              :title="p.balance?.status === 'error'
+                ? (p.balance?.error_msg || '查询失败')
+                : `更新于 ${p.balance?.fetched_at || '-'}`"
+            >{{ p.balance ? (balanceText(p) || (p.balance.status === 'error' ? '查询失败' : '—')) : '…' }}</span>
+            <button
+              class="bal-btn mono"
+              :disabled="refreshingId === p.id"
+              @click.stop="refreshBalance(p)"
+            >{{ refreshingId === p.id ? '查询中…' : '查询余额' }}</button>
+          </div>
         </article>
       </div>
       <div v-else-if="!loading" class="provider-empty">
@@ -288,7 +303,9 @@ const API_BASE = '/api/admin'
 
 interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean; model_count: number }
 interface DriftSummary { new: number; removed: number }
-interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary }
+interface Balance { adapter: string; status: string; data?: Record<string, any> | null; error_msg?: string | null; fetched_at: string }
+interface UsageDef { adapter: string; params?: Record<string, any> }
+interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null }
 interface ChangeEntry { model_id: string; model_name: string }
 interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
@@ -317,6 +334,7 @@ const changesData = ref<ChannelChange[]>([])
 const changesLoading = ref(false)
 const form = ref<FormState>({ api_key: '', is_enabled: false, channels: [], modelsByChannel: {} })
 const selectedChannel = ref('')
+const refreshingId = ref<string | null>(null)
 
 const CHANNEL_LABELS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }
 
@@ -332,6 +350,31 @@ function channelModelCount(type: string): number { return (form.value.modelsByCh
 function pad2(n: number): string { return String(n).padStart(2, '0') }
 function enabledModelTotal(p: ProviderSummary): number { return p.channels.filter(c => c.is_enabled).reduce((s, c) => s + (c.model_count || 0), 0) }
 function sortedChannels(p: ProviderSummary): ChannelInfo[] { return [...p.channels].sort((a, b) => a.channel_type.localeCompare(b.channel_type)) }
+
+// 前端渲染与后端 adapter 注册表一一对应：各家载荷字段不同，按 adapter 分发。
+function balanceText(p: ProviderSummary): string {
+  const d = p.balance?.data
+  if (!d) return ''
+  switch (p.balance!.adapter) {
+    case 'deepseek': return `¥${Number(d.balance).toFixed(2)}`
+    case 'openrouter': return `$${(Number(d.total_credits) - Number(d.total_usage)).toFixed(2)}`
+    default: return '—'
+  }
+}
+
+async function refreshBalance(p: ProviderSummary) {
+  refreshingId.value = p.id
+  try {
+    const res = await fetch(`${API_BASE}/providers/${p.id}/balance/refresh`, { method: 'POST' })
+    const body = await res.json()
+    if (!res.ok) { message.error(body.error || '查询余额失败'); return }
+    p.balance = body
+  } catch {
+    message.error('查询余额失败')
+  } finally {
+    refreshingId.value = null
+  }
+}
 
 function flattenModels(state: FormState): { channel_type: string; model_id: string; model_name: string }[] {
   const out: { channel_type: string; model_id: string; model_name: string }[] = []
@@ -733,6 +776,14 @@ onMounted(loadProviders)
 .diff-group-label.removed { color: var(--mb-error); }
 .diff-group-label.renamed { color: var(--mb-warning); }
 .diff-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+
+/* ---- balance row ---- */
+.card-balance { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--mb-divider); }
+.bal-value { font-size: 12px; font-weight: 600; color: var(--mb-text-2); }
+.bal-value.err { color: var(--mb-text-3); }
+.bal-btn { font-size: 10px; font-weight: 600; color: var(--mb-text-3); background: var(--mb-surface-inset); border: 1px solid var(--mb-border); border-radius: 999px; padding: 2px 8px; cursor: pointer; line-height: 1.5; transition: color 0.15s, border-color 0.15s; }
+.bal-btn:hover:not(:disabled) { color: var(--mb-text-2); border-color: var(--mb-tint-green); }
+.bal-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* ---- drift badge + changes modal ---- */
 .drift-badge { display: inline-flex; gap: 5px; align-items: center; padding: 1px 7px; border-radius: 999px; background: var(--mb-surface-inset); border: 1px solid var(--mb-tint-green); font-size: 10px; font-weight: 600; cursor: pointer; line-height: 1.5; transition: background 0.15s; }
