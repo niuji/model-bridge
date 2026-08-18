@@ -60,8 +60,8 @@ pub async fn fetch_balance(
 
 const DEEPSEEK_BALANCE_URL: &str = "https://api.deepseek.com/user/balance";
 
-/// DeepSeek：GET /user/balance，Bearer。上游返回 balance 为字符串（CNY）。
-/// 载荷：{"balance": number, "is_available": bool, "currency": "CNY"}
+/// DeepSeek：GET /user/balance，Bearer。上游返回 balance_infos 数组，金额为字符串（CNY）。
+/// 载荷：{"is_available": bool, "currency": "CNY", "total_balance": number, "granted_balance": number, "topped_up_balance": number}
 async fn deepseek_balance(
     client: &reqwest::Client,
     api_key: &str,
@@ -79,13 +79,30 @@ async fn deepseek_balance(
         anyhow::bail!("HTTP {}", resp.status());
     }
     let body: Value = resp.json().await?;
-    let balance: f64 = body["balance"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing 'balance' in response"))?
-        .parse()
-        .map_err(|_| anyhow::anyhow!("'balance' is not a number"))?;
+    // 上游返回 balance_infos 数组（金额为字符串）；该接口无官方文档，契约按实测响应。
+    let info = body["balance_infos"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| anyhow::anyhow!("missing 'balance_infos' in response"))?;
+    fn parse_amount(info: &Value, field: &str) -> anyhow::Result<f64> {
+        info[field]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing '{}' in balance_infos", field))?
+            .parse()
+            .map_err(|_| anyhow::anyhow!("'{}' is not a number", field))
+    }
+    let total_balance = parse_amount(info, "total_balance")?;
+    let granted_balance = parse_amount(info, "granted_balance")?;
+    let topped_up_balance = parse_amount(info, "topped_up_balance")?;
+    let currency = info["currency"].as_str().unwrap_or("CNY").to_string();
     let is_available = body["is_available"].as_bool().unwrap_or(true);
-    Ok(json!({ "balance": balance, "is_available": is_available, "currency": "CNY" }))
+    Ok(json!({
+        "is_available": is_available,
+        "currency": currency,
+        "total_balance": total_balance,
+        "granted_balance": granted_balance,
+        "topped_up_balance": topped_up_balance
+    }))
 }
 
 const OPENROUTER_CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
@@ -270,7 +287,12 @@ mod tests {
             .and(header("Authorization", "Bearer sk-test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "is_available": true,
-                "balance": "12.34"
+                "balance_infos": [{
+                    "currency": "CNY",
+                    "total_balance": "12.34",
+                    "granted_balance": "0.00",
+                    "topped_up_balance": "12.34"
+                }]
             })))
             .expect(1)
             .mount(&server)
@@ -279,7 +301,7 @@ mod tests {
             &client(), "deepseek", "sk-test",
             &params_with_endpoint(&format!("{}/user/balance", server.uri())),
         ).await.unwrap();
-        assert_eq!(data, json!({"balance": 12.34, "is_available": true, "currency": "CNY"}));
+        assert_eq!(data, json!({"is_available": true, "currency": "CNY", "total_balance": 12.34, "granted_balance": 0.0, "topped_up_balance": 12.34}));
     }
 
     #[tokio::test]
@@ -394,7 +416,13 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/user/balance"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "is_available": true, "balance": "9.5"
+                "is_available": true,
+                "balance_infos": [{
+                    "currency": "CNY",
+                    "total_balance": "9.50",
+                    "granted_balance": "0.00",
+                    "topped_up_balance": "9.50"
+                }]
             })))
             .mount(&server)
             .await;
@@ -403,7 +431,7 @@ mod tests {
         let row = probe_one(&state, &def, "sk-test").await.unwrap();
         assert_eq!(row.status, "ok");
         let data: Value = serde_json::from_str(row.data.as_ref().unwrap()).unwrap();
-        assert_eq!(data["balance"], 9.5);
+        assert_eq!(data["total_balance"], 9.5);
     }
 
     #[tokio::test]
@@ -422,7 +450,13 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/user/balance"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "is_available": true, "balance": "1"
+                "is_available": true,
+                "balance_infos": [{
+                    "currency": "CNY",
+                    "total_balance": "1.00",
+                    "granted_balance": "0.00",
+                    "topped_up_balance": "1.00"
+                }]
             })))
             .expect(1) // 只有启用的那个会真正请求上游
             .mount(&server)

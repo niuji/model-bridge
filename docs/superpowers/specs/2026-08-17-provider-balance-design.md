@@ -101,11 +101,11 @@ API key 用 `provider_config` 里已存的 key（后台任务场景；不同于 
 
 | adapter | 上游接口 | 载荷示例 | 状态 |
 |---|---|---|---|
-| `deepseek` | `GET /user/balance`，Bearer | `{"balance": 10.5, "is_available": true, "currency": "CNY"}` | 实现 |
+| `deepseek` | `GET /user/balance`，Bearer | `{"is_available": true, "currency": "CNY", "total_balance": 10.34, "granted_balance": 0.0, "topped_up_balance": 10.34}` | 实现 |
 | `openrouter` | `GET /api/v1/credits`，Bearer | `{"total_credits": 100, "total_usage": 30, "currency": "USD"}` | 实现 |
 | `trip` | 待定（契约由用户提供） | 待定 | 占位，契约到位后实现 |
 
-其余 provider（OpenAI/Anthropic/Kimi/SiliconFlow/MiniMax/智谱等）v1 不做；后续按同一注册表模式追加，无需结构变更。载荷具体字段以实现时对官方文档的核实为准，表中所列为当前已知形态。
+其余 provider（OpenAI/Anthropic/Kimi/SiliconFlow/MiniMax/智谱等）v1 不做；后续按同一注册表模式追加，无需结构变更。载荷具体字段以实现时对官方文档的核实为准，表中所列为当前已知形态。DeepSeek 余额接口无官方文档，契约按 2026-08-18 实测响应修正。
 
 ## 后台任务
 

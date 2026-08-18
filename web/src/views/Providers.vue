@@ -356,7 +356,7 @@ function balanceText(p: ProviderSummary): string {
   const d = p.balance?.data
   if (!d) return ''
   switch (p.balance!.adapter) {
-    case 'deepseek': return `¥${Number(d.balance).toFixed(2)}`
+    case 'deepseek': return `¥${Number(d.total_balance).toFixed(2)}`
     case 'openrouter': return `$${(Number(d.total_credits) - Number(d.total_usage)).toFixed(2)}`
     default: return '—'
   }
