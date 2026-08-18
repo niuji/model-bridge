@@ -386,7 +386,12 @@ mod tests {
             name: id.into(),
             icon: None,
             channels: vec![],
-            usage: Some(UsageDef { adapter: adapter.into(), params }),
+            usage: Some(UsageDef {
+                adapter: adapter.into(),
+                params,
+                result: None,
+                display: None,
+            }),
         }
     }
 

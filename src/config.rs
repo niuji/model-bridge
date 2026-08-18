@@ -82,11 +82,18 @@ pub struct ProviderDef {
 }
 
 /// 余额查询适配声明。params 接受哪些 key 由各 adapter 自行定义并严格校验（未知 key 报错）。
+/// result/display 为声明式 http adapter（及未来用户扩展）服务，内置 adapter 忽略。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsageDef {
     pub adapter: String,
     #[serde(default)]
     pub params: serde_json::Map<String, serde_json::Value>,
+    /// 点路径，指向响应里余额相关 JSON 子对象；None = 整份响应。仅 http adapter 消费。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    /// 前端展示模板（如 "¥{balance}"）；{path} 在落库载荷上做点路径取值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -225,5 +232,23 @@ mod tests {
         assert_eq!(ds.usage.as_ref().unwrap().adapter, "deepseek");
         let or = defs.iter().find(|d| d.id == "openrouter").unwrap();
         assert_eq!(or.usage.as_ref().unwrap().adapter, "openrouter");
+    }
+
+    #[test]
+    fn usage_def_parses_result_and_display() {
+        let def: ProviderDef = serde_json::from_str(
+            r#"{"id":"trip","name":"Trip","usage":{"adapter":"http","params":{"url":"https://gw.example.com/balance"},"result":"data","display":"¥{balance}"}}"#,
+        ).unwrap();
+        let usage = def.usage.unwrap();
+        assert_eq!(usage.adapter, "http");
+        assert_eq!(usage.result.as_deref(), Some("data"));
+        assert_eq!(usage.display.as_deref(), Some("¥{balance}"));
+
+        // 缺省时两者为 None，旧配置不受影响
+        let def: ProviderDef =
+            serde_json::from_str(r#"{"id":"x","name":"X","usage":{"adapter":"openrouter"}}"#).unwrap();
+        let usage = def.usage.unwrap();
+        assert!(usage.result.is_none());
+        assert!(usage.display.is_none());
     }
 }
