@@ -217,9 +217,9 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 
 | Path | Purpose |
 |------|---------|
-| `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh/probe intervals, log retention, encryption key |
+| `model-bridge.toml` | Runtime config: proxy/admin server addresses, DB path, refresh/probe/balance intervals, log retention, encryption key |
 | `providers.json` | Static provider definitions (id, name, icon, channels with type/base_url/models_endpoint), embedded at compile time |
-| `src/main.rs` | Entry point: config loading, DB init, route table init, background task spawn (route/key refresh, upstream model probe, daily log pruning), dual-server launch |
+| `src/main.rs` | Entry point: config loading, DB init, route table init, background task spawn (route/key refresh, upstream model probe, daily log pruning, balance probe), dual-server launch |
 | `src/config.rs` | CLI args (clap), TOML config parsing, `providers.json` loading, `ProviderDef`/`ChannelDef` types |
 | `src/crypto.rs` | AES-256-GCM seal/reveal for client `mb-` keys (falls back to plaintext when unset / decrypt fails) |
 | `src/state.rs` | `AppState` (in-memory route tables, provider defs, DB pool, HTTP client), model list response types |
@@ -227,7 +227,7 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 | `src/router/proxy.rs` | Core proxy: model extraction, route lookup, upstream forwarding, SSE streaming, usage recording |
 | `src/router/models_list.rs` | Returns cached model lists (openai-chat / openai-responses / anthropic) from in-memory route tables |
 | `src/router/admin.rs` | Admin HTTP handlers: provider CRUD, API key CRUD, stats queries |
-| `src/admin/balance_svc.rs` | Provider 余额 adapter 注册表（deepseek/openrouter）、快照 UPSERT、定时探测循环 |
+| `src/admin/balance_svc.rs` | Provider 余额 adapter 注册表（deepseek/openrouter）、快照 UPSERT、单轮探测 |
 | `src/admin/provider_svc.rs` | Provider business logic: JSON+DB merge, route refresh, `/models` endpoint probing, CRUD |
 | `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly; `prune_old_records()` daily log retention cleanup |
 | `src/router/proxy_route_tests.rs` | Route-level HTTP tests (wiremock dev-dep): auth 401, per-endpoint path 404, model-not-found 404, `models` endpoint isolation, 413/502, model-case normalization + `stream_options` injection + `x-api-key` upstream auth |
