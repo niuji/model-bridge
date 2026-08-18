@@ -380,14 +380,31 @@ function balanceNegative(p: ProviderSummary): boolean {
   return /^[-−]/.test(balanceText(p).replace(/^[$¥€£]\s*/, ''))
 }
 
-// 通用模板解析：{path} 占位符按点路径取 data 值并字符串化；未命中保留原占位符（暴露配置错误）。
+// 通用模板解析：{path} 占位符按点路径取 data 值并字符串化；也支持 {a - b} 这类两操作数
+// 数值运算（+ - * /，结果保留 2 位小数，对齐 openrouter 的 toFixed(2) 约定）。
+// 未命中/无法解析保留原占位符（暴露配置错误）。
 function resolveTemplate(tpl: string, data: Record<string, any>): string {
-  return tpl.replace(/\{([\w.]+)\}/g, (m, path: string) => {
-    const v = path.split('.').reduce((acc: any, k: string) => (acc && typeof acc === 'object' ? acc[k] : undefined), data)
+  return tpl.replace(/\{([^{}]+)\}/g, (m, expr: string) => {
+    const v = evalTemplateExpr(expr.trim(), data)
     if (v === undefined || v === null) return m
     if (typeof v === 'object') return JSON.stringify(v)
     return String(v)
   })
+}
+
+function resolvePath(path: string, data: Record<string, any>): any {
+  return path.split('.').reduce((acc: any, k: string) => (acc && typeof acc === 'object' ? acc[k] : undefined), data)
+}
+
+// {expr} 取值：纯点路径原样返回；`a op b`（op ∈ + - * /）按数值运算并保留 2 位小数。
+function evalTemplateExpr(expr: string, data: Record<string, any>): any {
+  const m = expr.match(/^([\w.]+)\s*([+\-*/])\s*([\w.]+)$/)
+  if (!m) return resolvePath(expr, data)
+  const a = Number(resolvePath(m[1], data))
+  const b = Number(resolvePath(m[3], data))
+  if (Number.isNaN(a) || Number.isNaN(b)) return undefined
+  const r = m[2] === '+' ? a + b : m[2] === '-' ? a - b : m[2] === '*' ? a * b : a / b
+  return r.toFixed(2)
 }
 
 // 探测失败时后端保留上次成功的 data，所以数值照常显示、由数字本身标警告色——
