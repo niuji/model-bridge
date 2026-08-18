@@ -304,7 +304,7 @@ const API_BASE = '/api/admin'
 interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean; model_count: number }
 interface DriftSummary { new: number; removed: number }
 interface Balance { adapter: string; status: string; data?: Record<string, any> | null; error_msg?: string | null; fetched_at: string }
-interface UsageDef { adapter: string; params?: Record<string, any> }
+interface UsageDef { adapter: string; params?: Record<string, any>; result?: string; display?: string }
 interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null }
 interface ChangeEntry { model_id: string; model_name: string }
 interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
@@ -352,14 +352,27 @@ function enabledModelTotal(p: ProviderSummary): number { return p.channels.filte
 function sortedChannels(p: ProviderSummary): ChannelInfo[] { return [...p.channels].sort((a, b) => a.channel_type.localeCompare(b.channel_type)) }
 
 // 前端渲染与后端 adapter 注册表一一对应：各家载荷字段不同，按 adapter 分发。
+// usage.display 是通用模板逃生门，优先于内置 adapter 的硬编码渲染。
 function balanceText(p: ProviderSummary): string {
   const d = p.balance?.data
   if (!d) return ''
+  const display = p.usage?.display
+  if (display) return resolveTemplate(display, d)
   switch (p.balance!.adapter) {
     case 'deepseek': return `¥${Number(d.total_balance).toFixed(2)}`
     case 'openrouter': return `$${(Number(d.total_credits) - Number(d.total_usage)).toFixed(2)}`
     default: return '—'
   }
+}
+
+// 通用模板解析：{path} 占位符按点路径取 data 值并字符串化；未命中保留原占位符（暴露配置错误）。
+function resolveTemplate(tpl: string, data: Record<string, any>): string {
+  return tpl.replace(/\{([\w.]+)\}/g, (m, path: string) => {
+    const v = path.split('.').reduce((acc: any, k: string) => (acc && typeof acc === 'object' ? acc[k] : undefined), data)
+    if (v === undefined || v === null) return m
+    if (typeof v === 'object') return JSON.stringify(v)
+    return String(v)
+  })
 }
 
 async function refreshBalance(p: ProviderSummary) {
