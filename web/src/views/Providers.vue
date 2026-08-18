@@ -42,7 +42,8 @@
                   tabindex="0"
                   :title="`自上次查看：${p.drift!.new} 新增 / ${p.drift!.removed} 下架，点击查看`"
                   @click.stop="openChanges(p)"
-                  @keydown.enter.prevent="openChanges(p)"
+                  @keydown.enter.prevent.stop="openChanges(p)"
+                  @keydown.space.prevent.stop="openChanges(p)"
                 >
                   <span v-if="p.drift!.new" class="d-add">✚{{ p.drift!.new }}</span>
                   <span v-if="p.drift!.removed" class="d-rem">✖{{ p.drift!.removed }}</span>
@@ -67,19 +68,28 @@
             </div>
           </div>
 
-          <div v-if="p.is_enabled && p.usage" class="card-balance">
+          <div v-if="p.is_enabled && p.usage" class="card-quota">
             <span
-              class="bal-value mono"
-              :class="{ err: p.balance?.status === 'error' }"
-              :title="p.balance?.status === 'error'
-                ? (p.balance?.error_msg || '查询失败')
-                : `更新于 ${p.balance?.fetched_at || '-'}`"
-            >{{ p.balance ? (balanceText(p) || (p.balance.status === 'error' ? '查询失败' : '—')) : '…' }}</span>
+              class="quota-value mono"
+              :class="{ neg: balanceNegative(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
+              :title="stampTitle(p)"
+            >{{ balanceText(p) || '—' }}</span>
+            <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
+                 不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
             <button
-              class="bal-btn mono"
+              class="quota-refresh"
+              :class="{ spinning: refreshingId === p.id }"
               :disabled="refreshingId === p.id"
+              :aria-label="`重新查询 ${p.name} 额度`"
+              title="重新查询额度"
               @click.stop="refreshBalance(p)"
-            >{{ refreshingId === p.id ? '查询中…' : '查询余额' }}</button>
+              @keydown.stop
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="23,4 23,10 17,10" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+            </button>
           </div>
         </article>
       </div>
@@ -365,6 +375,11 @@ function balanceText(p: ProviderSummary): string {
   }
 }
 
+// 负数（透支）判定：剥掉货币符号与前导空白后看负号；模板渲染的非金额文本视为非负。
+function balanceNegative(p: ProviderSummary): boolean {
+  return /^[-−]/.test(balanceText(p).replace(/^[$¥€£]\s*/, ''))
+}
+
 // 通用模板解析：{path} 占位符按点路径取 data 值并字符串化；未命中保留原占位符（暴露配置错误）。
 function resolveTemplate(tpl: string, data: Record<string, any>): string {
   return tpl.replace(/\{([\w.]+)\}/g, (m, path: string) => {
@@ -373,6 +388,19 @@ function resolveTemplate(tpl: string, data: Record<string, any>): string {
     if (typeof v === 'object') return JSON.stringify(v)
     return String(v)
   })
+}
+
+// 探测失败时后端保留上次成功的 data，所以数值照常显示、由数字本身标警告色——
+// 把「失败」画成没有数值会丢掉唯一可用的额度信息。
+function stampTitle(p: ProviderSummary): string {
+  if (!p.balance) return '尚未查询过额度'
+  const at = Date.parse(p.balance.fetched_at)
+  const abs = Number.isNaN(at) ? p.balance.fetched_at : new Date(at).toLocaleString('zh-CN', { hour12: false })
+  if (p.balance.status === 'error') {
+    const why = p.balance.error_msg || '上游未返回结果'
+    return `${abs} 查询失败：${why}\n数值来自上一次成功查询`
+  }
+  return `更新于 ${abs}`
 }
 
 async function refreshBalance(p: ProviderSummary) {
@@ -641,7 +669,9 @@ async function quickToggle(p: ProviderSummary, enabled: boolean) {
   loadProviders()
 }
 
-onMounted(loadProviders)
+onMounted(() => {
+  loadProviders()
+})
 </script>
 
 <style scoped>
@@ -790,13 +820,38 @@ onMounted(loadProviders)
 .diff-group-label.renamed { color: var(--mb-warning); }
 .diff-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
 
-/* ---- balance row ---- */
-.card-balance { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--mb-divider); }
-.bal-value { font-size: 12px; font-weight: 600; color: var(--mb-text-2); }
-.bal-value.err { color: var(--mb-text-3); }
-.bal-btn { font-size: 10px; font-weight: 600; color: var(--mb-text-3); background: var(--mb-surface-inset); border: 1px solid var(--mb-border); border-radius: 999px; padding: 2px 8px; cursor: pointer; line-height: 1.5; transition: color 0.15s, border-color 0.15s; }
-.bal-btn:hover:not(:disabled) { color: var(--mb-text-2); border-color: var(--mb-tint-green); }
-.bal-btn:disabled { opacity: 0.6; cursor: default; }
+/* ---- 额度基座 ----
+   安静的底部元信息行：细分隔线 + 次要色小字，不与通道列表抢注意力；
+   margin-top:auto 把它压到卡底，让有额度的卡片一律以数字收尾。 */
+.card-channels:has(+ .card-quota) { margin-bottom: 10px; }
+.card-quota {
+  margin-top: auto;
+  padding-top: 9px;
+  border-top: 1px solid var(--mb-divider);
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+}
+.quota-value {
+  font-size: 12px; font-weight: 500; color: var(--mb-text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.quota-value.neg { color: var(--mb-error); }
+.quota-value.err { color: var(--mb-warning); cursor: help; }
+.quota-value.empty { color: var(--mb-text-3); }
+
+.quota-refresh {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; margin: 0;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--mb-text-3); cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.quota-refresh:hover:not(:disabled) { color: var(--mb-success-d); background: var(--mb-tint-green); }
+.quota-refresh:focus-visible { outline: 2px solid rgba(34,197,94,0.5); outline-offset: 1px; }
+.quota-refresh:disabled { cursor: default; color: var(--mb-success-d); }
+.quota-refresh.spinning svg { animation: quota-spin 0.9s linear infinite; }
+
+@keyframes quota-spin { to { rotate: 360deg; } }
 
 /* ---- drift badge + changes modal ---- */
 .drift-badge { display: inline-flex; gap: 5px; align-items: center; padding: 1px 7px; border-radius: 999px; background: var(--mb-surface-inset); border: 1px solid var(--mb-tint-green); font-size: 10px; font-weight: 600; cursor: pointer; line-height: 1.5; transition: background 0.15s; }
