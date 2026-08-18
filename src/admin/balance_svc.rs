@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 use sqlx::SqlitePool;
 
-use crate::config::ProviderDef;
+use crate::config::{ProviderDef, UsageDef};
 use crate::db::models::BalanceRow;
 use crate::state::AppState;
 
@@ -47,14 +47,14 @@ fn endpoint_param(params: &Map<String, Value>, default: &str) -> anyhow::Result<
 /// 按 adapter 名分发余额查询，返回该 adapter 定义的 JSON 载荷。
 pub async fn fetch_balance(
     client: &reqwest::Client,
-    adapter: &str,
+    usage: &UsageDef,
     api_key: &str,
-    params: &Map<String, Value>,
 ) -> anyhow::Result<Value> {
-    match adapter {
-        "deepseek" => deepseek_balance(client, api_key, params).await,
-        "openrouter" => openrouter_credits(client, api_key, params).await,
-        _ => anyhow::bail!("unknown usage adapter: {}", adapter),
+    match usage.adapter.as_str() {
+        "deepseek" => deepseek_balance(client, api_key, &usage.params).await,
+        "openrouter" => openrouter_credits(client, api_key, &usage.params).await,
+        "http" => http_balance(client, api_key, &usage.params, usage.result.as_deref()).await,
+        _ => anyhow::bail!("unknown usage adapter: {}", usage.adapter),
     }
 }
 
@@ -136,6 +136,56 @@ async fn openrouter_credits(
     Ok(json!({ "total_credits": total_credits, "total_usage": total_usage, "currency": "USD" }))
 }
 
+/// http adapter 可接受的 param key：url（必填）+ headers（可选，值里 {api_key} 占位）。
+const HTTP_PARAMS: &[&str] = &["url", "headers"];
+
+/// 声明式 http adapter：GET 只读，url/headers 由 params 声明；上游 2xx 后按 result 点路径
+/// 切出余额相关 JSON（缺省 = 整份响应）原样返回，落库即该值。
+async fn http_balance(
+    client: &reqwest::Client,
+    api_key: &str,
+    params: &Map<String, Value>,
+    result: Option<&str>,
+) -> anyhow::Result<Value> {
+    check_params(params, HTTP_PARAMS)?;
+    let url = params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("'url' is required"))?;
+    if !crate::admin::provider_svc::is_safe_base_url(url) {
+        anyhow::bail!("url must be http(s): {}", url);
+    }
+    let mut req = client.get(url);
+    if let Some(headers) = params.get("headers").and_then(|v| v.as_object()) {
+        for (name, value) in headers {
+            let value = value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("header '{}' must be a string", name))?;
+            req = req.header(name.as_str(), value.replace("{api_key}", api_key));
+        }
+    }
+    let resp = req.timeout(REQUEST_TIMEOUT).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
+    let body: Value = resp.json().await?;
+    match result {
+        None => Ok(body),
+        Some(path) => extract_by_path(&body, path)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("result path '{}' not found in response", path)),
+    }
+}
+
+/// 按点路径在 JSON 上导航（仅对象 `.`，不支持数组索引），返回命中值引用。
+fn extract_by_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = root;
+    for seg in path.split('.').filter(|s| !s.is_empty()) {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -206,7 +256,7 @@ pub async fn probe_one(state: &Arc<AppState>, def: &ProviderDef, api_key: &str) 
     let result = if api_key.is_empty() {
         Err(anyhow::anyhow!("api_key 未配置"))
     } else {
-        fetch_balance(&state.client, &usage.adapter, api_key, &usage.params).await
+        fetch_balance(&state.client, usage, api_key).await
     };
     match result {
         Ok(data) => upsert_balance_ok(&state.db, &def.id, &usage.adapter, &data).await?,
@@ -273,6 +323,10 @@ mod tests {
         reqwest::Client::new()
     }
 
+    fn usage_def(adapter: &str, params: &Map<String, Value>) -> UsageDef {
+        UsageDef { adapter: adapter.into(), params: params.clone(), result: None, display: None }
+    }
+
     fn params_with_endpoint(url: &str) -> Map<String, Value> {
         let mut p = Map::new();
         p.insert("endpoint".into(), json!(url));
@@ -298,8 +352,7 @@ mod tests {
             .mount(&server)
             .await;
         let data = fetch_balance(
-            &client(), "deepseek", "sk-test",
-            &params_with_endpoint(&format!("{}/user/balance", server.uri())),
+            &client(), &usage_def("deepseek", &params_with_endpoint(&format!("{}/user/balance", server.uri()))), "sk-test",
         ).await.unwrap();
         assert_eq!(data, json!({"is_available": true, "currency": "CNY", "total_balance": 12.34, "granted_balance": 0.0, "topped_up_balance": 12.34}));
     }
@@ -317,15 +370,14 @@ mod tests {
             .mount(&server)
             .await;
         let data = fetch_balance(
-            &client(), "openrouter", "or-test",
-            &params_with_endpoint(&format!("{}/api/v1/credits", server.uri())),
+            &client(), &usage_def("openrouter", &params_with_endpoint(&format!("{}/api/v1/credits", server.uri()))), "or-test",
         ).await.unwrap();
         assert_eq!(data, json!({"total_credits": 100.5, "total_usage": 25.75, "currency": "USD"}));
     }
 
     #[tokio::test]
     async fn unknown_adapter_rejected() {
-        let err = fetch_balance(&client(), "nope", "k", &Map::new()).await.unwrap_err();
+        let err = fetch_balance(&client(), &usage_def("nope", &Map::new()), "k").await.unwrap_err();
         assert!(err.to_string().contains("unknown usage adapter"));
     }
 
@@ -333,13 +385,13 @@ mod tests {
     async fn unknown_param_key_rejected() {
         let mut p = Map::new();
         p.insert("endpiont".into(), json!("https://x.example.com")); // 拼写错误
-        let err = fetch_balance(&client(), "deepseek", "k", &p).await.unwrap_err();
+        let err = fetch_balance(&client(), &usage_def("deepseek", &p), "k").await.unwrap_err();
         assert!(err.to_string().contains("unknown usage param"));
     }
 
     #[tokio::test]
     async fn non_http_endpoint_rejected() {
-        let err = fetch_balance(&client(), "deepseek", "k", &params_with_endpoint("file:///etc/passwd"))
+        let err = fetch_balance(&client(), &usage_def("deepseek", &params_with_endpoint("file:///etc/passwd")), "k")
             .await.unwrap_err();
         assert!(err.to_string().contains("http(s)"));
     }
@@ -353,8 +405,7 @@ mod tests {
             .mount(&server)
             .await;
         let err = fetch_balance(
-            &client(), "deepseek", "k",
-            &params_with_endpoint(&format!("{}/user/balance", server.uri())),
+            &client(), &usage_def("deepseek", &params_with_endpoint(&format!("{}/user/balance", server.uri()))), "k",
         ).await.unwrap_err();
         assert!(err.to_string().contains("HTTP 500"));
     }
@@ -481,5 +532,107 @@ mod tests {
         assert!(read_balance_row(&state.db, "on").await.unwrap().is_some());
         assert!(read_balance_row(&state.db, "off").await.unwrap().is_none());
         assert!(read_balance_row(&state.db, "plain").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn http_adapter_interpolates_key_and_extracts_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/balance"))
+            .and(header("Authorization", "Bearer trip-key"))
+            .and(header("X-Custom", "hello"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "code": 0,
+                "data": { "balance": "10.50", "currency": "CNY" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut params = Map::new();
+        params.insert("url".into(), json!(format!("{}/balance", server.uri())));
+        let mut headers = Map::new();
+        headers.insert("Authorization".into(), json!("Bearer {api_key}"));
+        headers.insert("X-Custom".into(), json!("hello"));
+        params.insert("headers".into(), Value::Object(headers));
+        let usage = UsageDef {
+            adapter: "http".into(),
+            params,
+            result: Some("data".into()),
+            display: Some("¥{balance}".into()),
+        };
+        let data = fetch_balance(&client(), &usage, "trip-key").await.unwrap();
+        // 切出 data 子对象且原样保留结构，不扁平化
+        assert_eq!(data, json!({"balance": "10.50", "currency": "CNY"}));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_without_result_returns_whole_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/balance"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"balance": 1.0})))
+            .mount(&server)
+            .await;
+        let mut params = Map::new();
+        params.insert("url".into(), json!(format!("{}/balance", server.uri())));
+        let usage = UsageDef { adapter: "http".into(), params, result: None, display: None };
+        let data = fetch_balance(&client(), &usage, "k").await.unwrap();
+        assert_eq!(data, json!({"balance": 1.0}));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_missing_result_path_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/balance"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {}})))
+            .mount(&server)
+            .await;
+        let mut params = Map::new();
+        params.insert("url".into(), json!(format!("{}/balance", server.uri())));
+        let usage = UsageDef { adapter: "http".into(), params, result: Some("nope.deep".into()), display: None };
+        let err = fetch_balance(&client(), &usage, "k").await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_requires_url() {
+        let usage = UsageDef { adapter: "http".into(), params: Map::new(), result: None, display: None };
+        let err = fetch_balance(&client(), &usage, "k").await.unwrap_err();
+        assert!(err.to_string().contains("'url' is required"));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_rejects_non_http_url() {
+        let mut params = Map::new();
+        params.insert("url".into(), json!("file:///etc/passwd"));
+        let usage = UsageDef { adapter: "http".into(), params, result: None, display: None };
+        let err = fetch_balance(&client(), &usage, "k").await.unwrap_err();
+        assert!(err.to_string().contains("http(s)"));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_rejects_unknown_param() {
+        let mut params = Map::new();
+        params.insert("url".into(), json!("https://x.example.com"));
+        params.insert("method".into(), json!("POST"));
+        let usage = UsageDef { adapter: "http".into(), params, result: None, display: None };
+        let err = fetch_balance(&client(), &usage, "k").await.unwrap_err();
+        assert!(err.to_string().contains("unknown usage param"));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_non_2xx_is_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/balance"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let mut params = Map::new();
+        params.insert("url".into(), json!(format!("{}/balance", server.uri())));
+        let usage = UsageDef { adapter: "http".into(), params, result: None, display: None };
+        let err = fetch_balance(&client(), &usage, "k").await.unwrap_err();
+        assert!(err.to_string().contains("HTTP 500"));
     }
 }
