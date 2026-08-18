@@ -71,7 +71,7 @@
           <div v-if="p.is_enabled && p.usage" class="card-quota">
             <span
               class="quota-value mono"
-              :class="{ neg: balanceNegative(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
+              :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
               :title="stampTitle(p)"
             >{{ balanceText(p) || '—' }}</span>
             <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
@@ -378,6 +378,13 @@ function balanceText(p: ProviderSummary): string {
 // 负数（透支）判定：剥掉货币符号与前导空白后看负号；模板渲染的非金额文本视为非负。
 function balanceNegative(p: ProviderSummary): boolean {
   return /^[-−]/.test(balanceText(p).replace(/^[$¥€£]\s*/, ''))
+}
+
+// 正数判定：剥掉货币符号后是有限正数才着色；非金额文本（模板渲染的说明文字）不着色。
+function balancePositive(p: ProviderSummary): boolean {
+  if (p.balance?.status !== 'ok') return false
+  const n = Number(balanceText(p).replace(/^[$¥€£]\s*/, ''))
+  return Number.isFinite(n) && n > 0
 }
 
 // 通用模板解析：{path} 占位符按点路径取 data 值并字符串化；也支持 {a - b} 这类两操作数
@@ -853,6 +860,7 @@ onMounted(() => {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .quota-value.neg { color: var(--mb-error); }
+.quota-value.pos { color: var(--mb-success-d); }
 .quota-value.err { color: var(--mb-warning); cursor: help; }
 .quota-value.empty { color: var(--mb-text-3); }
 
