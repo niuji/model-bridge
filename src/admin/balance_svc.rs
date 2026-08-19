@@ -177,11 +177,15 @@ async fn http_balance(
     }
 }
 
-/// 按点路径在 JSON 上导航（仅对象 `.`，不支持数组索引），返回命中值引用。
+/// 按点路径在 JSON 上导航（对象 `.` + 数字段索引数组，如 `balance_infos.0`），返回命中值引用。
 fn extract_by_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
     let mut cur = root;
     for seg in path.split('.').filter(|s| !s.is_empty()) {
-        cur = cur.get(seg)?;
+        cur = match cur {
+            // 数组节点按数字段索引（与前端 resolvePath 的 acc[k] 同口径）；越界/非数字 → None
+            Value::Array(arr) => arr.get(seg.parse::<usize>().ok()?)?,
+            _ => cur.get(seg)?,
+        };
     }
     Some(cur)
 }
@@ -578,6 +582,32 @@ mod tests {
         let usage = UsageDef { adapter: "http".into(), params, result: None, display: None };
         let data = fetch_balance(&client(), &usage, "k").await.unwrap();
         assert_eq!(data, json!({"balance": 1.0}));
+    }
+
+    #[tokio::test]
+    async fn http_adapter_extracts_array_element_by_numeric_path_segment() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/balance"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "balance_infos": [
+                    { "currency": "CNY", "total_balance": "10.34" },
+                    { "currency": "USD", "total_balance": "99.00" }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut params = Map::new();
+        params.insert("url".into(), json!(format!("{}/balance", server.uri())));
+        let usage = UsageDef {
+            adapter: "http".into(),
+            params,
+            result: Some("balance_infos.0".into()),
+            display: Some("¥{total_balance}".into()),
+        };
+        let data = fetch_balance(&client(), &usage, "k").await.unwrap();
+        assert_eq!(data, json!({ "currency": "CNY", "total_balance": "10.34" }));
     }
 
     #[tokio::test]

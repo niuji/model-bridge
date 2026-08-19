@@ -17,7 +17,15 @@
       { "type": "openai_responses", "base_url": "https://api.deepseek.com", "models_endpoint": "https://api.deepseek.com/v1/models" },
       { "type": "anthropic", "base_url": "https://api.deepseek.com/anthropic/v1", "models_endpoint": "https://api.deepseek.com/v1/models" }
     ],
-    "usage": { "adapter": "deepseek" }
+    "usage": {
+      "adapter": "http",
+      "params": {
+        "url": "https://api.deepseek.com/user/balance",
+        "headers": { "Authorization": "Bearer {api_key}" }
+      },
+      "result": "balance_infos.0",
+      "display": "¥{total_balance}"
+    }
   },
   {
     "id": "kimi",
@@ -90,6 +98,14 @@
       { "type": "openai_responses", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" },
       { "type": "anthropic", "base_url": "https://openrouter.ai/api/v1", "models_endpoint": "https://openrouter.ai/api/v1/models" }
     ],
-    "usage": { "adapter": "openrouter" }
+    "usage": {
+      "adapter": "http",
+      "params": {
+        "url": "https://openrouter.ai/api/v1/credits",
+        "headers": { "Authorization": "Bearer {api_key}" }
+      },
+      "result": "data",
+      "display": "$${total_credits - total_usage}"
+    }
   }
 ]

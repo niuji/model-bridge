@@ -226,12 +226,13 @@ mod tests {
 
     #[test]
     fn builtin_providers_json_parses_with_usage() {
-        // providers.json 编译期内嵌；deepseek/openrouter 已预置 usage 块
+        // providers.json 编译期内嵌；四家余额均以声明式 http adapter 预置 usage 块
         let defs: Vec<ProviderDef> = serde_json::from_str(include_str!("../providers.json")).unwrap();
-        let ds = defs.iter().find(|d| d.id == "deepseek").unwrap();
-        assert_eq!(ds.usage.as_ref().unwrap().adapter, "deepseek");
-        let or = defs.iter().find(|d| d.id == "openrouter").unwrap();
-        assert_eq!(or.usage.as_ref().unwrap().adapter, "openrouter");
+        for id in ["deepseek", "kimi", "siliconflow", "openrouter"] {
+            let usage = defs.iter().find(|d| d.id == id).unwrap().usage.as_ref().unwrap();
+            assert_eq!(usage.adapter, "http", "{}", id);
+            assert!(usage.result.is_some() && usage.display.is_some(), "{}", id);
+        }
     }
 
     #[test]
