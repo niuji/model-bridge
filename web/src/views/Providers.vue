@@ -19,7 +19,7 @@
           :style="{ '--i': String(idx) }"
           role="button"
           tabindex="0"
-          @click="openConfig(p)"
+          @click="onCardClick(p)"
           @keydown.enter.prevent="openConfig(p)"
           @keydown.space.prevent="openConfig(p)"
         >
@@ -470,6 +470,13 @@ async function loadProviders() {
   } finally {
     loading.value = false
   }
+}
+
+// 拖动选择文字时 mousedown/mouseup 落在同一卡片上，click 照常触发；
+// click 时存在非空选区即视为拖选，不弹配置窗（键盘 Enter/Space 不经过此判断）。
+function onCardClick(p: ProviderSummary) {
+  if (window.getSelection()?.toString()) return
+  openConfig(p)
 }
 
 async function openConfig(summary: ProviderSummary) {
