@@ -10,99 +10,103 @@
     </header>
 
     <n-spin :show="loading">
-      <div v-if="providers.length" class="provider-grid">
-        <article
-          v-for="(p, idx) in providers"
-          :key="p.id"
-          class="provider-card"
-          :class="{ disabled: !p.is_enabled, 'config-error': !!p.config_error }"
-          :style="{ '--i': String(idx) }"
-          :role="p.config_error ? undefined : 'button'"
-          :tabindex="p.config_error ? -1 : 0"
-          @click="onCardClick(p)"
-          @keydown.enter.prevent="openConfig(p)"
-          @keydown.space.prevent="openConfig(p)"
-        >
-          <div class="card-hero">
-            <div class="card-icon-well">
-              <img v-if="p.icon" :src="iconUrl(p.icon)" class="card-icon" :alt="p.name" />
-              <span v-else class="card-icon-fallback serif" aria-hidden="true">{{ (p.name || '?').charAt(0) }}</span>
-            </div>
-            <div class="card-hero-text">
-              <h2 class="card-name serif">{{ p.name }}</h2>
-              <div class="card-meta mono">
-                <span class="card-status-dot" :class="{ on: p.is_enabled && !p.config_error }" />
-                <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '在线' : '停用') }}</span>
-                <span class="meta-sep">·</span>
-                <span>{{ enabledModelTotal(p) }} 模型</span>
-                <span
-                  v-if="p.drift && (p.drift.new > 0 || p.drift.removed > 0)"
-                  class="drift-badge mono"
-                  role="button"
-                  tabindex="0"
-                  :title="`自上次查看：${p.drift!.new} 新增 / ${p.drift!.removed} 下架，点击查看`"
-                  @click.stop="openChanges(p)"
-                  @keydown.enter.prevent.stop="openChanges(p)"
-                  @keydown.space.prevent.stop="openChanges(p)"
-                >
-                  <span v-if="p.drift!.new" class="d-add">✚{{ p.drift!.new }}</span>
-                  <span v-if="p.drift!.removed" class="d-rem">✖{{ p.drift!.removed }}</span>
-                </span>
+      <div v-if="providers.length" class="provider-groups">
+        <section v-for="g in providerGroups" :key="g.key" class="provider-group" :aria-label="g.label">
+          <div class="provider-grid">
+            <article
+              v-for="(p, idx) in g.items"
+              :key="p.id"
+              class="provider-card"
+              :class="{ disabled: !p.is_enabled, 'config-error': !!p.config_error }"
+              :style="{ '--i': String(g.offset + idx) }"
+              :role="p.config_error ? undefined : 'button'"
+              :tabindex="p.config_error ? -1 : 0"
+              @click="onCardClick(p)"
+              @keydown.enter.prevent="openConfig(p)"
+              @keydown.space.prevent="openConfig(p)"
+            >
+              <div class="card-hero">
+                <div class="card-icon-well">
+                  <img v-if="p.icon" :src="iconUrl(p.icon)" class="card-icon" :alt="p.name" />
+                  <span v-else class="card-icon-fallback serif" aria-hidden="true">{{ (p.name || '?').charAt(0) }}</span>
+                </div>
+                <div class="card-hero-text">
+                  <h2 class="card-name serif">{{ p.name }}</h2>
+                  <div class="card-meta mono">
+                    <span class="card-status-dot" :class="{ on: p.is_enabled && !p.config_error }" />
+                    <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '在线' : '停用') }}</span>
+                    <span class="meta-sep">·</span>
+                    <span>{{ enabledModelTotal(p) }} 模型</span>
+                    <span
+                      v-if="p.drift && (p.drift.new > 0 || p.drift.removed > 0)"
+                      class="drift-badge mono"
+                      role="button"
+                      tabindex="0"
+                      :title="`自上次查看：${p.drift!.new} 新增 / ${p.drift!.removed} 下架，点击查看`"
+                      @click.stop="openChanges(p)"
+                      @keydown.enter.prevent.stop="openChanges(p)"
+                      @keydown.space.prevent.stop="openChanges(p)"
+                    >
+                      <span v-if="p.drift!.new" class="d-add">✚{{ p.drift!.new }}</span>
+                      <span v-if="p.drift!.removed" class="d-rem">✖{{ p.drift!.removed }}</span>
+                    </span>
+                  </div>
+                </div>
+                <n-switch :value="p.is_enabled" size="small" :disabled="!!p.config_error" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
               </div>
-            </div>
-            <n-switch :value="p.is_enabled" size="small" :disabled="!!p.config_error" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
-          </div>
 
-          <div class="card-divider" />
+              <div class="card-divider" />
 
-          <div class="card-channels">
-            <div
-              v-for="ch in sortedChannels(p)"
-              :key="ch.channel_type"
-              class="channel-row"
-              :class="{ off: !ch.is_enabled }"
-            >
-              <span class="ch-dot" :class="{ on: ch.is_enabled }" />
-              <span class="ch-label mono">{{ channelLabel(ch.channel_type) }}</span>
-              <span class="ch-count mono">{{ ch.model_count }}</span>
-            </div>
-          </div>
+              <div class="card-channels">
+                <div
+                  v-for="ch in sortedChannels(p)"
+                  :key="ch.channel_type"
+                  class="channel-row"
+                  :class="{ off: !ch.is_enabled }"
+                >
+                  <span class="ch-dot" :class="{ on: ch.is_enabled }" />
+                  <span class="ch-label mono">{{ channelLabel(ch.channel_type) }}</span>
+                  <span class="ch-count mono">{{ ch.model_count }}</span>
+                </div>
+              </div>
 
-          <div v-if="p.config_error || (p.is_enabled && p.usage)" class="card-quota">
-            <!-- 配置错误优先于余额，且只出图标：文案挂 title，避免撑开状态行 -->
-            <span v-if="p.config_error" class="quota-error" :title="`配置错误：${p.config_error}`">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                <line x1="12" y1="9" x2="12" y2="13" />
-                <line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-              <span class="sr-only">配置错误：{{ p.config_error }}</span>
-            </span>
-            <span
-              v-else
-              class="quota-value mono"
-              :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
-              :title="stampTitle(p)"
-            >{{ balanceText(p) || '—' }}</span>
-            <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
-                 不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
-            <button
-              v-if="!p.config_error"
-              class="quota-refresh"
-              :class="{ spinning: refreshingId === p.id }"
-              :disabled="refreshingId === p.id"
-              :aria-label="`重新查询 ${p.name} 额度`"
-              title="重新查询额度"
-              @click.stop="refreshBalance(p)"
-              @keydown.stop
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="23,4 23,10 17,10" />
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-              </svg>
-            </button>
+              <div v-if="p.config_error || (p.is_enabled && p.usage)" class="card-quota">
+                <!-- 配置错误优先于余额，且只出图标：文案挂 title，避免撑开状态行 -->
+                <span v-if="p.config_error" class="quota-error" :title="`配置错误：${p.config_error}`">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  <span class="sr-only">配置错误：{{ p.config_error }}</span>
+                </span>
+                <span
+                  v-else
+                  class="quota-value mono"
+                  :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
+                  :title="stampTitle(p)"
+                >{{ balanceText(p) || '—' }}</span>
+                <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
+                     不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
+                <button
+                  v-if="!p.config_error"
+                  class="quota-refresh"
+                  :class="{ spinning: refreshingId === p.id }"
+                  :disabled="refreshingId === p.id"
+                  :aria-label="`重新查询 ${p.name} 额度`"
+                  title="重新查询额度"
+                  @click.stop="refreshBalance(p)"
+                  @keydown.stop
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="23,4 23,10 17,10" />
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                  </svg>
+                </button>
+              </div>
+            </article>
           </div>
-        </article>
+        </section>
       </div>
       <div v-else-if="!loading" class="provider-empty">
         <span class="empty-mark serif">∅</span>
@@ -371,6 +375,30 @@ function channelModelCount(type: string): number { return (form.value.modelsByCh
 function pad2(n: number): string { return String(n).padStart(2, '0') }
 function enabledModelTotal(p: ProviderSummary): number { return p.channels.filter(c => c.is_enabled).reduce((s, c) => s + (c.model_count || 0), 0) }
 function sortedChannels(p: ProviderSummary): ChannelInfo[] { return [...p.channels].sort((a, b) => a.channel_type.localeCompare(b.channel_type)) }
+
+// 卡片按状态分区（配置错误 → 启用 → 停用），组内沿用 loadProviders 的名称序。
+// offset 让入场动画的 stagger 跨组连续，否则后一组的首卡会比前一组的尾卡先出现。
+const GROUP_DEFS: { key: 'error' | 'enabled' | 'disabled'; label: string }[] = [
+  { key: 'error', label: '配置错误' },
+  { key: 'enabled', label: '启用' },
+  { key: 'disabled', label: '停用' }
+]
+
+function groupKeyOf(p: ProviderSummary): 'error' | 'enabled' | 'disabled' {
+  return p.config_error ? 'error' : p.is_enabled ? 'enabled' : 'disabled'
+}
+
+const providerGroups = computed(() => {
+  const out: { key: string; label: string; items: ProviderSummary[]; offset: number }[] = []
+  let offset = 0
+  for (const g of GROUP_DEFS) {
+    const items = providers.value.filter(p => groupKeyOf(p) === g.key)
+    if (!items.length) continue
+    out.push({ ...g, items, offset })
+    offset += items.length
+  }
+  return out
+})
 
 // 前端渲染与后端 adapter 注册表一一对应：各家载荷字段不同，按 adapter 分发。
 // usage.display 是通用模板逃生门，优先于内置 adapter 的硬编码渲染。
@@ -735,6 +763,15 @@ onMounted(() => {
 
 /* ---- catalog grid ---- */
 .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; align-items: stretch; }
+
+/* ---- status groups ---- */
+/* 组名只留给 aria：状态本身卡片上已有（状态点/在线-停用文字/警告图标），
+   分区靠 hairline 表达。没有这条线时，一行刚好排满的组和换行无法区分。 */
+.provider-groups { display: flex; flex-direction: column; gap: 26px; }
+.provider-group + .provider-group::before {
+  content: ''; display: block; height: 1px; margin-bottom: 26px;
+  background: linear-gradient(90deg, var(--mb-divider) 0%, transparent 92%);
+}
 
 /* ---- provider card ---- */
 .provider-card {
