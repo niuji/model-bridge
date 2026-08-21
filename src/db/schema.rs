@@ -187,6 +187,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .await
         .ok();
 
+    // 每条统计/日志查询都按 created_at 过滤或排序（prune 清理亦然），无索引时是全表扫描
+    // + 临时 B-tree 排序；保留期默认 730 天，表只增不减，故必须建索引。
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_usage_records_created_at ON usage_records(created_at)")
+        .execute(pool)
+        .await?;
+
     // 上游模型快照：探测成功后按 (provider, channel) 整体替换；失败时保留旧值。
     sqlx::query(
         r#"
