@@ -473,6 +473,17 @@ async fn proxy_streaming_response(
     let target_url_final = target_url.to_string();
     let start_clone = start;
 
+    // 上游非 2xx 也可能带 text/event-stream（部分 provider 的 429 即如此），
+    // 落库成败必须看状态码，与非流式路径同口径——否则被记成 0 token 的 success。
+    let upstream_status = status.as_u16();
+    let upstream_ok = status.is_success();
+    if !upstream_ok {
+        tracing::warn!(
+            "upstream non-success (stream): model={}, provider={}, url={}, status={}",
+            model, provider_id, target_url, upstream_status
+        );
+    }
+
     tokio::spawn(async move {
         let mut has_error = false;
         // bytes_stream 的分块边界与 SSE 事件不对齐：一个事件可能横跨多个分块，
@@ -536,6 +547,11 @@ async fn proxy_streaming_response(
         // 流结束时写入累积的 usage
         if !has_error {
             let latency_ms = start_clone.elapsed().as_millis() as i64;
+            let (record_status, error_msg) = if upstream_ok {
+                ("success", None)
+            } else {
+                ("error", Some(format!("HTTP {}", upstream_status)))
+            };
             tokio::spawn(write_usage(
                 state_final,
                 model_final,
@@ -545,8 +561,8 @@ async fn proxy_streaming_response(
                 last_usage.2,
                 last_usage.3,
                 latency_ms,
-                "success",
-                None,
+                record_status,
+                error_msg,
                 api_key_id_final,
                 client_final,
                 api_format_final,

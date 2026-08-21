@@ -8,6 +8,7 @@
 //   - 502 上游连接失败（base_url 指向已释放端口 → is_connect）
 //   - 200 转发：openai_chat（model 大小写规范化 + stream_options 注入）、
 //     openai_responses（model 规范化）、anthropic（SSE 透传 + 上游用 x-api-key 头）
+//   - 流式非 2xx 落库为 error（上游 429 带 text/event-stream，须与非流式同口径）
 //
 // 504（上游超时）未覆盖：超时 720s 硬编码在 proxy.rs:277，等待不可行；
 // 该分支为单行 `is_timeout()→504`，回归风险低于路由/鉴权/413，故此处略过。
@@ -1240,4 +1241,53 @@ async fn openai_chat_responses_conflict_independent() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(server_resp.received_requests().await.unwrap().len(), 1);
+}
+
+/// 上游非 2xx 且带 text/event-stream 时，usage 必须落库为 error。
+/// 回归点：曾经流式路径无条件写 "success"（status 只用于构造响应、不参与落库判定），
+/// 导致 429/5xx 的流式请求在 Dashboard 错误计数与 Logs 页面里彻底不可见。
+#[tokio::test]
+async fn streamed_non_success_recorded_as_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(429).set_body_raw(
+            b"data: {\"error\":\"rate limited\"}\n\n".as_slice(),
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+
+    let mut chat = HashMap::new();
+    chat.insert("gpt-4o".to_string(), route("gpt-4o", &server.uri()));
+    let state = build_state(chat, HashMap::new(), HashMap::new()).await;
+    // clone：spawn_proxy 会 move state，测试还要回读 state.db
+    let base = spawn_proxy(state.clone()).await;
+
+    let resp = http()
+        .post(format!("{base}/openai-chat/v1/chat/completions"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({"model": "gpt-4o", "stream": true, "messages": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    // 必须读完流：落库发生在流末，不读完则 usage 永不写入
+    let _ = resp.bytes().await.unwrap();
+
+    // write_usage 走 tokio::spawn，请求返回时行还没落库，须轮询等待
+    let mut row: Option<(String, Option<String>)> = None;
+    for _ in 0..50 {
+        row = sqlx::query_as("SELECT status, error_msg FROM usage_records LIMIT 1")
+            .fetch_optional(&state.db)
+            .await
+            .unwrap();
+        if row.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let (status, err) = row.expect("usage record should be written at stream end");
+    assert_eq!(status, "error");
+    assert!(err.unwrap().contains("429"));
 }
