@@ -149,7 +149,21 @@ async fn handle_request(
                 }
                 state.openai_responses_routes.clone()
             }
-            _ => state.anthropic_routes.clone(),
+            _ => {
+                // anthropic 入口透传任意 path，故必须在此拒绝 `..` 段：target_url 是
+                // base_url 与 path 的字符串拼接，`..` 会在 URL 解析时被规范化掉，
+                // 从而带着 provider 的 key 打到上游主机的其他路径。
+                if path.split('/').any(|seg| seg == "..") {
+                    tracing::warn!("rejected path traversal on anthropic endpoint: {}", path);
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        serde_json::json!({ "error": "path must not contain '..'" }).to_string(),
+                    )
+                        .into_response();
+                }
+                state.anthropic_routes.clone()
+            }
         };
 
     let client = headers

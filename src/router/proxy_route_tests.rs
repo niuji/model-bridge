@@ -1291,3 +1291,49 @@ async fn streamed_non_success_recorded_as_error() {
     assert_eq!(status, "error");
     assert!(err.unwrap().contains("429"));
 }
+
+/// anthropic 入口透传任意 path，故必须拒绝 `..` 段。
+/// 回归点：未加守卫时 POST /anthropic/v1/%2e%2e%2fescaped 会被 URL 规范化吃掉 /v1，
+/// 带着 provider 的 key 打到上游主机的 /escaped（已实测）。
+/// 必须用裸 TCP 发请求：reqwest/url 会在客户端先把 %2e%2e 规范化掉，走不到服务端。
+#[tokio::test]
+async fn anthropic_path_traversal_rejected() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let mut anthropic = HashMap::new();
+    anthropic.insert(
+        "claude-sonnet-4".to_string(),
+        route("claude-sonnet-4", &server.uri()),
+    );
+    let base = spawn_proxy(build_state(HashMap::new(), HashMap::new(), anthropic).await).await;
+    let addr = base.trim_start_matches("http://").to_string();
+
+    let body = r#"{"model":"claude-sonnet-4","messages":[]}"#;
+    let req = format!(
+        "POST /anthropic/v1/%2e%2e%2fescaped HTTP/1.1\r\n\
+         Host: {addr}\r\n\
+         Authorization: Bearer {TEST_KEY}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let mut sock = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    sock.write_all(req.as_bytes()).await.unwrap();
+    let mut resp = String::new();
+    sock.read_to_string(&mut resp).await.unwrap();
+
+    assert!(
+        resp.starts_with("HTTP/1.1 400"),
+        "expected 400, got: {}",
+        resp.lines().next().unwrap_or("")
+    );
+    // 关键断言：请求绝不能到达上游
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
