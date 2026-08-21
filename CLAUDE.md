@@ -256,7 +256,7 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 - `DELETE /api/admin/api-keys/{id}` — delete API key
 - `GET /api/admin/logs?page=1&page_size=50` — paginated proxy request logs (with decrypted API key previews)
 - `GET /api/admin/stats/overview` — total requests, tokens, avg latency, errors (last 7 days)
-- `GET /api/admin/stats/models` — per-model usage breakdown (last 7 days)
+- `GET /api/admin/stats/models` — per-model usage breakdown (last 30 days; the overview/hourly endpoints use 7 — the windows differ, the numbers do not reconcile)
 - `GET /api/admin/stats/daily?days=7` — daily usage for last N days
 - `GET /api/admin/stats/hourly` — hourly token usage (last 7 days)
 - `GET /api/admin/settings` — return `{"proxy_base_url":"http://<host>:<port>","version":"0.x.y"}`; consumed by the「接入指南」help page to render copy-paste-ready client config snippets and the page footer

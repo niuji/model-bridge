@@ -18,22 +18,21 @@ A self-hosted **LLM API gateway** that routes OpenAI- and Anthropic-compatible r
 ## How it works
 
 ```
-            ┌──────────────── model-bridge ────────────────┐
-  client    │  proxy  :10010              admin  :10020    │
-  ────────► │  /openai/v1/*    ─┐        (loopback only)   │
-  mb- key   │  /anthropic/v1/* ─┤        /api/admin/* REST │
-            │                   ▼        /          Vue   │
-            │       route table (model → provider)        │
-            │   ┌────────┬──────────┬──────────┬────────┐ │
-            │   │ OpenAI │ DeepSeek │ MiniMax  │ Anthr. │ │
-            │   └────────┴──────────┴──────────┴────────┘ │
-            └──────────────────────────────────────────────┘
+            ┌────────────────── model-bridge ───────────────────┐
+  client    │  proxy  :10010                admin  :10020       │
+  ────────► │  /openai-chat/v1/*      ─┐    (loopback only)     │
+  mb- key   │  /openai-responses/v1/* ─┤    /api/admin/*  REST  │
+            │  /anthropic/v1/*        ─┤    /             Vue   │
+            │                          ▼                        │
+            │   three independent route tables                  │
+            │   (model → provider), one per endpoint            │
+            └───────────────────────────────────────────────────┘
                             │
                             ▼
                  upstream LLM provider
 ```
 
-Two HTTP servers run side by side: a **proxy** (port `10010`) your clients call, and an **admin** (port `10020`, loopback) where you configure providers, keys, and view stats. The route table is an in-memory `model → provider` map rebuilt on startup, on a timer, and after any config change.
+Two HTTP servers run side by side: a **proxy** (port `10010`) your clients call, and an **admin** (port `10020`, loopback) where you configure providers, keys, and view stats. Each endpoint owns its own in-memory `model → provider` map — three tables, no shared state — rebuilt on startup, on a timer, and after any config change.
 
 ## Quick start
 
@@ -82,7 +81,7 @@ Point any OpenAI/Anthropic-compatible client at the proxy using your `mb-` key:
 
 ```bash
 # OpenAI protocol
-curl http://localhost:10010/openai/v1/chat/completions \
+curl http://localhost:10010/openai-chat/v1/chat/completions \
   -H "Authorization: Bearer mb-xxxxxxxx-..." \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
@@ -101,7 +100,7 @@ Or from the SDKs:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:10010/openai/v1", api_key="mb-...")
+client = OpenAI(base_url="http://localhost:10010/openai-chat/v1", api_key="mb-...")
 ```
 
 ```python
@@ -132,11 +131,11 @@ Without `encryption_key`, client `mb-` keys are stored in plaintext (acceptable 
 
 Providers are defined in three layers, merged at startup:
 
-1. **Builtin `providers.json`** — id, name, channels, models endpoint. Embedded in the binary. Ships with **OpenAI, DeepSeek, MiniMax, Anthropic**.
+1. **Builtin `providers.json`** — id, name, channels, models endpoint. Embedded in the binary. Ships with **OpenAI, DeepSeek, Kimi, MiniMax, 智谱 (BigModel), Anthropic, SiliconFlow, OpenRouter, 火山方舟 (Volcengine Ark)** — `providers.json` is the source of truth for this list.
 2. **`~/.mb/providers.json`** — same schema; a matching `id` overrides the builtin, a new `id` is appended. Use this for private or corporate providers without forking the repo.
 3. **SQLite** (runtime overrides, via the admin UI) — upstream API key, enabled state, per-channel base URL, model whitelist.
 
-A provider can declare multiple **channels** of different protocol types (`openai_chat`, `openai_responses`, `anthropic`). A model under a provider with both an `openai_*` and an `anthropic` channel appears in **both** route tables, routing to different upstream base URLs per protocol. Non-`claude`/`anthropic` models reachable via an Anthropic channel are also exposed with a `claude-` prefix, so Claude-Code-style clients can address them.
+A provider can declare multiple **channels** of different protocol types (`openai_chat`, `openai_responses`, `anthropic`). A model is bound to **one** channel — each entry in the model whitelist carries its `channel_type`, so serving the same model on two channels means adding it to each one separately. Non-`claude`/`anthropic` models reachable via an Anthropic channel are also exposed with a `claude-` prefix, so Claude-Code-style clients can address them.
 
 ## Admin API
 
