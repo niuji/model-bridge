@@ -57,7 +57,7 @@
   },
   {
     "id": "bigmodel",
-    "name": "BigModel",
+    "name": "智谱",
     "icon": "bigmodel.ico",
     "channels": [
       { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic/v1", "models_endpoint": "https://open.bigmodel.cn/api/anthropic/v1/models" },
@@ -107,5 +107,14 @@
       "result": "data",
       "display": "${total_credits - total_usage}"
     }
+  },
+  {
+    "id": "volcark",
+    "name": "火山方舟",
+    "icon": "volcark.svg",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "models_endpoint": "https://ark.cn-beijing.volces.com/api/v3/models" },
+      { "type": "openai_responses", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "models_endpoint": "https://ark.cn-beijing.volces.com/api/v3/models" }
+    ]
   }
 ]
