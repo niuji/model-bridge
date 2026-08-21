@@ -7,7 +7,6 @@ mod proxy_route_tests;
 
 use axum::{extract::Request, middleware, response::{Html, IntoResponse, Response}, Router};
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
 
 use crate::state::AppState;
 
@@ -93,15 +92,13 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/stats/hourly", axum::routing::get(admin::stats_hourly))
         .with_state(state);
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
+    // 不加 CORS 层：admin API 无应用层鉴权，只靠 loopback 绑定保护。
+    // 一旦回到 ACAO:*，任意网页都能跨源读走 /api/admin/api-keys/{id} 的完整 key
+    // 与 /api/admin/providers/{id} 的上游 key——loopback 挡不住用户自己的浏览器。
+    // SPA 生产同源、dev 走 vite 的 /api 代理，本就不需要跨源。
     Router::new()
         .nest("/api/admin", admin_api)
         .fallback(serve_ui)
-        .layer(cors)
 }
 
 async fn serve_ui(request: Request) -> Response {

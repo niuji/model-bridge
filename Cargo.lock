@@ -1274,8 +1274,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
- "tower",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -2456,7 +2454,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 
