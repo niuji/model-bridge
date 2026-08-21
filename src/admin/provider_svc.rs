@@ -85,6 +85,7 @@ pub async fn list_providers(
             drift,
             usage: def.usage.clone(),
             balance: balance_by_prov.remove(&def.id).map(BalanceSummary::from),
+            config_error: def.config_error.clone(),
         });
     }
     Ok(result)
@@ -149,6 +150,13 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     }
     let mut loaded: Vec<LoadedProvider> = Vec::new();
     for def in &state.provider_defs {
+        // 声明层校验失败 → 整体跳过，一条路由都不建。DB 的 is_enabled 不动：
+        // 配置错误是声明层问题，篡改用户的启用意图会让人修好 JSON 后还得手动重新启用。
+        // 此处用 debug：load_providers 启动时已 warn 过一次，按刷新周期重复 warn 是噪声。
+        if let Some(err) = &def.config_error {
+            tracing::debug!("provider '{}' skipped from routing: {}", def.id, err);
+            continue;
+        }
         let config = get_provider_config(&state.db, &def.id).await;
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
         if !is_enabled {
@@ -914,7 +922,7 @@ mod drift_tests {
         ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from) }
     }
     fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
-        ProviderDef { id: id.into(), name: id.into(), icon: None, channels: chans, usage: None }
+        ProviderDef { id: id.into(), name: id.into(), icon: None, channels: chans, usage: None, config_error: None }
     }
 
     #[test]
@@ -995,6 +1003,60 @@ mod drift_tests {
         // 第三次：baseline 已={b,c}、current={b,c} → 无变化
         let d3 = get_model_changes(&pool, "p").await.unwrap();
         assert!(d3.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod config_error_tests {
+    use super::*;
+    use crate::config::{ChannelDef, ProviderDef};
+    use crate::db::schema::run_migrations;
+    use sqlx::SqlitePool;
+
+    /// channel_type 重复的 provider 即使在 DB 里已启用且有 key，也不得建任何路由。
+    #[tokio::test]
+    async fn refresh_routes_skips_provider_with_config_error() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        sqlx::query("INSERT INTO provider_config (provider_id, api_key, is_enabled) VALUES ('dup', 'sk-x', 1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO provider_models (id, provider_id, channel_type, model_id, model_name)
+             VALUES ('m1', 'dup', 'openai_chat', 'gpt-4o', 'gpt-4o')",
+        ).execute(&pool).await.unwrap();
+
+        let ch = |b: &str| ChannelDef {
+            channel_type: "openai_chat".into(),
+            base_url: b.into(),
+            models_endpoint: None,
+        };
+        let mut def = ProviderDef {
+            id: "dup".into(),
+            name: "Dup".into(),
+            icon: None,
+            channels: vec![ch("https://a.example/v1"), ch("https://b.example/v1")],
+            usage: None,
+            config_error: None,
+        };
+        def.config_error = crate::config::validate_channel_types(&def);
+        assert!(def.config_error.is_some(), "fixture must be invalid");
+
+        let state = std::sync::Arc::new(crate::state::AppState {
+            openai_chat_routes: Default::default(),
+            openai_responses_routes: Default::default(),
+            anthropic_routes: Default::default(),
+            provider_defs: vec![def],
+            db: pool,
+            client: reqwest::Client::new(),
+            api_key_cache: Default::default(),
+            encryption_key: None,
+            proxy_base_url: "http://test".into(),
+        });
+        refresh_routes(&state).await.unwrap();
+
+        assert!(state.openai_chat_routes.read().await.is_empty());
+        assert!(state.openai_responses_routes.read().await.is_empty());
+        assert!(state.anthropic_routes.read().await.is_empty());
     }
 }
 

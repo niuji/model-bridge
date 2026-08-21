@@ -447,6 +447,7 @@ mod tests {
                 result: None,
                 display: None,
             }),
+            config_error: None,
         }
     }
 
@@ -525,7 +526,7 @@ mod tests {
         let state = build_state(vec![
             def_with_usage("on", "deepseek", Some(&ep)),
             def_with_usage("off", "deepseek", Some(&ep)),
-            ProviderDef { id: "plain".into(), name: "plain".into(), icon: None, channels: vec![], usage: None },
+            ProviderDef { id: "plain".into(), name: "plain".into(), icon: None, channels: vec![], usage: None, config_error: None },
         ]).await;
         set_provider_config(&state, "on", true, "sk").await;
         set_provider_config(&state, "off", false, "sk").await;

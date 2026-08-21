@@ -15,10 +15,10 @@
           v-for="(p, idx) in providers"
           :key="p.id"
           class="provider-card"
-          :class="{ disabled: !p.is_enabled }"
+          :class="{ disabled: !p.is_enabled, 'config-error': !!p.config_error }"
           :style="{ '--i': String(idx) }"
-          role="button"
-          tabindex="0"
+          :role="p.config_error ? undefined : 'button'"
+          :tabindex="p.config_error ? -1 : 0"
           @click="onCardClick(p)"
           @keydown.enter.prevent="openConfig(p)"
           @keydown.space.prevent="openConfig(p)"
@@ -31,8 +31,8 @@
             <div class="card-hero-text">
               <h2 class="card-name serif">{{ p.name }}</h2>
               <div class="card-meta mono">
-                <span class="card-status-dot" :class="{ on: p.is_enabled }" />
-                <span class="status-word">{{ p.is_enabled ? '在线' : '停用' }}</span>
+                <span class="card-status-dot" :class="{ on: p.is_enabled && !p.config_error }" />
+                <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '在线' : '停用') }}</span>
                 <span class="meta-sep">·</span>
                 <span>{{ enabledModelTotal(p) }} 模型</span>
                 <span
@@ -50,7 +50,7 @@
                 </span>
               </div>
             </div>
-            <n-switch :value="p.is_enabled" size="small" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
+            <n-switch :value="p.is_enabled" size="small" :disabled="!!p.config_error" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
           </div>
 
           <div class="card-divider" />
@@ -68,8 +68,18 @@
             </div>
           </div>
 
-          <div v-if="p.is_enabled && p.usage" class="card-quota">
+          <div v-if="p.config_error || (p.is_enabled && p.usage)" class="card-quota">
+            <!-- 配置错误优先于余额，且只出图标：文案挂 title，避免撑开状态行 -->
+            <span v-if="p.config_error" class="quota-error" :title="`配置错误：${p.config_error}`">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <span class="sr-only">配置错误：{{ p.config_error }}</span>
+            </span>
             <span
+              v-else
               class="quota-value mono"
               :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
               :title="stampTitle(p)"
@@ -77,6 +87,7 @@
             <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
                  不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
             <button
+              v-if="!p.config_error"
               class="quota-refresh"
               :class="{ spinning: refreshingId === p.id }"
               :disabled="refreshingId === p.id"
@@ -315,7 +326,7 @@ interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?
 interface DriftSummary { new: number; removed: number }
 interface Balance { adapter: string; status: string; data?: Record<string, any> | null; error_msg?: string | null; fetched_at: string }
 interface UsageDef { adapter: string; params?: Record<string, any>; result?: string; display?: string }
-interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null }
+interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
 interface ChangeEntry { model_id: string; model_name: string }
 interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
@@ -480,6 +491,8 @@ function onCardClick(p: ProviderSummary) {
 }
 
 async function openConfig(summary: ProviderSummary) {
+  // 唯一收口：卡片 click 与 Enter/Space 三个入口都走这里，声明层报错的 provider 不开详情
+  if (summary.config_error) return
   const res = await fetch(`${API_BASE}/providers/${summary.id}`)
   editProvider.value = await res.json()
   const p = editProvider.value!
@@ -742,6 +755,10 @@ onMounted(() => {
 .provider-card:hover { border-color: rgba(34,197,94,0.45); box-shadow: var(--mb-shadow-3); transform: translateY(-2px); }
 .provider-card:focus-visible { outline: 2px solid rgba(34,197,94,0.5); outline-offset: 2px; }
 .provider-card.disabled { --max-opacity: 0.66; }
+.provider-card.config-error { cursor: default; --max-opacity: 0.66; }
+.provider-card.config-error:hover { transform: none; border-color: rgba(245,158,11,0.45); box-shadow: var(--mb-shadow-1); }
+.quota-error { display: inline-flex; align-items: center; color: var(--mb-warning); cursor: help; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .provider-card.disabled:hover { border-color: rgba(245,158,11,0.28); }
 
 /* entrance animates `translate` + `opacity`; hover uses `transform` so the filled keyframe never pins it */

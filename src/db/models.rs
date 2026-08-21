@@ -72,6 +72,10 @@ pub struct ProviderSummary {
     /// 最新余额快照（未探测过则缺省）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub balance: Option<BalanceSummary>,
+    /// 声明层校验错误（channel_type 重复等）。Some 时该 provider 无任何路由，
+    /// 前端据此在状态栏出警告图标、禁用卡片点击与启用开关。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_error: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]

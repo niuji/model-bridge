@@ -79,6 +79,10 @@ pub struct ProviderDef {
     /// 注意 ~/.mb/providers.json 对同 id provider 是整体替换：覆盖时若不带 usage 会一并丢失余额查询。
     #[serde(default)]
     pub usage: Option<UsageDef>,
+    /// 声明层校验错误（由 load_providers 派生，非 JSON 字段——serde(skip) 确保用户写了也不生效）。
+    /// Some 时该 provider 被 refresh_routes 跳过，不建任何路由；DB 的 is_enabled 不受影响。
+    #[serde(skip)]
+    pub config_error: Option<String>,
 }
 
 /// 余额查询适配声明。params 接受哪些 key 由各 adapter 自行定义并严格校验（未知 key 报错）。
@@ -144,6 +148,32 @@ pub fn load_config(cli: &Cli) -> anyhow::Result<AppConfig> {
 
 /// 加载 Provider 定义：编译期内嵌的 providers.json + ~/.mb/providers.json 用户自定义合并。
 /// 用户自定义中同 id 覆盖内置，新 id 追加。
+/// 校验单个 provider 的 channel 声明：channel_type 必须唯一。
+///
+/// channel_type 是通道的唯一判别键——`provider_models` 行、`refresh_routes` 的通道↔模型配对、
+/// `upstream_models` 快照都按它索引。同 type 出现两次时无从分辨模型归属哪一个：外层通道循环
+/// 会把同一批模型处理两遍，令冲突计数翻倍（裸名 key 退化为限定名，客户端原请求名 404），
+/// 两个 base_url 还会争抢同一个路由 key。故这类声明整体拒绝，不做部分接受。
+pub fn validate_channel_types(def: &ProviderDef) -> Option<String> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut dups: Vec<&str> = Vec::new();
+    for ch in &def.channels {
+        let ct = ch.channel_type.as_str();
+        if seen.contains(&ct) {
+            if !dups.contains(&ct) {
+                dups.push(ct);
+            }
+        } else {
+            seen.push(ct);
+        }
+    }
+    if dups.is_empty() {
+        None
+    } else {
+        Some(format!("channel_type 重复: {}", dups.join(", ")))
+    }
+}
+
 pub fn load_providers() -> anyhow::Result<Vec<ProviderDef>> {
     let mut providers: Vec<ProviderDef> =
         serde_json::from_str(include_str!("../providers.json"))?;
@@ -154,14 +184,14 @@ pub fn load_providers() -> anyhow::Result<Vec<ProviderDef>> {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("failed to read user provider file {:?}: {}", file_path, e);
-                return Ok(providers);
+                return Ok(mark_config_errors(providers));
             }
         };
         let user_defs: Vec<ProviderDef> = match serde_json::from_str(&raw) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("failed to parse user provider file {:?}: {}", file_path, e);
-                return Ok(providers);
+                return Ok(mark_config_errors(providers));
             }
         };
         for user_def in user_defs {
@@ -175,7 +205,22 @@ pub fn load_providers() -> anyhow::Result<Vec<ProviderDef>> {
         }
     }
 
-    Ok(providers)
+    Ok(mark_config_errors(providers))
+}
+
+/// 给每个 provider 打上声明层校验结果。必须在用户覆盖合并「之后」跑：
+/// 同 id 的用户条目是整体替换，只校验内建层会漏掉用户引入的重复。
+fn mark_config_errors(mut providers: Vec<ProviderDef>) -> Vec<ProviderDef> {
+    for def in &mut providers {
+        def.config_error = validate_channel_types(def);
+        if let Some(err) = &def.config_error {
+            tracing::warn!(
+                "provider '{}' has an invalid channel declaration ({}); it will be skipped from routing",
+                def.id, err
+            );
+        }
+    }
+    providers
 }
 
 #[cfg(test)]
@@ -190,6 +235,60 @@ mod tests {
         assert_eq!(cfg.probe_interval_min, 1440);
         assert_eq!(cfg.log_retention_days, 730);
         assert_eq!(cfg.balance_interval_min, 10);
+    }
+
+    fn def_with_channels(types: &[&str]) -> ProviderDef {
+        ProviderDef {
+            id: "p".into(),
+            name: "P".into(),
+            icon: None,
+            channels: types
+                .iter()
+                .map(|t| ChannelDef {
+                    channel_type: (*t).into(),
+                    base_url: "https://example.com/v1".into(),
+                    models_endpoint: None,
+                })
+                .collect(),
+            usage: None,
+            config_error: None,
+        }
+    }
+
+    #[test]
+    fn distinct_channel_types_are_valid() {
+        let d = def_with_channels(&["openai_chat", "openai_responses", "anthropic"]);
+        assert_eq!(validate_channel_types(&d), None);
+    }
+
+    #[test]
+    fn duplicate_channel_type_is_reported() {
+        let d = def_with_channels(&["openai_chat", "openai_chat"]);
+        assert_eq!(
+            validate_channel_types(&d).as_deref(),
+            Some("channel_type 重复: openai_chat")
+        );
+    }
+
+    #[test]
+    fn multiple_duplicate_channel_types_are_all_reported() {
+        // 每个重复 type 只报一次（三个 openai_chat 不该报两遍），且顺序稳定
+        let d = def_with_channels(&[
+            "openai_chat",
+            "anthropic",
+            "openai_chat",
+            "anthropic",
+            "openai_chat",
+        ]);
+        assert_eq!(
+            validate_channel_types(&d).as_deref(),
+            Some("channel_type 重复: openai_chat, anthropic")
+        );
+    }
+
+    #[test]
+    fn no_channels_is_valid() {
+        assert_eq!(validate_channel_types(&def_with_channels(&[])), None);
     }
 
     #[test]
