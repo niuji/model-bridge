@@ -1409,3 +1409,74 @@ async fn upstream_receives_only_whitelisted_client_headers() {
     assert!(h.get("accept-encoding").is_none(), "accept-encoding must not be forwarded");
     assert!(h.get("x-custom-thing").is_none());
 }
+
+/// query string 原样透传给上游（Claude Code 实际发的是 POST /v1/messages?beta=true）。
+/// 同时守住：无 query 时 target_url 不能多出一个尾随 `?`。
+#[tokio::test(flavor = "multi_thread")]
+async fn query_string_forwarded_verbatim_to_upstream() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "msg_1"})))
+        .mount(&server)
+        .await;
+
+    let mut anthropic = HashMap::new();
+    anthropic.insert(
+        "claude-sonnet-4".to_string(),
+        route("claude-sonnet-4", &server.uri()),
+    );
+    let base = spawn_proxy(build_state(HashMap::new(), HashMap::new(), anthropic).await).await;
+    let body = serde_json::json!({"model": "claude-sonnet-4", "messages": []});
+
+    // 带 query：含百分号编码，必须逐字节原样到达，不得被重新编码
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages?beta=true&x=a%20b"))
+        .headers(auth_headers())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // 不带 query
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].url.query(), Some("beta=true&x=a%20b"));
+    assert_eq!(reqs[1].url.query(), None);
+}
+
+/// query 不参与端点 path 匹配：/chat/completions?x=1 仍须命中，不能 404。
+#[tokio::test(flavor = "multi_thread")]
+async fn query_does_not_break_endpoint_path_match() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "c1"})))
+        .mount(&server)
+        .await;
+
+    let mut chat = HashMap::new();
+    chat.insert("gpt-4o".to_string(), route("GPT-4o", &server.uri()));
+    let base = spawn_proxy(build_state(chat, HashMap::new(), HashMap::new()).await).await;
+
+    let resp = http()
+        .post(format!("{base}/openai-chat/v1/chat/completions?stream=1"))
+        .headers(auth_headers())
+        .json(&serde_json::json!({"model": "gpt-4o", "messages": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs[0].url.query(), Some("stream=1"));
+}

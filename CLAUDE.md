@@ -168,6 +168,8 @@ Before forwarding, the proxy makes these modifications to the client's request �
 3. **Auth header rewrite**: The client's `mb-xxx` key is replaced with the upstream provider's API key, formatted as `Bearer` (OpenAI-style upstreams) or `x-api-key` (Anthropic-style upstreams).
 4. **Header passthrough**: A whitelist — only `content-type`, `anthropic-version`, `anthropic-beta`, `user-agent`, and `idempotency-key` are forwarded from the client; all other client headers are dropped. Two exclusions are load-bearing: `accept-encoding` (reqwest is built with `default-features = false` and no gzip/brotli feature, so a compressed upstream response would silently break SSE line parsing and usage extraction while still passing through to the client) and `authorization`/`x-api-key` (reqwest's `.header()` appends rather than replaces, so forwarding would put the client key alongside the upstream key as a second header of the same name).
 
+The upstream URL is `base_url` + the wildcard path + the client's raw query string **verbatim** (Claude Code posts `/v1/messages?beta=true`). The `..` guard on the anthropic endpoint is path-only by design: everything after `?` cannot affect host/path resolution, and a malformed query fails reqwest's URL parse into the existing 502 branch.
+
 Upstream request timeout is **720 seconds**. Error responses from the proxy:
 - **413** — request body exceeds 64 MiB
 - **502** — upstream connection failed or generic upstream error

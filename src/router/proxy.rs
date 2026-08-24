@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Request, State},
+    extract::{Path, RawQuery, Request, State},
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -22,6 +22,7 @@ pub async fn openai_chat_handler(
     State(state): State<Arc<AppState>>,
     method: Method,
     Path(path): Path<String>,
+    RawQuery(query): RawQuery,
     request: Request,
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
@@ -37,7 +38,7 @@ pub async fn openai_chat_handler(
                 .into_response();
         }
     };
-    handle_request(state, "openai_chat", method, path, headers, body_bytes, api_key_id).await
+    handle_request(state, "openai_chat", method, path, query, headers, body_bytes, api_key_id).await
 }
 
 /// OpenAI Responses 入口: /openai-responses/v1/{*path}
@@ -45,6 +46,7 @@ pub async fn openai_responses_handler(
     State(state): State<Arc<AppState>>,
     method: Method,
     Path(path): Path<String>,
+    RawQuery(query): RawQuery,
     request: Request,
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
@@ -65,6 +67,7 @@ pub async fn openai_responses_handler(
         "openai_responses",
         method,
         path,
+        query,
         headers,
         body_bytes,
         api_key_id,
@@ -77,6 +80,7 @@ pub async fn anthropic_handler(
     State(state): State<Arc<AppState>>,
     method: Method,
     Path(path): Path<String>,
+    RawQuery(query): RawQuery,
     request: Request,
 ) -> Response {
     let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|k| k.0.clone());
@@ -92,14 +96,16 @@ pub async fn anthropic_handler(
                 .into_response();
         }
     };
-    handle_request(state, "anthropic", method, path, headers, body_bytes, api_key_id).await
+    handle_request(state, "anthropic", method, path, query, headers, body_bytes, api_key_id).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_request(
     state: Arc<AppState>,
     channel: &str,
     method: Method,
     path: String,
+    query: Option<String>,
     headers: HeaderMap,
     body: axum::body::Bytes,
     api_key_id: Option<String>,
@@ -176,6 +182,7 @@ async fn handle_request(
         channel,
         method,
         &path,
+        query.as_deref(),
         headers,
         &body,
         api_key_id,
@@ -185,12 +192,14 @@ async fn handle_request(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn proxy_to_provider(
     state: Arc<AppState>,
     api_format: &str,
     channel: &str,
     method: Method,
     path: &str,
+    query: Option<&str>,
     headers: HeaderMap,
     body: &[u8],
     api_key_id: Option<String>,
@@ -237,11 +246,18 @@ async fn proxy_to_provider(
 
     // 3. 构造目标 URL：base_url 自带完整版本前缀（如 .../v1 或 .../api/paas/v4），
     // 仅拼接 path，并去除两侧多余斜杠，避免出现 // 或重复 /v1。
-    let target_url = format!(
+    let mut target_url = format!(
         "{}/{}",
         route.base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
+    // query 原样透传（Claude Code 发的是 /v1/messages?beta=true）。query 位于 `?` 之后，
+    // 改不了目标 host/path，故不需要 path 那样的 `..` 守卫；畸形 query 会让 reqwest 的
+    // URL 解析失败，落到既有的 502 分支。
+    if let Some(q) = query.filter(|q| !q.is_empty()) {
+        target_url.push('?');
+        target_url.push_str(q);
+    }
 
     // 4. 构造转发请求
     let mut req = state
