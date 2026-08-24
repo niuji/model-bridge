@@ -1349,3 +1349,63 @@ async fn anthropic_path_traversal_rejected() {
     // 关键断言：请求绝不能到达上游
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
 }
+
+/// 上游请求头白名单（proxy.rs 第 5 步）：只有 content-type / anthropic-version /
+/// anthropic-beta / user-agent / idempotency-key 会外发，其余客户端头一律丢弃。
+/// 两条断言是承重的，改白名单前先看它们为什么在：
+///   - accept-encoding 必须丢：reqwest 未启用 gzip feature，上游压缩后 SSE 解析会静默失败。
+///   - authorization 必须丢：reqwest 的 .header() 是 append，透传会与上游 key 并存为两个头。
+#[tokio::test(flavor = "multi_thread")]
+async fn upstream_receives_only_whitelisted_client_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "msg_1"})))
+        .mount(&server)
+        .await;
+
+    let mut anthropic = HashMap::new();
+    anthropic.insert(
+        "claude-sonnet-4".to_string(),
+        route("claude-sonnet-4", &server.uri()),
+    );
+    let base = spawn_proxy(build_state(HashMap::new(), HashMap::new(), anthropic).await).await;
+
+    let resp = http()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .headers(auth_headers())
+        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "context-1m-2025-08-07")
+        .header("user-agent", "claude-cli/1.2.3")
+        // 大小写混写：HeaderMap 查找不区分大小写，客户端按 OpenAI 文档写法发也应命中
+        .header("Idempotency-Key", "idem-42")
+        .header("accept-encoding", "gzip")
+        .header("x-custom-thing", "nope")
+        .json(&serde_json::json!({"model": "claude-sonnet-4", "messages": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    let h = &reqs[0].headers;
+
+    let got = |name: &str| h.get(name).map(|v| v.to_str().unwrap().to_string());
+    assert_eq!(got("anthropic-version").as_deref(), Some("2023-06-01"));
+    assert_eq!(
+        got("anthropic-beta").as_deref(),
+        Some("context-1m-2025-08-07")
+    );
+    assert_eq!(got("user-agent").as_deref(), Some("claude-cli/1.2.3"));
+    assert_eq!(got("idempotency-key").as_deref(), Some("idem-42"));
+    assert_eq!(got("content-type").as_deref(), Some("application/json"));
+
+    // 鉴权头被替换为上游 key，且只有一个
+    assert_eq!(got("x-api-key").as_deref(), Some(UPSTREAM_KEY));
+    assert_eq!(h.get_all("x-api-key").iter().count(), 1);
+    assert!(h.get("authorization").is_none(), "client mb- key leaked upstream");
+
+    assert!(h.get("accept-encoding").is_none(), "accept-encoding must not be forwarded");
+    assert!(h.get("x-custom-thing").is_none());
+}

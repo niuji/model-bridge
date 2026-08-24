@@ -166,7 +166,7 @@ Before forwarding, the proxy makes these modifications to the client's request �
 1. **Model name canonicalization**: `model` in the JSON body is rewritten to the exact case stored in `provider_models`.
 2. **`stream_options` injection**: For OpenAI `chat/completions` requests with `stream: true` and no existing `stream_options`, the proxy injects `{"stream_options": {"include_usage": true}}` to ensure the upstream returns token usage in its SSE stream.
 3. **Auth header rewrite**: The client's `mb-xxx` key is replaced with the upstream provider's API key, formatted as `Bearer` (OpenAI-style upstreams) or `x-api-key` (Anthropic-style upstreams).
-4. **Header passthrough**: Only `content-type` and `anthropic-version` are forwarded from the client; all other client headers are dropped.
+4. **Header passthrough**: A whitelist — only `content-type`, `anthropic-version`, `anthropic-beta`, `user-agent`, and `idempotency-key` are forwarded from the client; all other client headers are dropped. Two exclusions are load-bearing: `accept-encoding` (reqwest is built with `default-features = false` and no gzip/brotli feature, so a compressed upstream response would silently break SSE line parsing and usage extraction while still passing through to the client) and `authorization`/`x-api-key` (reqwest's `.header()` appends rather than replaces, so forwarding would put the client key alongside the upstream key as a second header of the same name).
 
 Upstream request timeout is **720 seconds**. Error responses from the proxy:
 - **413** — request body exceeds 64 MiB

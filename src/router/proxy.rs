@@ -258,8 +258,18 @@ async fn proxy_to_provider(
         }
     }
 
-    // 5. 透传客户端关键请求头
-    for header_name in &["content-type", "anthropic-version"] {
+    // 5. 透传客户端关键请求头（白名单，不是黑名单）
+    // 不得加入 accept-encoding：reqwest 未启用 gzip/brotli feature，上游一旦压缩，
+    // SSE 行解析与 usage 提取会在压缩字节上静默失败（响应本身仍能原样透传给客户端，不报错）。
+    // 不得加入 authorization/x-api-key：reqwest 的 .header() 是 append 而非 insert，
+    // 会与上面写入的上游凭证并存为两个同名头。
+    for header_name in &[
+        "content-type",
+        "anthropic-version",
+        "anthropic-beta",
+        "user-agent",
+        "idempotency-key",
+    ] {
         if let Some(value) = headers.get(*header_name) {
             if let Ok(v) = value.to_str() {
                 req = req.header(*header_name, v);
