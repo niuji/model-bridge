@@ -1480,3 +1480,53 @@ async fn query_does_not_break_endpoint_path_match() {
     let reqs = server.received_requests().await.unwrap();
     assert_eq!(reqs[0].url.query(), Some("stream=1"));
 }
+
+/// openai-responses 端点与另外两个端点共用 proxy_to_provider 的头白名单与 URL 构造，
+/// 此处直测一遍以免「结构上共用」的论证被后续改动悄悄推翻。
+/// 与 anthropic 端点的唯一差异是鉴权头格式：openai 协议用 Authorization: Bearer。
+#[tokio::test(flavor = "multi_thread")]
+async fn openai_responses_forwards_whitelisted_headers_and_query() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "resp_1"})))
+        .mount(&server)
+        .await;
+
+    let mut responses = HashMap::new();
+    responses.insert("gpt-4o".to_string(), route("GPT-4o", &server.uri()));
+    let base = spawn_proxy(build_state(HashMap::new(), responses, HashMap::new()).await).await;
+
+    let resp = http()
+        .post(format!("{base}/openai-responses/v1/responses?beta=true&x=a%20b"))
+        .headers(auth_headers())
+        .header("user-agent", "claude-cli/1.2.3")
+        .header("Idempotency-Key", "idem-42")
+        .header("accept-encoding", "gzip")
+        .header("x-custom-thing", "nope")
+        .json(&serde_json::json!({"model": "gpt-4o", "input": "hi"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    let h = &reqs[0].headers;
+    let got = |name: &str| h.get(name).map(|v| v.to_str().unwrap().to_string());
+
+    assert_eq!(reqs[0].url.query(), Some("beta=true&x=a%20b"));
+    assert_eq!(got("user-agent").as_deref(), Some("claude-cli/1.2.3"));
+    assert_eq!(got("idempotency-key").as_deref(), Some("idem-42"));
+    assert_eq!(got("content-type").as_deref(), Some("application/json"));
+
+    // openai 协议：上游鉴权是 Bearer 上游 key，且只有一个 authorization 头
+    assert_eq!(
+        got("authorization").as_deref(),
+        Some(format!("Bearer {UPSTREAM_KEY}").as_str())
+    );
+    assert_eq!(h.get_all("authorization").iter().count(), 1);
+
+    assert!(h.get("accept-encoding").is_none(), "accept-encoding must not be forwarded");
+    assert!(h.get("x-custom-thing").is_none());
+}
