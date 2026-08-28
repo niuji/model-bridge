@@ -59,6 +59,7 @@
     "id": "bigmodel",
     "name": "智谱",
     "icon": "bigmodel.ico",
+    "usage": { "adapter": "bigmodel" },
     "channels": [
       { "type": "anthropic", "base_url": "https://open.bigmodel.cn/api/anthropic/v1", "models_endpoint": "https://open.bigmodel.cn/api/anthropic/v1/models" },
       { "type": "openai_chat", "base_url": "https://open.bigmodel.cn/api/paas/v4", "models_endpoint": "https://open.bigmodel.cn/api/paas/v4/models" }

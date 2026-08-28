@@ -80,12 +80,17 @@
                   </svg>
                   <span class="sr-only">配置错误：{{ p.config_error }}</span>
                 </span>
-                <span
-                  v-else
-                  class="quota-value mono"
-                  :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) }"
-                  :title="stampTitle(p)"
-                >{{ balanceText(p) || '—' }}</span>
+                <template v-else>
+                  <span
+                    class="quota-value mono"
+                    :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) && !planChips(p).length }"
+                    :title="stampTitle(p)"
+                  >{{ balanceText(p) || (planChips(p).length ? '' : '—') }}</span>
+                  <!-- bigmodel 等复合载荷的第二段：编码计划配额窗口，chip 形式贴在金额后 -->
+                  <span v-if="planChips(p).length" class="quota-plan" :title="stampTitle(p)">
+                    <span v-for="c in planChips(p)" :key="c.label" class="plan-chip" :class="{ hot: c.used_pct >= 80 }">{{ c.label }} {{ Math.round(c.used_pct) }}%</span>
+                  </span>
+                </template>
                 <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
                      不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
                 <button
@@ -410,8 +415,22 @@ function balanceText(p: ProviderSummary): string {
   switch (p.balance!.adapter) {
     case 'deepseek': return `¥${Number(d.total_balance).toFixed(2)}`
     case 'openrouter': return `$${(Number(d.total_credits) - Number(d.total_usage)).toFixed(2)}`
+    case 'bigmodel': {
+      const v = d.wallet?.available_balance
+      // 钱包段缺失（账号无按量钱包或探测失败）时交给配额 chips，不显示占位
+      return typeof v === 'number' ? `¥${v.toFixed(2)}` : ''
+    }
     default: return '—'
   }
+}
+
+interface PlanWindow { label: string; used_pct: number; resets_at: number | null }
+
+// 复合载荷第二段（如 bigmodel 的 Coding Plan 窗口）：data.plan 存在即渲染 chips，
+// 与 adapter 名解耦——载荷里有就算。失败快照沿用旧 data，所以 status=error 也照常显示。
+function planChips(p: ProviderSummary): PlanWindow[] {
+  const arr = p.balance?.data?.plan
+  return Array.isArray(arr) ? arr.filter((x: PlanWindow) => x && typeof x.used_pct === 'number') : []
 }
 
 // 负数（透支）判定：剥掉货币符号与前导空白后看负号；模板渲染的非金额文本视为非负。
@@ -463,7 +482,23 @@ function stampTitle(p: ProviderSummary): string {
     const why = p.balance.error_msg || '上游未返回结果'
     return `${abs} 查询失败：${why}\n数值来自上一次成功查询`
   }
-  return `更新于 ${abs}`
+  const detail = bigmodelDetail(p)
+  return `更新于 ${abs}${detail}`
+}
+
+// bigmodel 载荷是 {wallet, plan} 复合体，卡片单行放不下，明细挂 tooltip。
+function bigmodelDetail(p: ProviderSummary): string {
+  const d = p.balance?.data
+  if (!d || p.balance?.adapter !== 'bigmodel') return ''
+  const parts: string[] = []
+  const money = (v: unknown) => (typeof v === 'number' ? `¥${v.toFixed(2)}` : '—')
+  const w = d.wallet
+  if (w) parts.push(`可用 ${money(w.available_balance)} · 充值 ${money(w.recharge_amount)} · 赠送 ${money(w.give_amount)} · 累计消费 ${money(w.total_spend_amount)}`)
+  for (const c of planChips(p)) {
+    const reset = c.resets_at ? new Date(c.resets_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'
+    parts.push(`${c.label} 已用 ${Math.round(c.used_pct)}%（${reset} 重置）`)
+  }
+  return parts.length ? `\n${parts.join('\n')}` : ''
 }
 
 async function refreshBalance(p: ProviderSummary) {
@@ -924,6 +959,15 @@ onMounted(() => {
 .quota-value.pos { color: var(--mb-success-d); }
 .quota-value.err { color: var(--mb-warning); cursor: help; }
 .quota-value.empty { color: var(--mb-text-3); }
+
+/* 配额窗口小徽章：与 channel-tab-count 同族（inset 底 + 次要色），hot=用量≥80% 转琥珀 */
+.quota-plan { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.plan-chip {
+  font-size: 10px; padding: 1px 6px; border-radius: 6px;
+  background: var(--mb-surface-inset); color: var(--mb-text-3);
+  font-variant-numeric: tabular-nums;
+}
+.plan-chip.hot { background: var(--mb-tint-amber); color: var(--mb-warning); }
 
 .quota-refresh {
   flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
