@@ -1264,6 +1264,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "hmac",
  "include_dir",
  "mime_guess",
  "reqwest",

@@ -420,6 +420,11 @@ function balanceText(p: ProviderSummary): string {
       // 钱包段缺失（账号无按量钱包或探测失败）时交给配额 chips，不显示占位
       return typeof v === 'number' ? `¥${v.toFixed(2)}` : ''
     }
+    case 'volcengine': {
+      const v = d.balance?.available
+      // 余额段缺失（探测失败）时交给配额 chips，不显示占位
+      return typeof v === 'number' ? `¥${v.toFixed(2)}` : ''
+    }
     default: return '—'
   }
 }
@@ -482,7 +487,7 @@ function stampTitle(p: ProviderSummary): string {
     const why = p.balance.error_msg || '上游未返回结果'
     return `${abs} 查询失败：${why}\n数值来自上一次成功查询`
   }
-  const detail = bigmodelDetail(p)
+  const detail = bigmodelDetail(p) || volcengineDetail(p)
   return `更新于 ${abs}${detail}`
 }
 
@@ -497,6 +502,22 @@ function bigmodelDetail(p: ProviderSummary): string {
   for (const c of planChips(p)) {
     const reset = c.resets_at ? new Date(c.resets_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'
     parts.push(`${c.label} 已用 ${Math.round(c.used_pct)}%（${reset} 重置）`)
+  }
+  return parts.length ? `\n${parts.join('\n')}` : ''
+}
+
+// volcengine 载荷是 {balance, plan_source, plan} 复合体，明细挂 tooltip（同 bigmodel 模式）。
+function volcengineDetail(p: ProviderSummary): string {
+  const d = p.balance?.data
+  if (!d || p.balance?.adapter !== 'volcengine') return ''
+  const parts: string[] = []
+  const money = (v: unknown) => (typeof v === 'number' ? `¥${v.toFixed(2)}` : '—')
+  const b = d.balance
+  if (b) parts.push(`可用 ${money(b.available)} · 现金 ${money(b.cash)} · 冻结 ${money(b.frozen)} · 欠费 ${money(b.arrears)} · 信控 ${money(b.credit_limit)}`)
+  const source = d.plan_source === 'agent_plan' ? 'Agent Plan' : d.plan_source === 'coding_plan' ? 'Coding Plan' : ''
+  for (const c of planChips(p)) {
+    const reset = c.resets_at ? new Date(c.resets_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'
+    parts.push(`${source} ${c.label} 已用 ${Math.round(c.used_pct)}%（${reset} 重置）`.trim())
   }
   return parts.length ? `\n${parts.join('\n')}` : ''
 }

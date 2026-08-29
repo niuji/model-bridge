@@ -6,6 +6,7 @@ mod bigmodel;
 mod deepseek;
 mod http;
 mod openrouter;
+mod volcengine;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,6 +61,7 @@ pub async fn fetch_balance(
         "openrouter" => openrouter::openrouter_credits(client, api_key, &usage.params).await,
         "bigmodel" => bigmodel::bigmodel_usage(client, api_key, &usage.params).await,
         "http" => http::http_balance(client, api_key, &usage.params, usage.result.as_deref()).await,
+        "volcengine" => volcengine::volcengine_usage(client, api_key, &usage.params).await,
         _ => anyhow::bail!("unknown usage adapter: {}", usage.adapter),
     }
 }
