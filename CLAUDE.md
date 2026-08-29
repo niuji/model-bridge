@@ -230,7 +230,7 @@ Drift is **derived on read, not stored**: `compute_drift` takes the symmetric di
 | `src/router/proxy.rs` | Core proxy: model extraction, route lookup, upstream forwarding, SSE streaming, usage recording |
 | `src/router/models_list.rs` | Returns cached model lists (openai-chat / openai-responses / anthropic) from in-memory route tables |
 | `src/router/admin.rs` | Admin HTTP handlers: provider CRUD, API key CRUD, stats queries |
-| `src/admin/balance_svc.rs` | Provider 余额 adapter 注册表（deepseek/openrouter/bigmodel/http）、快照 UPSERT、单轮探测 |
+| `src/admin/balance_svc/` | 余额 adapter 目录模块：`mod.rs`（dispatch/DB 落库/探测）+ per-adapter 文件（deepseek/openrouter/bigmodel/http.rs，实现与测试同文件） |
 | `src/admin/provider_svc.rs` | Provider business logic: JSON+DB merge, route refresh, `/models` endpoint probing, CRUD |
 | `src/admin/stats_svc.rs` | Usage stats queries: overview, per-model, daily, hourly; `prune_old_records()` daily log retention cleanup |
 | `src/router/proxy_route_tests.rs` | Route-level HTTP tests (wiremock dev-dep): auth 401, per-endpoint path 404, model-not-found 404, `models` endpoint isolation, 413/502, model-case normalization + `stream_options` injection + `x-api-key` upstream auth |
