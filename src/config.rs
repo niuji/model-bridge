@@ -76,7 +76,8 @@ pub struct ProviderDef {
     #[serde(default)]
     pub channels: Vec<ChannelDef>,
     /// 余额查询适配声明（可选）：adapter 为内置实现名（见 balance_svc），params 为该 adapter 的自定义参数。
-    /// 注意 ~/.mb/providers.json 对同 id provider 是整体替换：覆盖时若不带 usage 会一并丢失余额查询。
+    /// 注意 ~/.mb/providers.json 对同 id provider 是浅合并：只写 usage 即可为内置 provider 增配余额查询
+    /// （channels/name 等自动继承），显式 null 才移除字段。
     #[serde(default)]
     pub usage: Option<UsageDef>,
     /// 声明层校验错误（由 load_providers 派生，非 JSON 字段——serde(skip) 确保用户写了也不生效）。
@@ -174,42 +175,88 @@ pub fn validate_channel_types(def: &ProviderDef) -> Option<String> {
     }
 }
 
+/// 加载 Provider 定义：编译期内嵌的 providers.json + ~/.mb/providers.json 用户自定义合并。
+/// 用户自定义中同 id 浅合并覆盖（用户写的 key 赢，没写的继承内置；显式 null 才移除），新 id 追加。
+/// 内置定义停在 Value 层参与合并——struct 层分不清「没写」和「写了个默认值」。
 pub fn load_providers() -> anyhow::Result<Vec<ProviderDef>> {
-    let mut providers: Vec<ProviderDef> =
-        serde_json::from_str(include_str!("../providers.json"))?;
+    let builtin: Vec<serde_json::Value> = serde_json::from_str(include_str!("../providers.json"))?;
 
-    let user_file = dirs::home_dir().map(|h| h.join(".mb").join("providers.json"));
-    if let Some(file_path) = user_file.filter(|p| p.exists()) {
-        let raw = match std::fs::read_to_string(&file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("failed to read user provider file {:?}: {}", file_path, e);
-                return Ok(mark_config_errors(providers));
-            }
-        };
-        let user_defs: Vec<ProviderDef> = match serde_json::from_str(&raw) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("failed to parse user provider file {:?}: {}", file_path, e);
-                return Ok(mark_config_errors(providers));
-            }
-        };
-        for user_def in user_defs {
-            if let Some(existing) = providers.iter_mut().find(|p| p.id == user_def.id) {
-                tracing::info!("user provider '{}' overrides builtin definition", user_def.id);
-                *existing = user_def;
-            } else {
-                tracing::info!("user provider '{}' added from ~/.mb/providers.json", user_def.id);
-                providers.push(user_def);
-            }
+    // 用户文件可缺省；存在但读不出/JSON 语法坏 → warn 后弃用（内置定义照常生效）
+    let user_values = match read_user_values() {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            tracing::warn!("failed to load user provider file ~/.mb/providers.json: {}", e);
+            Vec::new()
         }
-    }
+        None => Vec::new(),
+    };
 
+    // 条目缺 id 或合并后反序列化不过 → 同样整体弃用用户文件（沿用旧「单条目坏→全文件弃」，
+    // 避免半套配置静默生效）。内置内容编译期内嵌、已知合法，此分支只可能由用户条目触发。
+    let providers = match merge_user_defs(&builtin, user_values).and_then(|merged| defs_from_values(&merged)) {
+        Ok(providers) => providers,
+        Err(e) => {
+            tracing::warn!("invalid user provider file ~/.mb/providers.json, using builtin definitions only: {}", e);
+            defs_from_values(&builtin)?
+        }
+    };
     Ok(mark_config_errors(providers))
 }
 
+/// 读 ~/.mb/providers.json（文件可缺省）。存在但读不出/JSON 语法坏 → Err。
+fn read_user_values() -> Option<anyhow::Result<Vec<serde_json::Value>>> {
+    let path = dirs::home_dir()
+        .map(|h| h.join(".mb").join("providers.json"))
+        .filter(|p| p.exists())?;
+    Some((|| -> anyhow::Result<Vec<serde_json::Value>> {
+        let raw = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&raw)?)
+    })())
+}
+
+fn defs_from_values(values: &[serde_json::Value]) -> anyhow::Result<Vec<ProviderDef>> {
+    values
+        .iter()
+        .cloned()
+        .map(|v| serde_json::from_value::<ProviderDef>(v).map_err(Into::into))
+        .collect()
+}
+
+/// 用户覆盖条目与内置定义的浅合并：同 id 时用户条目写到的 key 覆盖、没写的 key 继承内置，
+/// 新 id 追加。返回完整合并后的定义列表（Value 层，调用方再统一反序列化）。
+/// 任一用户条目不是对象或缺 string id → Err：调用方整体弃用该文件（与旧「单条目坏→全文件弃」一致）。
+fn merge_user_defs(builtin: &[serde_json::Value], user: Vec<serde_json::Value>) -> anyhow::Result<Vec<serde_json::Value>> {
+    let mut merged = builtin.to_vec();
+    for entry in user {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("user provider entry must be an object"))?;
+        let id = obj
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("user provider entry missing string 'id'"))?;
+        match merged
+            .iter_mut()
+            .find(|p| p.get("id").and_then(serde_json::Value::as_str) == Some(id))
+        {
+            Some(existing) => {
+                tracing::info!("user provider '{}' overrides builtin definition", id);
+                // 浅合并：用户写到的 key 覆盖，其余继承内置；数组/对象值整体替换，不做元素级合并
+                let mut combined = existing.as_object().cloned().unwrap_or_default();
+                combined.extend(obj.iter().map(|(k, v)| (k.clone(), v.clone())));
+                *existing = serde_json::Value::Object(combined);
+            }
+            None => {
+                tracing::info!("user provider '{}' added from ~/.mb/providers.json", id);
+                merged.push(entry);
+            }
+        }
+    }
+    Ok(merged)
+}
+
 /// 给每个 provider 打上声明层校验结果。必须在用户覆盖合并「之后」跑：
-/// 同 id 的用户条目是整体替换，只校验内建层会漏掉用户引入的重复。
+/// 同 id 的用户条目可能引入/替换 channels，只校验内建层会漏掉用户引入的重复。
 fn mark_config_errors(mut providers: Vec<ProviderDef>) -> Vec<ProviderDef> {
     for def in &mut providers {
         def.config_error = validate_channel_types(def);
@@ -350,5 +397,74 @@ mod tests {
         let usage = def.usage.unwrap();
         assert!(usage.result.is_none());
         assert!(usage.display.is_none());
+    }
+
+    // ---- ~/.mb/providers.json 同 id 浅合并 ----
+
+    fn builtin_values() -> Vec<serde_json::Value> {
+        serde_json::from_str(
+            r#"[
+              {"id":"volcark","name":"火山方舟","icon":"volcark.svg",
+               "channels":[{"type":"openai_chat","base_url":"https://ark.cn-beijing.volces.com/api/v3"}]},
+              {"id":"deepseek","name":"DeepSeek","channels":[],
+               "usage":{"adapter":"http","params":{"url":"https://api.deepseek.com/user/balance"}}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn override_inherits_missing_keys_and_overrides_present_ones() {
+        // 只写 id + usage：name/icon/channels 继承内置，usage 采用用户值
+        let user: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"id":"volcark","usage":{"adapter":"volcengine","params":{"access_key":"AKLT1"}}}]"#,
+        )
+        .unwrap();
+        let merged = merge_user_defs(&builtin_values(), user).unwrap();
+        let volc = merged.iter().find(|v| v["id"] == "volcark").unwrap();
+        assert_eq!(volc["name"], "火山方舟");
+        assert_eq!(volc["channels"].as_array().unwrap().len(), 1);
+        assert_eq!(volc["usage"]["adapter"], "volcengine");
+        assert_eq!(volc["usage"]["params"]["access_key"], "AKLT1");
+        // 合并结果须能反序列化成完整 ProviderDef（用户条目没写 name 也不缺字段）
+        let def: ProviderDef = serde_json::from_value(volc.clone()).unwrap();
+        assert_eq!(def.name, "火山方舟");
+        assert_eq!(def.usage.unwrap().adapter, "volcengine");
+    }
+
+    #[test]
+    fn override_replaces_channels_wholesale_and_removes_usage_via_null() {
+        // channels 出现即整体替换（不做元素级合并）；usage 显式 null 才移除
+        let user: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"id":"deepseek","channels":[{"type":"anthropic","base_url":"https://x.example.com"}],"usage":null}]"#,
+        )
+        .unwrap();
+        let merged = merge_user_defs(&builtin_values(), user).unwrap();
+        let ds = merged.iter().find(|v| v["id"] == "deepseek").unwrap();
+        assert_eq!(ds["channels"].as_array().unwrap().len(), 1);
+        assert_eq!(ds["channels"][0]["type"], "anthropic");
+        let def: ProviderDef = serde_json::from_value(ds.clone()).unwrap();
+        assert!(def.usage.is_none());
+    }
+
+    #[test]
+    fn new_id_entry_appended_intact() {
+        let user: Vec<serde_json::Value> =
+            serde_json::from_str(r#"[{"id":"trip","name":"Trip","channels":[]}]"#).unwrap();
+        let merged = merge_user_defs(&builtin_values(), user).unwrap();
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[2]["id"], "trip");
+    }
+
+    #[test]
+    fn entry_without_string_id_is_rejected() {
+        let user: Vec<serde_json::Value> = serde_json::from_str(r#"[{"name":"X"}]"#).unwrap();
+        assert!(merge_user_defs(&builtin_values(), user).is_err());
+    }
+
+    #[test]
+    fn non_object_entry_is_rejected() {
+        let user: Vec<serde_json::Value> = serde_json::from_str(r#"["oops"]"#).unwrap();
+        assert!(merge_user_defs(&builtin_values(), user).is_err());
     }
 }
