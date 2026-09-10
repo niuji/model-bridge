@@ -279,13 +279,7 @@ async fn proxy_to_provider(
     // SSE 行解析与 usage 提取会在压缩字节上静默失败（响应本身仍能原样透传给客户端，不报错）。
     // 不得加入 authorization/x-api-key：reqwest 的 .header() 是 append 而非 insert，
     // 会与上面写入的上游凭证并存为两个同名头。
-    for header_name in &[
-        "content-type",
-        "anthropic-version",
-        "anthropic-beta",
-        "user-agent",
-        "idempotency-key",
-    ] {
+    for header_name in super::request_log::FORWARDED_HEADERS {
         if let Some(value) = headers.get(*header_name) {
             if let Ok(v) = value.to_str() {
                 req = req.header(*header_name, v);
@@ -298,6 +292,7 @@ async fn proxy_to_provider(
     // 不能直接发上游。统一用 route.model_id 剥掉 [1m]/[1M] 变体后缀后的原始名转发：
     // claude 原生模型无后缀（剥除为 no-op），非 claude 模型的 model_id 不含补的 claude- 前缀，
     // 剥后即真实上游名。openai 链路按既有逻辑用完整 route.model_id。
+    let original_body = body;
     let body = if api_format == "anthropic" {
         // [1m]/[1M] 为末 4 个 ASCII 字节，ends_with 已保证按字节切安全
         let upstream_model = if route.model_id.to_lowercase().ends_with("[1m]") {
@@ -311,6 +306,31 @@ async fn proxy_to_provider(
     };
     let request_body = inject_stream_options(api_format, path, &body);
 
+    // 显式启用才保存完整请求（含提示词）；诊断写入失败不能阻断代理。
+    let request_log_enabled = *state.request_log_enabled.read().await;
+    let request_log_id = if request_log_enabled {
+        match super::request_log::write_request(
+            &state.request_log_dir,
+            serde_json::json!({
+                "method": method.as_str(), "path": path, "channel": channel,
+                "provider_id": route.provider_id, "route_model": route.model_id,
+                "api_key_id": api_key_id,
+            }),
+            &headers, original_body, &request_body,
+        ).await {
+            Ok(id) => {
+                tracing::info!(request_id = %id, "request diagnostic saved");
+                Some(id)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to write request diagnostic");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // 7. 发送请求（带超时）
     let start = std::time::Instant::now();
     match req
@@ -320,6 +340,9 @@ async fn proxy_to_provider(
         .await
     {
         Ok(resp) => {
+            if let Some(id) = &request_log_id {
+                tracing::info!(request_id = %id, status = resp.status().as_u16(), "request diagnostic upstream response");
+            }
             let is_stream = resp
                 .headers()
                 .get("content-type")
@@ -340,6 +363,9 @@ async fn proxy_to_provider(
             }
         }
         Err(e) => {
+            if let Some(id) = &request_log_id {
+                tracing::warn!(request_id = %id, "request diagnostic upstream send failed");
+            }
             let latency_ms = start.elapsed().as_millis() as i64;
             let err_msg = error_chain(&e);
             tracing::warn!(
@@ -1235,6 +1261,8 @@ mod response_regression_tests {
             client: reqwest::Client::new(),
             api_key_cache: Arc::new(RwLock::new(HashMap::new())),
             encryption_key: None,
+            request_log_enabled: tokio::sync::RwLock::new(false),
+            request_log_dir: std::env::temp_dir().join(format!("mb-request-log-{}", uuid::Uuid::new_v4())),
             proxy_base_url: String::new(),
         })
     }

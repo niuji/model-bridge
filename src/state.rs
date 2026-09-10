@@ -20,6 +20,9 @@ pub struct ProviderRoute {
 
 /// 应用程序全局状态
 pub struct AppState {
+    /// 临时诊断开关：仅在内存中生效，每次启动均关闭。
+    pub request_log_enabled: RwLock<bool>,
+    pub request_log_dir: std::path::PathBuf,
     /// OpenAI Chat 协议（/openai-chat/v1/）路由表：检索 key 全小写。
     /// 仅收录 channel_type=openai_chat 的模型，转发到该通道 base_url。
     pub openai_chat_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,

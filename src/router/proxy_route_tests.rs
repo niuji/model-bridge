@@ -36,6 +36,42 @@ const TEST_KEY: &str = "mb-test-key";
 /// 注入到 ProviderRoute.api_key 的上游伪凭证；assert 上游收到的鉴权值即此。
 const UPSTREAM_KEY: &str = "sk-upstream";
 
+#[tokio::test]
+async fn request_logging_settings_are_memory_only_and_control_capture() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&upstream).await;
+    let state = build_state(HashMap::from([("test".into(), route("test", &upstream.uri()))]), HashMap::new(), HashMap::new()).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let settings_url = format!("http://{}/api/admin/settings", listener.local_addr().unwrap());
+    let admin = crate::router::create_admin_router(state.clone());
+    tokio::spawn(async move { axum::serve(listener, admin).await.unwrap(); });
+    let proxy = spawn_proxy(state.clone()).await;
+    let client = http();
+    let settings: serde_json::Value = client.get(&settings_url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(settings["request_log_enabled"], false);
+    for enabled in [false, true, false] {
+        let response = client.put(&settings_url).json(&serde_json::json!({"request_log_enabled": enabled})).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(*state.request_log_enabled.read().await, enabled);
+        let response = client.post(format!("{proxy}/openai-chat/v1/chat/completions"))
+            .bearer_auth(TEST_KEY).json(&serde_json::json!({"model":"test","messages":[]})).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        if enabled {
+            let files: Vec<_> = std::fs::read_dir(&state.request_log_dir).unwrap().collect();
+            assert_eq!(files.len(), 1);
+            std::fs::remove_dir_all(&state.request_log_dir).unwrap();
+        } else {
+            assert!(!state.request_log_dir.exists());
+        }
+    }
+    state.db.close().await;
+    let response = client.put(&settings_url).json(&serde_json::json!({"request_log_enabled":true})).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(*state.request_log_enabled.read().await);
+}
+
 fn hex_sha256(s: &str) -> String {
     format!("{:x}", sha2::Sha256::digest(s.as_bytes()))
 }
@@ -71,6 +107,8 @@ async fn build_state_with_defs(defs: Vec<ProviderDef>) -> Arc<AppState> {
         client,
         api_key_cache: Arc::new(RwLock::new(cache)),
         encryption_key: None,
+        request_log_enabled: tokio::sync::RwLock::new(false),
+        request_log_dir: std::env::temp_dir().join(format!("mb-request-log-{}", uuid::Uuid::new_v4())),
         proxy_base_url: "http://test".into(),
     })
 }
@@ -98,6 +136,8 @@ async fn build_state(
         client,
         api_key_cache: Arc::new(RwLock::new(cache)),
         encryption_key: None,
+        request_log_enabled: tokio::sync::RwLock::new(false),
+        request_log_dir: std::env::temp_dir().join(format!("mb-request-log-{}", uuid::Uuid::new_v4())),
         proxy_base_url: "http://test".into(),
     })
 }

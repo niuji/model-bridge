@@ -40,6 +40,7 @@
                 @click="cycleMode()" v-html="collapsedIcon"
               />
               <div class="footer-row">
+                <DebugLogSwitch />
                 <span v-show="!collapsed" class="footer-version mono">v{{ appVersion }}</span>
                 <div class="status-indicator">
                   <span class="status-dot" />
@@ -73,6 +74,7 @@ import {
   zhCN, dateZhCN, NIcon, darkTheme,
 } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
+import DebugLogSwitch from './components/DebugLogSwitch.vue'
 import { mode, isDark, setMode, cycleMode } from './theme'
 import type { ThemeMode } from './theme'
 
@@ -353,7 +355,7 @@ body {
 .ts-cycle:hover { color: var(--mb-primary); background: var(--mb-tint-blue); }
 /* 折叠态：页脚元素全部居中，循环按钮与其下方的状态绿点垂直对齐成一条线 */
 .sidebar.n-layout-sider--collapsed .sidebar-footer { align-items: center; }
-.sidebar.n-layout-sider--collapsed .footer-row { width: 100%; justify-content: center; }
+.sidebar.n-layout-sider--collapsed .footer-row { width: 100%; flex-direction: column; justify-content: center; }
 .sidebar.n-layout-sider--collapsed .status-indicator { gap: 0; }
 
 .content { padding: 28px 32px; max-width: 1280px; position: relative; z-index: 1; }

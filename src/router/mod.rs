@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod models_list;
 pub mod proxy;
+mod request_log;
 
 #[cfg(test)]
 mod proxy_route_tests;
@@ -84,7 +85,7 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
                 .put(admin::update_api_key)
                 .delete(admin::delete_api_key),
         )
-        .route("/settings", axum::routing::get(admin::get_settings))
+        .route("/settings", axum::routing::get(admin::get_settings).put(admin::update_settings))
         .route("/logs", axum::routing::get(admin::stats_logs))
         .route("/stats/overview", axum::routing::get(admin::stats_overview))
         .route("/stats/models", axum::routing::get(admin::stats_models))

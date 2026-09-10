@@ -31,8 +31,24 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
     Json(serde_json::json!({
         "proxy_base_url": state.proxy_base_url,
         "version": env!("CARGO_PKG_VERSION"),
+        "request_log_enabled": *state.request_log_enabled.read().await,
+        "request_log_dir": state.request_log_dir,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSettingsRequest {
+    pub request_log_enabled: bool,
+}
+
+pub async fn update_settings(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateSettingsRequest>,
+) -> impl IntoResponse {
+    *state.request_log_enabled.write().await = req.request_log_enabled;
+    Json(serde_json::json!({"request_log_enabled": req.request_log_enabled}))
 }
 
 pub async fn get_provider(

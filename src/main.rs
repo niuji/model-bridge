@@ -91,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
     let proxy_base_url = format!("http://{}:{}", proxy_host, app_config.proxy.port);
 
     let state = Arc::new(AppState {
+        request_log_enabled: tokio::sync::RwLock::new(false),
+        request_log_dir: std::env::current_dir()?.join("request-logs"),
         openai_chat_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         openai_responses_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         anthropic_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),

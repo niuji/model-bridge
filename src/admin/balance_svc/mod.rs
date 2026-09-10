@@ -261,6 +261,8 @@ mod tests {
             client: client(),
             api_key_cache: Arc::new(RwLock::new(HashMap::new())),
             encryption_key: None,
+            request_log_enabled: tokio::sync::RwLock::new(false),
+            request_log_dir: std::env::temp_dir().join(format!("mb-request-log-{}", uuid::Uuid::new_v4())),
             proxy_base_url: "http://test".into(),
         })
     }
