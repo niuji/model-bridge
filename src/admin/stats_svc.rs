@@ -24,6 +24,9 @@ pub struct StatsOverview {
 
 #[derive(Serialize)]
 pub struct ModelStats {
+    pub provider_id: String,
+    /// 历史未记录通道时为空字符串。
+    pub channel: String,
     pub model_id: String,
     pub request_count: i64,
     pub total_tokens: i64,
@@ -192,9 +195,11 @@ pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
 }
 
 pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats>> {
-    let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64, i64)>(
+    let rows = sqlx::query_as::<_, (String, String, String, i64, i64, i64, i64, i64)>(
         r#"
         SELECT
+            provider_id,
+            COALESCE(channel, '') as channel,
             model_id,
             COUNT(*) as cnt,
             COALESCE(SUM(input_tokens), 0),
@@ -203,8 +208,8 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
             COALESCE(SUM(cache_write_tokens), 0)
         FROM usage_records
         WHERE created_at >= datetime('now', '-30 days')
-        GROUP BY model_id
-        ORDER BY cnt DESC
+        GROUP BY provider_id, COALESCE(channel, ''), model_id
+        ORDER BY cnt DESC, provider_id, channel, model_id
         "#,
     )
     .fetch_all(pool)
@@ -212,7 +217,7 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
 
     Ok(rows
         .into_iter()
-        .map(|(model_id, request_count, total_input_tokens, total_output_tokens, cache_read_tokens, cache_write_tokens)| {
+        .map(|(provider_id, channel, model_id, request_count, total_input_tokens, total_output_tokens, cache_read_tokens, cache_write_tokens)| {
             let total_tokens = total_input_tokens + total_output_tokens;
             let cache_hit_rate = if total_input_tokens > 0 {
                 (cache_read_tokens as f64 / total_input_tokens as f64 * 100.0 * 100.0).round() / 100.0
@@ -220,6 +225,8 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
                 0.0
             };
             ModelStats {
+                provider_id,
+                channel,
                 model_id,
                 request_count,
                 total_tokens,
@@ -316,4 +323,57 @@ pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlySta
         .into_iter()
         .map(|(hour, total_tokens)| HourlyStats { hour, total_tokens })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_stats_separate_provider_and_channel_in_same_window() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        for (provider, channel, input, output, cached, age) in [
+            ("p1", Some("openai_chat"), 100, 10, 50, "-2 days"),
+            ("p1", Some("openai_chat"), 20, 2, 10, "-1 days"),
+            ("p1", Some("openai_responses"), 40, 4, 0, "-2 days"),
+            ("p2", Some("openai_chat"), 60, 6, 0, "-2 days"),
+            ("p1", None, 8, 1, 0, "-2 days"),
+            ("p1", Some(""), 2, 1, 0, "-2 days"),
+            ("p1", Some("openai_chat"), 9999, 9999, 0, "-40 days"),
+        ] {
+            sqlx::query("INSERT INTO usage_records (provider_id, channel, model_id, input_tokens, output_tokens, cache_read_tokens, created_at) VALUES (?, ?, 'same-model', ?, ?, ?, datetime('now', ?))")
+                .bind(provider).bind(channel).bind(input).bind(output).bind(cached).bind(age)
+                .execute(&pool).await.unwrap();
+        }
+        let rows = serde_json::to_value(get_model_stats(&pool).await.unwrap()).unwrap();
+        let rows = rows.as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            4,
+            "same-named models must be split by provider and channel"
+        );
+        let chat = rows
+            .iter()
+            .find(|r| r["provider_id"] == "p1" && r["channel"] == "openai_chat")
+            .unwrap();
+        assert_eq!(chat["request_count"], 2);
+        assert_eq!(chat["total_input_tokens"], 120);
+        assert_eq!(chat["total_output_tokens"], 12);
+        assert_eq!(chat["total_tokens"], 132);
+        assert_eq!(chat["cache_read_tokens"], 60);
+        assert_eq!(chat["cache_hit_rate"], 50.0);
+        let legacy = rows.iter().find(|r| r["channel"] == "").unwrap();
+        assert_eq!(legacy["request_count"], 2);
+        assert_eq!(legacy["total_tokens"], 12);
+        let other = rows.iter().find(|r| r["provider_id"] == "p2").unwrap();
+        assert_eq!(other["total_tokens"], 66);
+    }
+
+    #[tokio::test]
+    async fn model_stats_empty_database_returns_empty_rows() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        assert!(get_model_stats(&pool).await.unwrap().is_empty());
+    }
 }

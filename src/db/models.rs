@@ -148,7 +148,7 @@ pub struct BalanceRow {
     /// 最近一次成功探测的 adapter JSON 载荷（文本）；失败时保留旧值
     pub data: Option<String>,
     pub error_msg: Option<String>,
-    /// 最近一次探测时间 RFC3339（含失败）
+    /// 数据更新时间 RFC3339；失败不刷新。无成功数据时为首次失败时间。
     pub fetched_at: String,
 }
 

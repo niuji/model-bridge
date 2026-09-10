@@ -398,10 +398,10 @@ async fn proxy_buffered_response(
 ) -> Response {
     let status = resp.status();
     let resp_headers = resp.headers().clone();
-    let latency_ms = start.elapsed().as_millis() as i64;
 
     match resp.bytes().await {
         Ok(body_bytes) => {
+            let latency_ms = start.elapsed().as_millis() as i64;
             // 异步写入 usage
             let usage = extract_usage_from_response(&body_bytes, api_format);
             let (record_status, error_msg) = if status.is_success() {
@@ -450,6 +450,7 @@ async fn proxy_buffered_response(
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(e) => {
+            let latency_ms = start.elapsed().as_millis() as i64;
             let err_msg = error_chain(&e);
             tracing::warn!(
                 "upstream body error: model={}, provider={}, url={}, latency_ms={}, err={}",
@@ -501,7 +502,7 @@ async fn proxy_streaming_response(
 
     // 构造流式 body
     let mut stream = resp.bytes_stream();
-    let (tx, rx) = tokio::sync::mpsc::channel::<std::result::Result<bytes::Bytes, axum::Error>>(64);
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::result::Result<bytes::Bytes, std::io::Error>>(64);
 
     let state_final = state.clone();
     let model_final = model.to_string();
@@ -525,24 +526,45 @@ async fn proxy_streaming_response(
     }
 
     tokio::spawn(async move {
-        let mut has_error = false;
+        let mut record_status = if upstream_ok { "success" } else { "error" };
+        let mut error_msg = if upstream_ok {
+            None
+        } else {
+            Some(format!("HTTP {}", upstream_status))
+        };
         // bytes_stream 的分块边界与 SSE 事件不对齐：一个事件可能横跨多个分块，
         // 一个分块也可能包含多个事件。因此按完整行（以 \n 切分）解析 data: 负载，
         // 不完整的行留在缓冲区等下一块，避免漏提或解析半截 JSON。
         let mut line_buf: Vec<u8> = Vec::new();
+        let mut completed = false;
         // usage 各字段（input/output/cache_read/cache_write）在 SSE 事件中是累计终值而非
         // 增量，取「最后一个非零值」而非求和：message_delta 携带最终值、覆盖 message_start
         // 的初始/stub 值；标准 Anthropic 的 message_delta 无 input/cache 字段时则保留
         // message_start 的值。求和会让 glm-5.2 这类「start 与 delta 都带非平凡
         // input_tokens」的模型把 input 算两遍。
         let mut last_usage = (0i64, 0i64, 0i64, 0i64); // (input, output, cache_read, cache_write)
-        while let Some(chunk) = stream.next().await {
+        loop {
+            // 即使上游暂时不发数据，也要及时响应客户端取消，释放上游连接。
+            let chunk = tokio::select! {
+                biased;
+                _ = tx.closed() => {
+                    if upstream_ok && !completed {
+                        record_status = "cancelled";
+                        error_msg = Some("client disconnected".to_string());
+                    }
+                    break;
+                }
+                chunk = stream.next() => chunk,
+            };
+            let Some(chunk) = chunk else { break };
             match chunk {
                 Ok(bytes) => {
+                    let mut chunk_completed = false;
                     line_buf.extend_from_slice(&bytes);
                     while let Some(nl) = line_buf.iter().position(|&b| b == b'\n') {
                         // drain(..=nl) 移除该行内容连同结尾的 \n
                         let drained: Vec<u8> = line_buf.drain(..=nl).collect();
+                        chunk_completed |= is_successful_stream_end(&drained, &api_format_final);
                         if let Some(payload) = parse_data_line(&drained) {
                             let u = extract_usage_from_sse_event(&payload, &api_format_final);
                             // 逐字段覆盖：仅当新值非零时更新（0 表示该事件未提供此字段）
@@ -553,62 +575,38 @@ async fn proxy_streaming_response(
                         }
                     }
                     if tx.send(Ok(bytes)).await.is_err() {
-                        break; // client disconnected
+                        if upstream_ok && !completed {
+                            record_status = "cancelled";
+                            error_msg = Some("client disconnected".to_string());
+                        }
+                        break;
                     }
+                    completed |= chunk_completed;
                 }
                 Err(e) => {
-                    has_error = true;
-                    let latency_ms = start_clone.elapsed().as_millis() as i64;
+                    record_status = "error";
                     let err_msg = error_chain(&e);
                     tracing::warn!(
-                        "upstream stream error: model={}, provider={}, url={}, latency_ms={}, err={}",
-                        model_final, provider_final, target_url_final, latency_ms, err_msg
+                        "upstream stream error: model={}, provider={}, url={}, err={}",
+                        model_final, provider_final, target_url_final, err_msg
                     );
-                    tokio::spawn(write_usage(
-                        state_final.clone(),
-                        model_final.clone(),
-                        provider_final.clone(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        latency_ms,
-                        "error",
-                        Some(err_msg),
-                        api_key_id_final.clone(),
-                        client_final.clone(),
-                        api_format_final.clone(),
-                        channel_final.clone(),
-                    ));
+                    error_msg = Some(err_msg);
+                    // 将断流传给客户端，不能把传输失败伪装成正常 EOF。
+                    let _ = tx.send(Err(std::io::Error::other(e))).await;
                     break;
                 }
             }
         }
-        // 流结束时写入累积的 usage
-        if !has_error {
-            let latency_ms = start_clone.elapsed().as_millis() as i64;
-            let (record_status, error_msg) = if upstream_ok {
-                ("success", None)
-            } else {
-                ("error", Some(format!("HTTP {}", upstream_status)))
-            };
-            tokio::spawn(write_usage(
-                state_final,
-                model_final,
-                provider_final,
-                last_usage.0,
-                last_usage.1,
-                last_usage.2,
-                last_usage.3,
-                latency_ms,
-                record_status,
-                error_msg,
-                api_key_id_final,
-                client_final,
-                api_format_final,
-                channel_final,
-            ));
-        }
+        // 无论完成、取消还是失败，都保留已经提取的用量；未知部分不估算。
+        drop(stream);
+        drop(tx);
+        let latency_ms = start_clone.elapsed().as_millis() as i64;
+        write_usage(
+            state_final, model_final, provider_final,
+            last_usage.0, last_usage.1, last_usage.2, last_usage.3,
+            latency_ms, record_status, error_msg, api_key_id_final, client_final,
+            api_format_final, channel_final,
+        ).await;
     });
 
     let stream_body = Body::from_stream(
@@ -625,6 +623,29 @@ async fn proxy_streaming_response(
     response
         .body(stream_body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+// SDK 可在收到协议结束事件后主动关闭 HTTP 流；此时应保持成功状态。
+fn is_successful_stream_end(line: &[u8], api_format: &str) -> bool {
+    let Ok(line) = std::str::from_utf8(line) else {
+        return false;
+    };
+    let Some(data) = line.trim_end_matches(['\r', '\n']).strip_prefix("data:") else {
+        return false;
+    };
+    let data = data.strip_prefix(' ').unwrap_or(data);
+    if api_format != "anthropic" && data == "[DONE]" {
+        return true;
+    }
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    let expected = if api_format == "anthropic" {
+        "message_stop"
+    } else {
+        "response.completed"
+    };
+    event.get("type").and_then(|v| v.as_str()) == Some(expected)
 }
 
 /// 从一条完整 SSE 行（可能含尾部 \r/\n）提取 data 负载。
@@ -1193,5 +1214,238 @@ mod tests {
     fn is_safe_base_url_rejects_garbage() {
         assert!(!crate::admin::provider_svc::is_safe_base_url("not a url"));
         assert!(!crate::admin::provider_svc::is_safe_base_url(""));
+    }
+}
+#[cfg(test)]
+mod response_regression_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::{oneshot, RwLock};
+
+    async fn state() -> Arc<AppState> {
+        let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&db).await.unwrap();
+        Arc::new(AppState {
+            openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
+            openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
+            anthropic_routes: Arc::new(RwLock::new(HashMap::new())),
+            provider_defs: vec![],
+            db,
+            client: reqwest::Client::new(),
+            api_key_cache: Arc::new(RwLock::new(HashMap::new())),
+            encryption_key: None,
+            proxy_base_url: String::new(),
+        })
+    }
+
+    // Headers and the first chunk arrive immediately; the test controls when the
+    // remaining body arrives (or the upstream connection breaks).
+    async fn upstream(
+        content_type: &str,
+        first: &str,
+        tail: &str,
+    ) -> (reqwest::Response, oneshot::Sender<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\n\r\n"
+        );
+        let first = first.to_string();
+        let tail = tail.to_string();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+            }
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(first.as_bytes()).await.unwrap();
+            let _ = rx.await;
+            let _ = socket.write_all(tail.as_bytes()).await;
+        });
+        (reqwest::get(format!("http://{addr}")).await.unwrap(), tx)
+    }
+
+    async fn usage(state: &AppState) -> (String, i64, i64, i64) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(row) = sqlx::query_as::<_, (String, i64, i64, i64)>(
+                    "SELECT status, input_tokens, output_tokens, latency_ms FROM usage_records",
+                )
+                .fetch_optional(&state.db)
+                .await
+                .unwrap()
+                {
+                    return row;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("usage must be written promptly")
+    }
+
+    fn usage_chunk() -> String {
+        let data = "data: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n";
+        format!("{:x}\r\n{}\r\n", data.len(), data)
+    }
+
+    #[tokio::test]
+    async fn cancelled_stream_preserves_usage_without_waiting_for_upstream() {
+        let state = state().await;
+        let (upstream, _release) = upstream("text/event-stream", &usage_chunk(), "0\r\n\r\n").await;
+        let response = proxy_streaming_response(
+            state.clone(),
+            upstream,
+            "m",
+            "p",
+            Instant::now(),
+            None,
+            None,
+            "openai",
+            "openai_chat",
+            "test",
+        )
+        .await;
+        let mut body = response.into_body().into_data_stream();
+        body.next().await.unwrap().unwrap();
+        drop(body);
+        let (status, input, output, _) = usage(&state).await;
+        assert_eq!((status.as_str(), input, output), ("cancelled", 12, 3));
+    }
+
+    #[tokio::test]
+    async fn broken_stream_preserves_usage_and_propagates_body_error() {
+        let state = state().await;
+        let (upstream, release) = upstream("text/event-stream", &usage_chunk(), "").await;
+        let response = proxy_streaming_response(
+            state.clone(),
+            upstream,
+            "m",
+            "p",
+            Instant::now(),
+            None,
+            None,
+            "openai",
+            "openai_chat",
+            "test",
+        )
+        .await;
+        let mut body = response.into_body().into_data_stream();
+        body.next().await.unwrap().unwrap();
+        release.send(()).unwrap();
+        let next = body.next().await;
+        let (status, input, output, _) = usage(&state).await;
+        assert_eq!((status.as_str(), input, output), ("error", 12, 3));
+        assert!(
+            matches!(next, Some(Err(_))),
+            "upstream failure must not become a clean EOF"
+        );
+    }
+
+    #[tokio::test]
+    async fn undelivered_terminal_chunk_does_not_turn_cancellation_into_success() {
+        let state = state().await;
+        let (terminal_tx, terminal_rx) = oneshot::channel();
+        let mut terminal_tx = Some(terminal_tx);
+        // Fill the forwarding queue before yielding a terminal event. No downstream
+        // reads occur, so sending that final chunk must wait for capacity.
+        let chunks = futures::stream::iter((0..65).map(move |i| {
+            let data = if i == 64 {
+                terminal_tx.take().unwrap().send(()).unwrap();
+                "data: [DONE]\n\n"
+            } else {
+                "data: {}\n\n"
+            };
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(data.as_bytes()))
+        }));
+        let upstream = reqwest::Response::from(
+            axum::http::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(reqwest::Body::wrap_stream(chunks))
+                .unwrap(),
+        );
+        let response = proxy_streaming_response(
+            state.clone(),
+            upstream,
+            "m",
+            "p",
+            Instant::now(),
+            None,
+            None,
+            "openai",
+            "openai_chat",
+            "test",
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(2), terminal_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(response);
+        assert_eq!(usage(&state).await.0, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn terminal_event_followed_by_client_close_is_success() {
+        for (format, event) in [
+            ("openai", "[DONE]"),
+            ("openai", r#"{"type":"response.completed"}"#),
+            ("anthropic", r#"{"type":"message_stop"}"#),
+        ] {
+            let state = state().await;
+            let data = format!("data: {event}\n\n");
+            let chunk = format!("{:x}\r\n{}\r\n", data.len(), data);
+            let (upstream, _release) = upstream("text/event-stream", &chunk, "0\r\n\r\n").await;
+            let response = proxy_streaming_response(
+                state.clone(),
+                upstream,
+                "m",
+                "p",
+                Instant::now(),
+                None,
+                None,
+                format,
+                "test",
+                "test",
+            )
+            .await;
+            let mut body = response.into_body().into_data_stream();
+            body.next().await.unwrap().unwrap();
+            drop(body);
+            assert_eq!(usage(&state).await.0, "success", "terminal event {event}");
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_latency_includes_body_read() {
+        let state = state().await;
+        let start = Instant::now();
+        let (upstream, release) =
+            upstream("application/json", "1\r\n{\r\n", "1\r\n}\r\n0\r\n\r\n").await;
+        let task_state = state.clone();
+        let response = tokio::spawn(async move {
+            proxy_buffered_response(
+                task_state,
+                upstream,
+                "m",
+                "p",
+                start,
+                None,
+                None,
+                "openai",
+                "openai_chat",
+                "test",
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        release.send(()).unwrap();
+        assert_eq!(response.await.unwrap().status(), StatusCode::OK);
+        let (status, _, _, latency) = usage(&state).await;
+        assert_eq!(status, "success");
+        assert!(latency >= 140, "body read time missing: {latency}ms");
     }
 }

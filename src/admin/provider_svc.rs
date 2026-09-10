@@ -48,8 +48,8 @@ pub async fn list_providers(
     }
 
     for def in defs {
-        let config = get_provider_config(pool, &def.id).await;
-        let channel_configs = get_channel_configs(pool, &def.id).await;
+        let config = get_provider_config(pool, &def.id).await?;
+        let channel_configs = get_channel_configs(pool, &def.id).await?;
 
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
         let mut channels = merge_channels(&def.channels, &channel_configs);
@@ -101,8 +101,8 @@ pub async fn get_provider(
         return Ok(None);
     };
 
-    let config = get_provider_config(pool, id).await;
-    let channel_configs = get_channel_configs(pool, id).await;
+    let config = get_provider_config(pool, id).await?;
+    let channel_configs = get_channel_configs(pool, id).await?;
 
     let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
     let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
@@ -157,7 +157,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             tracing::debug!("provider '{}' skipped from routing: {}", def.id, err);
             continue;
         }
-        let config = get_provider_config(&state.db, &def.id).await;
+        let config = get_provider_config(&state.db, &def.id).await?;
         let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
         if !is_enabled {
             continue;
@@ -166,7 +166,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         if api_key.is_empty() {
             continue;
         }
-        let channel_configs = get_channel_configs(&state.db, &def.id).await;
+        let channel_configs = get_channel_configs(&state.db, &def.id).await?;
         let channels = merge_channels(&def.channels, &channel_configs);
         let models = sqlx::query_as::<_, ProviderModel>(
             "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
@@ -408,6 +408,8 @@ pub async fn update_provider(
     channels: &[(String, bool)], // (channel_type, is_enabled)
     models: &[(String, String, String)], // (channel_type, model_id, model_name)
 ) -> anyhow::Result<()> {
+    // 配置、通道与模型必须同时提交，失败时保留整份旧配置。
+    let mut tx = pool.begin().await?;
     // upsert provider_config
     sqlx::query(
         "INSERT INTO provider_config (provider_id, api_key, is_enabled) VALUES (?, ?, ?)
@@ -416,7 +418,7 @@ pub async fn update_provider(
     .bind(id)
     .bind(api_key)
     .bind(is_enabled as i32)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // upsert channel_configs：base_url 以配置文件为准、不持久化，仅存 channel 启用状态
@@ -428,13 +430,11 @@ pub async fn update_provider(
         .bind(id)
         .bind(channel_type)
         .bind(*enabled as i32)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
-    // 替换模型列表（按通道）。DELETE+INSERT 包在事务里：任一 INSERT 失败整体回滚，
-    // 避免 DELETE 已提交、列表只写回一半导致模型丢失。
-    let mut tx = pool.begin().await?;
+    // 替换模型列表（按通道），任一 INSERT 失败会回滚整个保存操作。
     sqlx::query("DELETE FROM provider_models WHERE provider_id = ?")
         .bind(id)
         .execute(&mut *tx)
@@ -597,28 +597,28 @@ pub async fn backfill_model_channels(pool: &SqlitePool, defs: &[ProviderDef]) ->
 
 // ===== 内部辅助函数 =====
 
-pub(crate) async fn get_provider_config(pool: &SqlitePool, id: &str) -> Option<ProviderConfigRow> {
+pub(crate) async fn get_provider_config(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ProviderConfigRow>, sqlx::Error> {
     sqlx::query_as::<_, ProviderConfigRow>(
         "SELECT provider_id, api_key, is_enabled FROM provider_config WHERE provider_id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()
 }
 
 async fn get_channel_configs(
     pool: &SqlitePool,
     provider_id: &str,
-) -> Vec<ProviderChannelConfigRow> {
+) -> Result<Vec<ProviderChannelConfigRow>, sqlx::Error> {
     sqlx::query_as::<_, ProviderChannelConfigRow>(
         "SELECT provider_id, channel_type, is_enabled FROM provider_channel_config WHERE provider_id = ?",
     )
     .bind(provider_id)
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
 }
 
 /// 合并配置定义与 DB 覆盖：base_url / models_endpoint 一律以配置文件定义为准
@@ -1072,7 +1072,7 @@ mod update_provider_tests {
     }
 
     #[tokio::test]
-    async fn failed_model_replace_rolls_back_delete() {
+    async fn failed_model_replace_rolls_back_entire_provider() {
         let pool = mempool().await;
         // 初始：p 已有模型 m1
         update_provider(
@@ -1080,7 +1080,7 @@ mod update_provider_tests {
             "p",
             "k",
             true,
-            &[],
+            &[("anthropic".into(), true)],
             &[("anthropic".into(), "m1".into(), "M1".into())],
         )
         .await
@@ -1091,7 +1091,15 @@ mod update_provider_tests {
             ("anthropic".to_string(), "m2".to_string(), "M2".to_string()),
             ("anthropic".to_string(), "m2".to_string(), "dup".to_string()),
         ];
-        let res = update_provider(&pool, "p", "k", true, &[], &dup).await;
+        let res = update_provider(
+            &pool,
+            "p",
+            "new-key",
+            false,
+            &[("anthropic".into(), false)],
+            &dup,
+        )
+        .await;
         assert!(res.is_err());
 
         // 关键断言：DELETE 必须随事务回滚，原有 m1 不能丢
@@ -1101,5 +1109,16 @@ mod update_provider_tests {
                 .await
                 .unwrap();
         assert_eq!(remaining, vec!["m1".to_string()]);
+        let config: (String, bool) = sqlx::query_as(
+            "SELECT api_key, is_enabled FROM provider_config WHERE provider_id = 'p'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(config, ("k".into(), true));
+        let enabled: bool = sqlx::query_scalar(
+            "SELECT is_enabled FROM provider_channel_config WHERE provider_id = 'p' AND channel_type = 'anthropic'",
+        ).fetch_one(&pool).await.unwrap();
+        assert!(enabled);
     }
 }

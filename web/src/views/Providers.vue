@@ -52,7 +52,7 @@
                     </span>
                   </div>
                 </div>
-                <n-switch :value="p.is_enabled" size="small" :disabled="!!p.config_error" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
+                <n-switch :value="p.is_enabled" size="small" :disabled="!!p.config_error || togglingProviders.has(p.id)" :loading="togglingProviders.has(p.id)" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
               </div>
 
               <div class="card-divider" />
@@ -326,6 +326,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { adminRequest, errorMessage } from '../api'
 import { NButton, NCheckbox, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NSwitch, useMessage } from 'naive-ui'
 
 const message = useMessage()
@@ -352,6 +353,7 @@ const loading = ref(false)
 const showConfig = ref(false)
 const editProvider = ref<ProviderDetail | null>(null)
 const saving = ref(false)
+const togglingProviders = ref(new Set<string>())
 const fetching = ref(false)
 const showSync = ref(false)
 const showCloseConfirm = ref(false)
@@ -485,7 +487,9 @@ function stampTitle(p: ProviderSummary): string {
   const abs = Number.isNaN(at) ? p.balance.fetched_at : new Date(at).toLocaleString('zh-CN', { hour12: false })
   if (p.balance.status === 'error') {
     const why = p.balance.error_msg || '上游未返回结果'
-    return `${abs} 查询失败：${why}\n数值来自上一次成功查询`
+    return p.balance.data
+      ? `更新于 ${abs}\n最近查询失败：${why}`
+      : `暂无有效余额\n查询失败：${why}`
   }
   const detail = bigmodelDetail(p) || volcengineDetail(p)
   return `更新于 ${abs}${detail}`
@@ -559,9 +563,10 @@ function snapshotForm(state: FormState): string {
 async function loadProviders() {
   loading.value = true
   try {
-    const res = await fetch(`${API_BASE}/providers`)
-    const list: ProviderSummary[] = await res.json()
+    const list: ProviderSummary[] = await (await adminRequest('/providers')).json()
     providers.value = list.sort((a, b) => a.name.localeCompare(b.name))
+  } catch (error) {
+    message.error(errorMessage(error, '加载供应商失败'))
   } finally {
     loading.value = false
   }
@@ -752,7 +757,7 @@ function confirmCloseConfig() {
 }
 
 async function handleSave() {
-  if (!editProvider.value) return
+  if (!editProvider.value || saving.value) return
   saving.value = true
   try {
     const body = {
@@ -761,40 +766,36 @@ async function handleSave() {
       channels: form.value.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
       models: flattenModels(form.value)
     }
-    const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+    await adminRequest(`/providers/${editProvider.value.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     })
-    if (res.ok) {
-      message.success('保存成功')
-      initialSnapshot.value = snapshotForm(form.value)
-      closeConfig()
-      loadProviders()
-    } else {
-      const err = await res.json()
-      message.error(err.error || '保存失败')
-    }
-  } finally {
-    saving.value = false
-  }
+    message.success('保存成功')
+    initialSnapshot.value = snapshotForm(form.value)
+    closeConfig()
+    await loadProviders()
+  } catch (error) { message.error(errorMessage(error, '保存失败')) }
+  finally { saving.value = false }
 }
 
 async function quickToggle(p: ProviderSummary, enabled: boolean) {
-  const res = await fetch(`${API_BASE}/providers/${p.id}`)
-  const detail = await res.json()
-  const body = {
-    api_key: detail.api_key || '',
-    is_enabled: enabled,
-    channels: detail.channels.map((c: ChannelInfo) => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
-    models: (detail.models || []).map((m: any) => ({ channel_type: m.channel_type, model_id: m.model_id, model_name: m.model_name || m.model_id }))
-  }
-  await fetch(`${API_BASE}/providers/${p.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  loadProviders()
+  if (togglingProviders.value.has(p.id)) return
+  togglingProviders.value.add(p.id)
+  try {
+    const detail = await (await adminRequest(`/providers/${p.id}`)).json()
+    const body = {
+      api_key: detail.api_key || '',
+      is_enabled: enabled,
+      channels: detail.channels.map((c: ChannelInfo) => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
+      models: (detail.models || []).map((m: any) => ({ channel_type: m.channel_type, model_id: m.model_id, model_name: m.model_name || m.model_id }))
+    }
+    await adminRequest(`/providers/${p.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    await loadProviders()
+  } catch (error) { message.error(errorMessage(error, '更新失败')) }
+  finally { togglingProviders.value.delete(p.id) }
 }
 
 onMounted(() => {

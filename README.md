@@ -152,6 +152,8 @@ Served on the loopback admin server at `/api/admin/`:
 | GET | `/logs` | request logs (paginated) |
 | GET | `/stats/overview` · `/stats/models` · `/stats/daily` · `/stats/hourly` | usage statistics |
 
+`/stats/models` returns separate rows for each provider, channel, and model over the last 30 days. The dashboard supports provider/channel filtering; historical records without a channel are shown separately.
+
 ## Build from source
 
 Requires Rust (stable) and Node 20+.

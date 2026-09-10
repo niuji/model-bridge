@@ -105,6 +105,10 @@ pub async fn update_provider(
         Ok(()) => {
             if let Err(e) = provider_svc::refresh_routes(&state).await {
                 tracing::error!("Failed to refresh routes: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "配置已保存，但路由刷新失败；请重试保存以应用配置"})),
+                ).into_response();
             }
             // 返回更新后的详情
             match provider_svc::get_provider(&state.db, &state.provider_defs, &id).await {
@@ -230,7 +234,15 @@ pub async fn refresh_balance(
         )
             .into_response();
     }
-    let config = provider_svc::get_provider_config(&state.db, &id).await;
+    let config = match provider_svc::get_provider_config(&state.db, &id).await {
+        Ok(config) => config,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
     let is_enabled = config.as_ref().map(|c| c.is_enabled).unwrap_or(false);
     if !is_enabled {
         return (

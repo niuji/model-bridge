@@ -54,7 +54,7 @@
 
     <n-modal
       v-model:show="showError"
-      title="错误详情"
+      :title="errorRow?.status === 'cancelled' ? '取消详情' : '错误详情'"
       preset="card"
       style="width: 560px"
       class="error-modal"
@@ -62,9 +62,9 @@
     >
       <div v-if="errorRow" class="error-detail">
         <div class="error-meta">
-          <span class="status-badge error">
+          <span :class="['status-badge', errorRow.status === 'cancelled' ? 'cancelled' : 'error']">
             <span class="status-dot-sm" />
-            <span class="mono status-text">ERR</span>
+            <span class="mono status-text">{{ errorRow.status === 'cancelled' ? '已取消' : 'ERR' }}</span>
           </span>
           <span class="error-time mono">{{ formatLocalTime(errorRow.created_at) }}</span>
           <span class="error-model mono">{{ errorRow.model_id }}</span>
@@ -277,9 +277,10 @@ const columns = [
   // 不再把错误详情直接渲染在行内——长错误信息会撑大整行高度）。
   { title: '结果', key: 'result', width: 130, titleAlign: 'center' as const, render: (row: any) => {
       const ok = row.status === 'success'
-      const badge = h('span', { class: `status-badge ${ok ? 'success' : 'error'}` }, [
+      const cancelled = row.status === 'cancelled'
+      const badge = h('span', { class: `status-badge ${ok ? 'success' : cancelled ? 'cancelled' : 'error'}` }, [
         h('span', { class: 'status-dot-sm' }),
-        h('span', { class: 'mono status-text' }, ok ? 'OK' : 'ERR'),
+        h('span', { class: 'mono status-text' }, ok ? 'OK' : cancelled ? '已取消' : 'ERR'),
       ])
       if (ok) return h('div', { class: 'result-cell' }, badge)
       return h('div', { class: 'result-cell' }, [
@@ -376,6 +377,9 @@ onMounted(init)
 @keyframes sk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 @media (max-width: 600px) { .page-header { flex-direction: column; align-items: flex-start; gap: 14px; } .count-block { align-items: flex-start; } }
+.logs :deep(.status-badge.cancelled), .error-modal .status-badge.cancelled { background: var(--mb-surface-inset); border: 1px solid var(--mb-border); }
+.logs :deep(.status-badge.cancelled .status-dot-sm), .error-modal .status-badge.cancelled .status-dot-sm { background: var(--mb-text-3); }
+.logs :deep(.status-badge.cancelled .status-text), .error-modal .status-badge.cancelled .status-text { color: var(--mb-text-3); }
 </style>
 
 <!-- 单元格内容由 column.render 产生——这些 VNode 不携带本组件的 scoped id，
@@ -467,4 +471,7 @@ onMounted(init)
 .logs :deep(.status-text) { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; }
 .logs :deep(.status-badge.success .status-text) { color: var(--mb-success-d); }
 .logs :deep(.status-badge.error .status-text) { color: var(--mb-error); }
+.logs :deep(.status-badge.cancelled), .error-modal .status-badge.cancelled { background: var(--mb-surface-inset); border: 1px solid var(--mb-border); }
+.logs :deep(.status-badge.cancelled .status-dot-sm), .error-modal .status-badge.cancelled .status-dot-sm { background: var(--mb-text-3); }
+.logs :deep(.status-badge.cancelled .status-text), .error-modal .status-badge.cancelled .status-text { color: var(--mb-text-3); }
 </style>

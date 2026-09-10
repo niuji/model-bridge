@@ -1530,3 +1530,106 @@ async fn openai_responses_forwards_whitelisted_headers_and_query() {
     assert!(h.get("accept-encoding").is_none(), "accept-encoding must not be forwarded");
     assert!(h.get("x-custom-thing").is_none());
 }
+
+async fn provider_refresh_test_state() -> Arc<AppState> {
+    let defs = ["p", "other"]
+        .into_iter()
+        .map(|id| ProviderDef {
+            id: id.into(),
+            name: id.into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "openai_chat".into(),
+                base_url: "https://example.com/v1".into(),
+                models_endpoint: None,
+            }],
+            usage: None,
+            config_error: None,
+        })
+        .collect();
+    let state = build_state_with_defs(defs).await;
+    for id in ["p", "other"] {
+        update_provider(
+            &state.db,
+            id,
+            "old-key",
+            true,
+            &[("openai_chat".into(), true)],
+            &[("openai_chat".into(), id.into(), id.into())],
+        )
+        .await
+        .unwrap();
+    }
+    refresh_routes(&state).await.unwrap();
+    state
+}
+
+#[tokio::test]
+async fn refresh_read_failure_preserves_existing_routes() {
+    for table in ["provider_config", "provider_channel_config"] {
+        let state = provider_refresh_test_state().await;
+        sqlx::query(&format!("DROP TABLE {table}"))
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert!(
+            refresh_routes(&state).await.is_err(),
+            "read failure in {table} must propagate"
+        );
+        assert_eq!(state.openai_chat_routes.read().await.len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn provider_save_reports_route_refresh_failure() {
+    use crate::router::admin::{UpdateProviderChannel, UpdateProviderModel, UpdateProviderRequest};
+    use axum::{
+        extract::{Path, State},
+        response::IntoResponse,
+        Json,
+    };
+    let state = provider_refresh_test_state().await;
+    // Another provider's corrupt row makes route rebuilding fail after this save commits.
+    sqlx::query("UPDATE provider_models SET model_name = x'ff' WHERE provider_id = 'other'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let response = crate::router::admin::update_provider(
+        State(state.clone()),
+        Path("p".into()),
+        Json(UpdateProviderRequest {
+            api_key: "new-key".into(),
+            is_enabled: true,
+            channels: vec![UpdateProviderChannel {
+                channel_type: "openai_chat".into(),
+                is_enabled: true,
+            }],
+            models: vec![UpdateProviderModel {
+                channel_type: "openai_chat".into(),
+                model_id: "p".into(),
+                model_name: "p".into(),
+            }],
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), 500);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("配置已保存，但路由刷新失败"));
+    let key: String =
+        sqlx::query_scalar("SELECT api_key FROM provider_config WHERE provider_id = 'p'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(key, "new-key");
+    assert_eq!(
+        state.openai_chat_routes.read().await["p"].api_key,
+        "old-key"
+    );
+}

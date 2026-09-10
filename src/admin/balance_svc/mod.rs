@@ -93,7 +93,7 @@ pub async fn upsert_balance_ok(
     Ok(())
 }
 
-/// 失败落库：只覆写 status/error_msg/fetched_at，**不动 data**（保留上次成功值）。
+/// 失败只更新错误状态，保留上次成功的数据和更新时间。首次失败仍插入空快照供 UI 显示错误。
 pub async fn upsert_balance_error(
     pool: &SqlitePool,
     provider_id: &str,
@@ -106,7 +106,7 @@ pub async fn upsert_balance_error(
          VALUES (?, ?, 'error', NULL, ?, ?)
          ON CONFLICT(provider_id) DO UPDATE SET
            adapter = excluded.adapter, status = 'error',
-           error_msg = excluded.error_msg, fetched_at = excluded.fetched_at",
+           error_msg = excluded.error_msg",
     )
     .bind(provider_id)
     .bind(adapter)
@@ -294,13 +294,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn error_probe_preserves_previous_data() {
+    async fn error_probe_preserves_previous_data_and_timestamp() {
         let state = build_state(vec![]).await;
         upsert_balance_ok(&state.db, "p", "deepseek", &json!({"balance": 1.0})).await.unwrap();
+        sqlx::query("UPDATE provider_balance SET fetched_at = '2026-01-01T00:00:00Z' WHERE provider_id = 'p'")
+            .execute(&state.db).await.unwrap();
         upsert_balance_error(&state.db, "p", "deepseek", "HTTP 500").await.unwrap();
         let row = read_balance_row(&state.db, "p").await.unwrap().unwrap();
         assert_eq!(row.status, "error");
         assert_eq!(row.error_msg.as_deref(), Some("HTTP 500"));
+        assert_eq!(row.fetched_at, "2026-01-01T00:00:00Z");
         // 关键语义：失败保留上次成功的 data
         assert_eq!(row.data.as_deref(), Some(r#"{"balance":1.0}"#));
     }
