@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "model-bridge"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "aes-gcm",
  "anyhow",
