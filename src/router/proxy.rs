@@ -375,7 +375,7 @@ async fn proxy_to_provider(
                 "upstream send error: model={}, provider={}, url={}, latency_ms={}, err={}",
                 route.model_id, route.provider_id, target_url, latency_ms, err_msg
             );
-            tokio::spawn(write_usage(
+            state.usage_tasks.spawn(write_usage(
                 state.clone(),
                 route.model_id.clone(),
                 route.provider_id,
@@ -449,7 +449,7 @@ async fn proxy_buffered_response(
                     Some(format!("HTTP {}: {}", status.as_u16(), body_preview)),
                 )
             };
-            tokio::spawn(write_usage(
+            state.usage_tasks.spawn(write_usage(
                 state.clone(),
                 model.to_string(),
                 provider_id.to_string(),
@@ -485,7 +485,7 @@ async fn proxy_buffered_response(
                 "upstream body error: model={}, provider={}, url={}, latency_ms={}, err={}",
                 model, provider_id, target_url, latency_ms, err_msg
             );
-            tokio::spawn(write_usage(
+            state.usage_tasks.spawn(write_usage(
                 state.clone(),
                 model.to_string(),
                 provider_id.to_string(),
@@ -554,7 +554,7 @@ async fn proxy_streaming_response(
         );
     }
 
-    tokio::spawn(async move {
+    state.usage_tasks.spawn(async move {
         let mut record_status = if upstream_ok { "success" } else { "error" };
         let mut error_msg = if upstream_ok {
             None
@@ -1256,6 +1256,8 @@ mod response_regression_tests {
         let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::schema::run_migrations(&db).await.unwrap();
         Arc::new(AppState {
+            updates: std::sync::Arc::new(crate::update::Manager::default()),
+            usage_tasks: tokio_util::task::TaskTracker::new(),
             openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
             openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
             anthropic_routes: Arc::new(RwLock::new(HashMap::new())),

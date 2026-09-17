@@ -5,6 +5,7 @@ mod db;
 mod middleware;
 mod router;
 mod state;
+mod update;
 
 use clap::Parser;
 use std::sync::Arc;
@@ -18,7 +19,21 @@ async fn main() -> anyhow::Result<()> {
 
     // 解析命令行参数
     let cli = config::Cli::parse();
+    match cli.command {
+        Some(config::Command::RegisterUpdate) => return update::register(&cli),
+        Some(config::Command::CheckUpdateInstall) => return update::check_install(),
+        Some(config::Command::UpdateWorker) => {
+            let cfg = config::load_config(&cli)?;
+            return update::worker::run(update::installed_paths(&cli, &cfg)?).await;
+        }
+        None => {}
+    }
     let app_config = config::load_config(&cli)?;
+    // Read the update transaction before opening or migrating the database.
+    let updates = update::Manager::bootstrap(&cli, &app_config)?;
+    let stop = tokio_util::sync::CancellationToken::new();
+    let background = tokio_util::task::TaskTracker::new();
+    let usage_tasks = tokio_util::task::TaskTracker::new();
 
     // 初始化数据库
     use sqlx::sqlite::SqliteConnectOptions;
@@ -80,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) =
         admin::provider_svc::backfill_model_channels(&pool, &provider_defs).await
     {
+        if updates.validating() { return Err(e); }
         tracing::warn!("model channel backfill failed: {}", e);
     }
 
@@ -91,6 +107,8 @@ async fn main() -> anyhow::Result<()> {
     let proxy_base_url = format!("http://{}:{}", proxy_host, app_config.proxy.port);
 
     let state = Arc::new(AppState {
+        updates: updates.clone(),
+        usage_tasks: usage_tasks.clone(),
         request_log_enabled: tokio::sync::RwLock::new(false),
         request_log_dir: std::env::current_dir()?.join("request-logs"),
         openai_chat_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -106,11 +124,13 @@ async fn main() -> anyhow::Result<()> {
 
     // 首次加载路由表
     if let Err(e) = admin::provider_svc::refresh_routes(&state).await {
+        if updates.validating() { return Err(e); }
         tracing::warn!("Initial route refresh failed (no providers configured yet): {}", e);
     }
 
     // 首次加载 API Key 缓存
     if let Err(e) = middleware::auth::refresh_api_key_cache(&state).await {
+        if updates.validating() { return Err(e); }
         tracing::warn!("Initial API key cache refresh failed: {}", e);
     }
 
@@ -118,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
     let refresh_state = state.clone();
     // 至少 1 分钟，避免配置为 0 时退化为忙循环。
     let interval_min = app_config.bridge.refresh_interval_min.max(1);
-    tokio::spawn(async move {
+    update::lifecycle::spawn_background(&background, updates.clone(), stop.clone(), async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(
             interval_min * 60,
         ));
@@ -136,7 +156,7 @@ async fn main() -> anyhow::Result<()> {
     // 启动后台上游模型探测（独立节奏，默认 1 天）。tokio::time::interval 首次 tick 立即触发→启动即播种快照。
     let probe_state = state.clone();
     let probe_interval_min = app_config.bridge.probe_interval_min.max(1);
-    tokio::spawn(async move {
+    update::lifecycle::spawn_background(&background, updates.clone(), stop.clone(), async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(probe_interval_min * 60));
         loop {
             interval.tick().await;
@@ -149,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     // 启动后台 provider 余额探测（独立节奏，默认 10 分钟）。首次 tick 立即触发→启动即播种快照。
     let balance_state = state.clone();
     let balance_interval_min = app_config.bridge.balance_interval_min.max(1);
-    tokio::spawn(async move {
+    update::lifecycle::spawn_background(&background, updates.clone(), stop.clone(), async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(balance_interval_min * 60));
         loop {
             interval.tick().await;
@@ -163,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
     let cleanup_state = state.clone();
     let retention_days = app_config.bridge.log_retention_days;
     if retention_days > 0 {
-        tokio::spawn(async move {
+        update::lifecycle::spawn_background(&background, updates.clone(), stop.clone(), async move {
             // 首次 tick 延迟 5 分钟，避免与启动时的其他任务争抢。
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
             // 跳过首次立即 tick
@@ -193,25 +213,25 @@ async fn main() -> anyhow::Result<()> {
     let admin_listener = tokio::net::TcpListener::bind(&admin_addr).await?;
     tracing::info!("admin service starting on http://{}", admin_addr);
 
-    // 并行运行两个服务，任一退出则整体退出
+    updates.ready.store(true, std::sync::atomic::Ordering::Release);
+    updates.watch_commit(stop.clone());
+    updates.schedule(stop.clone()).await;
     let proxy_svc = axum::serve(proxy_listener, proxy_router)
-        .with_graceful_shutdown(shutdown_signal());
+        .with_graceful_shutdown(stop.clone().cancelled_owned());
     let admin_svc = axum::serve(admin_listener, admin_router)
-        .with_graceful_shutdown(shutdown_signal());
-
-    tokio::select! {
-        result = proxy_svc => {
-            if let Err(e) = result {
-                tracing::error!("proxy service error: {}", e);
-            }
-        }
-        result = admin_svc => {
-            if let Err(e) = result {
-                tracing::error!("admin service error: {}", e);
-            }
-        }
-    }
-
+        .with_graceful_shutdown(stop.clone().cancelled_owned());
+    let drained = update::lifecycle::drain(
+        std::future::IntoFuture::into_future(proxy_svc),
+        std::future::IntoFuture::into_future(admin_svc),
+        shutdown_signal(), stop, usage_tasks,
+        std::time::Duration::from_secs(120),
+    ).await;
+    background.close();
+    background.wait().await;
+    // Timeout leaves usage tasks alive until runtime teardown; never claim a clean drain.
+    drained?;
+    pool.close().await;
+    updates.record_drained()?;
     tracing::info!("model-bridge shut down gracefully");
     Ok(())
 }

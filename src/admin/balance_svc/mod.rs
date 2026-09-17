@@ -488,6 +488,8 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         run_migrations(&pool).await.unwrap();
         Arc::new(AppState {
+            updates: std::sync::Arc::new(crate::update::Manager::default()),
+            usage_tasks: tokio_util::task::TaskTracker::new(),
             openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
             openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
             anthropic_routes: Arc::new(RwLock::new(HashMap::new())),

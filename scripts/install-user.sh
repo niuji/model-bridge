@@ -25,12 +25,17 @@ CFG_DIR="$HOME/.config/model-bridge"
 DATA_DIR="$HOME/.local/share/model-bridge"
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/model-bridge.service"
+UPDATE_UNIT_FILE="$UNIT_DIR/model-bridge-update.service"
+UPDATE_DIR="$DATA_DIR/update"
 BIN_PATH="$BIN_DIR/model-bridge"
 CFG_PATH="$CFG_DIR/model-bridge.toml"
 
 BINARY=""
 BUILD=0
 UNINSTALL=0
+TMP=""
+INSTALL_TMP=""
+trap '[[ -z "$TMP" ]] || rm -rf "$TMP"; [[ -z "$INSTALL_TMP" ]] || rm -f "$INSTALL_TMP"' EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,8 +58,9 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     echo "已取消"
     exit 0
   fi
+  systemctl --user stop model-bridge-update 2>/dev/null || true
   systemctl --user disable --now model-bridge 2>/dev/null || true
-  rm -f "$BIN_PATH" "$UNIT_FILE" "$CFG_PATH"
+  rm -f "$BIN_PATH" "$UNIT_FILE" "$UPDATE_UNIT_FILE" "$CFG_PATH"
   rm -rf "$DATA_DIR"
   systemctl --user daemon-reload
   echo ">> 已卸载（二进制、unit、配置、数据目录已删除）"
@@ -62,8 +68,7 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
 fi
 
 # --- --build：从源码构建（npm + cargo）再继续安装 ---
-# 版本号在 vite build 时从 Cargo.toml 烘进前端 bundle，所以 Cargo.toml 版本一变就必须重跑
-# npm run build，否则侧边栏版本会滞后于二进制 --version。
+# Rust 编译时嵌入前端，清理本包确保重新嵌入刚构建的 dist。
 if [[ "$BUILD" -eq 1 ]]; then
   if [[ -n "$BINARY" ]]; then
     echo "--build 与 --binary 互斥" >&2
@@ -76,8 +81,9 @@ if [[ "$BUILD" -eq 1 ]]; then
     echo ">> web/node_modules 缺失，先 npm install..."
     (cd web && npm install) || { echo "npm install 失败" >&2; exit 1; }
   fi
-  echo ">> npm run build（前端版本从 Cargo.toml 烘入 bundle）"
+  echo ">> npm run build"
   (cd web && npm run build) || { echo "npm run build 失败" >&2; exit 1; }
+  cargo clean -p model-bridge
   echo ">> cargo build --release"
   cargo build --release || { echo "cargo build 失败" >&2; exit 1; }
 fi
@@ -94,7 +100,7 @@ else
   fi
   command -v curl >/dev/null 2>&1 || { echo "需要 curl 下载 release（或用 --binary 指定本地二进制）。" >&2; exit 1; }
   echo ">> 下载最新 release..."
-  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  TMP="$(mktemp -d)"
   URL="https://github.com/$REPO/releases/latest/download/$ASSET"
   if ! curl -fL "$URL" -o "$TMP/$ASSET"; then
     echo "下载失败：$URL" >&2
@@ -106,9 +112,18 @@ else
 fi
 
 # --- 建目录 + 装二进制 ---
-mkdir -p "$BIN_DIR" "$CFG_DIR" "$DATA_DIR" "$UNIT_DIR"
-install -m 0755 "$BINARY" "$BIN_PATH"
-echo ">> 二进制已安装：$BIN_PATH ($("$BIN_PATH" --version 2>/dev/null || echo unknown))"
+mkdir -p "$BIN_DIR" "$CFG_DIR" "$DATA_DIR" "$UNIT_DIR" "$UPDATE_DIR"
+chmod 700 "$UPDATE_DIR"
+if systemctl --user is-active --quiet model-bridge-update; then
+  echo "更新任务正在运行，请等待完成后再安装。" >&2
+  exit 1
+fi
+command -v flock >/dev/null 2>&1 || { echo "安装需要 flock（util-linux）。" >&2; exit 1; }
+# 与后台更新使用相同的锁，避免安装检查与原子替换之间开始新的更新。
+exec 9>"$UPDATE_DIR/worker.lock"
+flock -n 9 || { echo "更新任务正在运行，请稍后再安装。" >&2; exit 1; }
+INSTALL_TMP="$(mktemp "$BIN_DIR/.model-bridge-install.XXXXXX")"
+install -m 0755 "$BINARY" "$INSTALL_TMP"
 
 # --- 生成配置（已存在则保留，不覆盖用户的密钥/设置）---
 if [[ ! -f "$CFG_PATH" ]]; then
@@ -140,6 +155,17 @@ else
   echo ">> 配置已存在，保留：$CFG_PATH"
 fi
 
+# 使用待安装版本检查旧任务，让首次迁移不依赖旧二进制已有更新命令。
+(cd "$DATA_DIR" && "$INSTALL_TMP" --config "$CFG_PATH" check-update-install) || {
+  echo "安装已停止：请先恢复未完成的更新，或确认所选二进制支持网页更新。" >&2
+  echo "恢复：systemctl --user start model-bridge-update" >&2
+  exit 1
+}
+mv -f "$INSTALL_TMP" "$BIN_PATH"
+INSTALL_TMP=""
+(cd "$DATA_DIR" && "$BIN_PATH" --config "$CFG_PATH" register-update)
+echo ">> 二进制已安装：$BIN_PATH ($("$BIN_PATH" --version 2>/dev/null || echo unknown))"
+
 # --- 写 unit（始终覆盖，由脚本管理）---
 cat > "$UNIT_FILE" <<'EOF'
 [Unit]
@@ -150,14 +176,29 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/.local/share/model-bridge
-ExecStart=%h/.local/bin/model-bridge --config %h/.config/model-bridge/model-bridge.toml
+ExecStart="%h/.local/bin/model-bridge" --config "%h/.config/model-bridge/model-bridge.toml"
+Environment=MODEL_BRIDGE_MANAGED=1
+TimeoutStopSec=150s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 EOF
-echo ">> unit 已写入：$UNIT_FILE"
+cat > "$UPDATE_UNIT_FILE" <<'EOF'
+[Unit]
+Description=Model Bridge independent update worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/model-bridge
+ExecStart="%h/.local/share/model-bridge/update/worker" --config "%h/.config/model-bridge/model-bridge.toml" update-worker
+TimeoutStartSec=30min
+UMask=0077
+EOF
+echo ">> unit 已写入：$UNIT_FILE 和 $UPDATE_UNIT_FILE"
 
 # --- 生效 ---
 systemctl --user daemon-reload
@@ -176,6 +217,9 @@ else
     echo ">> 启动失败，请查看下方状态" >&2
   fi
 fi
+
+flock -u 9
+exec 9>&-
 
 echo
 echo "=== 安装完成（核对下方服务状态）==="

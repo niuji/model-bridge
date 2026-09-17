@@ -21,6 +21,8 @@ pub struct ProviderRoute {
 
 /// 应用程序全局状态
 pub struct AppState {
+    pub updates: Arc<crate::update::Manager>,
+    pub usage_tasks: tokio_util::task::TaskTracker,
     /// 临时诊断开关：仅在内存中生效，每次启动均关闭。
     pub request_log_enabled: RwLock<bool>,
     pub request_log_dir: std::path::PathBuf,

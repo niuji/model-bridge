@@ -1282,6 +1282,8 @@ mod config_error_tests {
         assert!(def.config_error.is_some(), "fixture must be invalid");
 
         let state = std::sync::Arc::new(crate::state::AppState {
+            updates: std::sync::Arc::new(crate::update::Manager::default()),
+            usage_tasks: tokio_util::task::TaskTracker::new(),
             openai_chat_routes: Default::default(),
             openai_responses_routes: Default::default(),
             anthropic_routes: Default::default(),

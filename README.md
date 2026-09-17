@@ -62,6 +62,31 @@ INFO  proxy service starting on 127.0.0.1:10010
 INFO  admin service starting on 127.0.0.1:10020
 ```
 
+### Linux user service and browser updates
+
+On Linux x86_64 with `systemd --user`, install the binary and both service units once:
+
+```bash
+bash scripts/install-user.sh --binary /path/to/model-bridge
+# Or build this checkout, then install:
+bash scripts/install-user.sh --build
+```
+
+Existing installations must rerun the updated installer with a binary that supports browser updates. This bootstrap registers the installation and installs the independent `model-bridge-update.service`; it is started only when an update is requested. Configuration and existing data are preserved. The installer refuses to replace a binary while an update is running or its journal needs recovery.
+
+Click the version in the admin sidebar to check releases and choose **更新并重启**. The backend checks stable releases daily; it never installs one without your request. Browser updates support only installer-managed Linux x86_64 user services. Other installations, including Windows, containers, and system-wide units, require a manual upgrade.
+
+The updater verifies the release manifest, archive size, and SHA-256 checksum before stopping the service. Existing proxy requests get up to 120 seconds to finish. It backs up the binary and SQLite database, then validates the replacement before admitting traffic. Failures before commit restore the previous binary and database; after commit, automatic rollback is disabled to preserve new writes. The UI reconnects during restart and refreshes after success.
+
+If interrupted, run these commands as the user who installed the service:
+
+```bash
+systemctl --user start model-bridge-update
+journalctl --user -u model-bridge-update -n 100
+```
+
+Do not delete `~/.local/share/model-bridge/update` to bypass recovery. The journal and backups record which version and database can safely run. The user service runs while your user manager is active; the installer does not enable linger.
+
 ### 2. Configure a provider
 
 Open the admin UI at **http://127.0.0.1:10020** → **Providers**:

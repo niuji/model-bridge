@@ -41,7 +41,7 @@
               />
               <div class="footer-row">
                 <DebugLogSwitch />
-                <span v-show="!collapsed" class="footer-version mono">v{{ appVersion }}</span>
+                <UpdateDialog :version="appVersion" :collapsed="collapsed" />
                 <div class="status-indicator">
                   <span class="status-dot" />
                 </div>
@@ -75,6 +75,7 @@ import {
 } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import DebugLogSwitch from './components/DebugLogSwitch.vue'
+import UpdateDialog from './components/UpdateDialog.vue'
 import { mode, isDark, setMode, cycleMode } from './theme'
 import type { ThemeMode } from './theme'
 
@@ -338,7 +339,6 @@ body {
 .sidebar-menu .n-menu-item-content { font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; }
 .sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 14px; border-top: 1px solid var(--mb-border); background: var(--mb-surface); transition: background-color 0.2s ease, border-color 0.2s ease; }
 .footer-row { display: flex; justify-content: center; align-items: center; gap: 10px; }
-.footer-version { font-size: 11px; color: var(--mb-text-3); letter-spacing: 0.02em; }
 .status-indicator { display: flex; align-items: center; gap: 6px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #22C55E; box-shadow: 0 0 6px rgba(34,197,94,0.4); animation: status-pulse 3s ease-in-out infinite; }
 @keyframes status-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(34,197,94,0.4); } 50% { box-shadow: 0 0 12px rgba(34,197,94,0.6); } }

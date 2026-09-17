@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod update;
 pub mod models_list;
 pub mod proxy;
 mod request_log;
@@ -45,11 +46,16 @@ pub fn create_proxy_router(state: Arc<AppState>) -> Router {
         .nest("/openai-chat", openai_chat_router)
         .nest("/openai-responses", openai_responses_router)
         .nest("/anthropic", anthropic_router)
+        .layer(middleware::from_fn_with_state(state, update::maintenance))
 }
 
 /// 构建管理路由（Admin API + Web 管理界面）
 pub fn create_admin_router(state: Arc<AppState>) -> Router {
     let admin_api = Router::new()
+        .route("/update", axum::routing::get(update::status))
+        .route("/update/check", axum::routing::post(update::check))
+        .route("/update/apply", axum::routing::post(update::apply))
+        .route("/update/readiness", axum::routing::get(update::readiness))
         .route(
             "/providers",
             axum::routing::get(admin::list_providers),
@@ -91,7 +97,7 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/stats/models", axum::routing::get(admin::stats_models))
         .route("/stats/daily", axum::routing::get(admin::stats_daily))
         .route("/stats/hourly", axum::routing::get(admin::stats_hourly))
-        .with_state(state);
+        .with_state(state.clone());
 
     // 不加 CORS 层：admin API 无应用层鉴权，只靠 loopback 绑定保护。
     // 一旦回到 ACAO:*，任意网页都能跨源读走 /api/admin/api-keys/{id} 的完整 key
@@ -100,6 +106,7 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api/admin", admin_api)
         .fallback(serve_ui)
+        .layer(middleware::from_fn_with_state(state, update::maintenance))
 }
 
 async fn serve_ui(request: Request) -> Response {

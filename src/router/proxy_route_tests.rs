@@ -101,6 +101,8 @@ async fn build_state_with_defs(defs: Vec<ProviderDef>) -> Arc<AppState> {
     let mut cache = HashMap::new();
     cache.insert(hex_sha256(TEST_KEY), "key-1".to_string());
     Arc::new(AppState {
+        updates: std::sync::Arc::new(crate::update::Manager::default()),
+        usage_tasks: tokio_util::task::TaskTracker::new(),
         openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
         openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
         anthropic_routes: Arc::new(RwLock::new(HashMap::new())),
@@ -130,6 +132,8 @@ async fn build_state(
     let mut cache = HashMap::new();
     cache.insert(hex_sha256(TEST_KEY), "key-1".to_string());
     Arc::new(AppState {
+        updates: std::sync::Arc::new(crate::update::Manager::default()),
+        usage_tasks: tokio_util::task::TaskTracker::new(),
         openai_chat_routes: Arc::new(RwLock::new(chat)),
         openai_responses_routes: Arc::new(RwLock::new(responses)),
         anthropic_routes: Arc::new(RwLock::new(anthropic)),
@@ -1765,4 +1769,87 @@ async fn anthropic_provider_saves_workspace_and_keeps_cost_key_private() {
         response.json::<serde_json::Value>().await.unwrap()["id"],
         "message-ok"
     );
+}
+
+#[tokio::test]
+async fn update_validation_blocks_proxy_and_admin_mutation_but_keeps_status() {
+    let state = build_state(HashMap::new(), HashMap::new(), HashMap::new()).await;
+    state.updates.active.store(false, std::sync::atomic::Ordering::Release);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let admin = crate::router::create_admin_router(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, admin).await.unwrap(); });
+    let proxy = spawn_proxy(state.clone()).await;
+    let client = http();
+    assert_eq!(client.get(format!("{proxy}/openai-chat/v1/models")).bearer_auth(TEST_KEY).send().await.unwrap().status(), 503);
+    assert_eq!(client.put(format!("{base}/api/admin/settings")).json(&serde_json::json!({"request_log_enabled": true})).send().await.unwrap().status(), 503);
+    assert!(!*state.request_log_enabled.read().await);
+    let body:serde_json::Value = client.get(format!("{base}/api/admin/update/readiness")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["active"], false);
+    state.updates.active.store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(client.get(format!("{proxy}/openai-chat/v1/models")).bearer_auth(TEST_KEY).send().await.unwrap().status(), 200);
+    server.abort();
+}
+
+#[tokio::test]
+async fn update_http_rejects_cross_origin_unknown_fields_and_unsupported_install() {
+    let state = build_state(HashMap::new(), HashMap::new(), HashMap::new()).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let admin = crate::router::create_admin_router(state);
+    let server = tokio::spawn(async move { axum::serve(listener, admin).await.unwrap(); });
+    let client = http();
+    let body:serde_json::Value=client.get(format!("{base}/api/admin/update")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["supported"],false);
+    let url=format!("{base}/api/admin/update/apply");
+    assert_eq!(client.post(&url).json(&serde_json::json!({"version":"1.0.0"})).send().await.unwrap().status(),403);
+    assert_eq!(client.post(&url).header("x-model-bridge-update","1").header("Origin","https://evil.example").json(&serde_json::json!({"version":"1.0.0"})).send().await.unwrap().status(),403);
+    assert_eq!(client.post(&url).header("x-model-bridge-update","1").json(&serde_json::json!({"version":"1.0.0","url":"https://evil.example"})).send().await.unwrap().status(),422);
+    assert_eq!(client.post(&url).header("x-model-bridge-update","1").json(&serde_json::json!({"version":"1.0.0"})).send().await.unwrap().status(),409);
+    server.abort();
+}
+
+#[tokio::test]
+async fn graceful_shutdown_waits_for_live_sse_and_its_usage_record_after_admin_exits() {
+    use axum::{body::Body, extract::State, response::IntoResponse};
+    use tokio_util::{sync::CancellationToken, task::TaskTracker};
+    type Receiver = tokio::sync::mpsc::Receiver<Result<Bytes, std::io::Error>>;
+    async fn upstream(State(rx): State<Arc<tokio::sync::Mutex<Option<Receiver>>>>) -> impl IntoResponse {
+        let rx = rx.lock().await.take().unwrap();
+        ([("content-type", "text/event-stream")], Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+    let (send, receive) = tokio::sync::mpsc::channel(8);
+    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let upstream_router = Router::new().route("/chat/completions", axum::routing::post(upstream))
+        .with_state(Arc::new(tokio::sync::Mutex::new(Some(receive))));
+    let upstream_task = tokio::spawn(async move { axum::serve(upstream_listener, upstream_router).await.unwrap(); });
+    let state = build_state(HashMap::from([("test".into(), route("test", &upstream_url))]), HashMap::new(), HashMap::new()).await;
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", proxy_listener.local_addr().unwrap());
+    let admin_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stop = CancellationToken::new();
+    let proxy = axum::serve(proxy_listener, crate::router::create_proxy_router(state.clone())).with_graceful_shutdown(stop.clone().cancelled_owned());
+    let admin = axum::serve(admin_listener, crate::router::create_admin_router(state.clone())).with_graceful_shutdown(stop.clone().cancelled_owned());
+    let (shutdown, shutdown_signal) = tokio::sync::oneshot::channel();
+    let tasks:TaskTracker = state.usage_tasks.clone();
+    let serving = tokio::spawn(crate::update::lifecycle::drain(
+        std::future::IntoFuture::into_future(proxy), std::future::IntoFuture::into_future(admin),
+        async {let _ = shutdown_signal.await;}, stop, tasks, std::time::Duration::from_secs(5),
+    ));
+    send.send(Ok(Bytes::from_static(b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))).await.unwrap();
+    let mut response = http().post(format!("{proxy_url}/openai-chat/v1/chat/completions")).bearer_auth(TEST_KEY)
+        .json(&serde_json::json!({"model":"test","messages":[],"stream":true})).send().await.unwrap();
+    assert_eq!(response.status(),200);
+    assert!(!response.chunk().await.unwrap().unwrap().is_empty());
+    shutdown.send(()).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(!serving.is_finished(), "empty admin listener must not end the proxy SSE");
+    send.send(Ok(Bytes::from_static(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n"))).await.unwrap();
+    drop(send);
+    response.bytes().await.unwrap();
+    serving.await.unwrap().unwrap();
+    let usage:(i64,i64)=sqlx::query_as("SELECT input_tokens, output_tokens FROM usage_records").fetch_one(&state.db).await.unwrap();
+    assert_eq!(usage,(7,3));
+    upstream_task.abort();
 }

@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -6,8 +6,20 @@ use std::path::PathBuf;
 #[command(name = "model-bridge", version)]
 pub struct Cli {
     /// 配置文件路径
-    #[arg(short, long, default_value = "model-bridge.toml")]
+    #[arg(short, long, global = true, default_value = "model-bridge.toml")]
     pub config: PathBuf,
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    #[command(hide = true)]
+    UpdateWorker,
+    #[command(hide = true)]
+    RegisterUpdate,
+    #[command(hide = true)]
+    CheckUpdateInstall,
 }
 
 #[derive(Clone, Deserialize)]
