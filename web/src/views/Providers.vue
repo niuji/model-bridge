@@ -81,7 +81,12 @@
                   <span class="sr-only">配置错误：{{ p.config_error }}</span>
                 </span>
                 <template v-else>
+                  <div v-if="isCost(p)" class="quota-cost" :title="stampTitle(p)">
+                    <span class="quota-cost-label mono">{{ costLabel(p) }}</span>
+                    <span class="quota-value mono" :class="{ err: p.balance?.status === 'error' }">{{ p.has_cost_api_key ? (balanceText(p) || '—') : '未配置费用 Key' }}</span>
+                  </div>
                   <span
+                    v-else
                     class="quota-value mono"
                     :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) && !planChips(p).length }"
                     :title="stampTitle(p)"
@@ -97,9 +102,9 @@
                   v-if="!p.config_error"
                   class="quota-refresh"
                   :class="{ spinning: refreshingId === p.id }"
-                  :disabled="refreshingId === p.id"
-                  :aria-label="`重新查询 ${p.name} 额度`"
-                  title="重新查询额度"
+                  :disabled="refreshingId === p.id || (isCost(p) && !p.has_cost_api_key)"
+                  :aria-label="`重新查询 ${p.name} ${isCost(p) ? '费用' : '额度'}`"
+                  :title="isCost(p) ? '重新查询已消费金额' : '重新查询额度'"
                   @click.stop="refreshBalance(p)"
                   @keydown.stop
                 >
@@ -139,12 +144,11 @@
         </div>
       </template>
       <div v-if="editProvider" class="config-shell">
-        <n-form label-placement="left" label-width="90px">
+        <n-form label-placement="left" label-width="auto">
           <div class="config-block">
             <div class="block-header">
               <div>
                 <div class="section-label">基础配置</div>
-                <p class="section-help">配置上游凭证。</p>
               </div>
             </div>
             <n-form-item label="API Key">
@@ -172,13 +176,17 @@
                 </n-input>
               </div>
             </n-form-item>
+            <template v-if="supportsWorkspace">
+              <n-form-item label="Workspace ID">
+                <n-input v-model:value="form.workspace_id" placeholder="可选，wrkspc_..." class="mono" />
+              </n-form-item>
+            </template>
           </div>
 
           <div class="config-block">
             <div class="block-header">
               <div>
                 <div class="section-label">通道配置</div>
-                <p class="section-help">base_url 与 models_endpoint 由 providers.json 决定，此处仅控制通道是否启用。</p>
               </div>
             </div>
             <div v-for="(ch, i) in form.channels" :key="ch.channel_type" class="channel-row-card">
@@ -200,7 +208,6 @@
             <div class="block-header model-block-header">
               <div>
                 <div class="section-label">模型列表</div>
-                <p class="section-help">按通道独立配置。左侧别名用于客户端请求；右侧填写实际上游模型或展示名。</p>
               </div>
               <n-space :size="8">
                 <n-button
@@ -336,17 +343,17 @@ interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?
 interface DriftSummary { new: number; removed: number }
 interface Balance { adapter: string; status: string; data?: Record<string, any> | null; error_msg?: string | null; fetched_at: string }
 interface UsageDef { adapter: string; params?: Record<string, any>; result?: string; display?: string }
-interface ProviderSummary { id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
+interface ProviderSummary { has_cost_api_key: boolean; id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
 interface ChangeEntry { model_id: string; model_name: string }
 interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
-interface ProviderDetail { id: string; name: string; icon?: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
+interface ProviderDetail { workspace_id: string; has_cost_api_key: boolean; id: string; name: string; icon?: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
 interface ModelForm { model_id: string; model_name: string }
 interface DiffItem { model_id: string; model_name: string; checked: boolean }
 interface DiffRenamed { model_id: string; local_name: string; remote_name: string; checked: boolean }
 interface DiffResult { added: DiffItem[]; removed: DiffItem[]; renamed: DiffRenamed[] }
 interface ChannelForm { channel_type: string; base_url: string; models_endpoint?: string; is_enabled: boolean }
-interface FormState { api_key: string; is_enabled: boolean; channels: ChannelForm[]; modelsByChannel: Record<string, ModelForm[]> }
+interface FormState { workspace_id: string; api_key: string; is_enabled: boolean; channels: ChannelForm[]; modelsByChannel: Record<string, ModelForm[]> }
 
 const providers = ref<ProviderSummary[]>([])
 const loading = ref(false)
@@ -364,11 +371,13 @@ const showChanges = ref(false)
 const changesProvider = ref<ProviderSummary | null>(null)
 const changesData = ref<ChannelChange[]>([])
 const changesLoading = ref(false)
-const form = ref<FormState>({ api_key: '', is_enabled: false, channels: [], modelsByChannel: {} })
+const form = ref<FormState>({ workspace_id: '', api_key: '', is_enabled: false, channels: [], modelsByChannel: {} })
 const selectedChannel = ref('')
 const refreshingId = ref<string | null>(null)
 
 const CHANNEL_LABELS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }
+
+const supportsWorkspace = computed(() => editProvider.value?.id === 'anthropic')
 
 const selectedChannelDef = computed(() => form.value.channels.find(c => c.channel_type === selectedChannel.value))
 const visibleModels = computed(() => form.value.modelsByChannel[selectedChannel.value] || [])
@@ -409,12 +418,23 @@ const providerGroups = computed(() => {
 
 // 前端渲染与后端 adapter 注册表一一对应：各家载荷字段不同，按 adapter 分发。
 // usage.display 是通用模板逃生门，优先于内置 adapter 的硬编码渲染。
+function isCost(p: ProviderSummary): boolean { return p.usage?.adapter === 'anthropic_cost' }
+
+function costLabel(p: ProviderSummary): string {
+  const data = p.balance?.data
+  const month = new Date().toISOString().slice(0, 7)
+  const period = data?.period && data.period !== month ? data.period : '本月'
+  const scope = data ? (data.scope === 'workspace' ? '工作区' : '组织') : ''
+  return `${period}已消费 · UTC${scope ? ` · ${scope}` : ''}`
+}
+
 function balanceText(p: ProviderSummary): string {
   const d = p.balance?.data
   if (!d) return ''
   const display = p.usage?.display
   if (display) return resolveTemplate(display, d)
   switch (p.balance!.adapter) {
+    case 'anthropic_cost': return typeof d.cost_usd === 'number' ? `$${d.cost_usd.toFixed(2)}` : ''
     case 'deepseek': return `¥${Number(d.total_balance).toFixed(2)}`
     case 'openrouter': return `$${(Number(d.total_credits) - Number(d.total_usage)).toFixed(2)}`
     case 'bigmodel': {
@@ -482,17 +502,24 @@ function evalTemplateExpr(expr: string, data: Record<string, any>): any {
 // 探测失败时后端保留上次成功的 data，所以数值照常显示、由数字本身标警告色——
 // 把「失败」画成没有数值会丢掉唯一可用的额度信息。
 function stampTitle(p: ProviderSummary): string {
-  if (!p.balance) return '尚未查询过额度'
+  if (isCost(p) && !p.has_cost_api_key) return '费用查询未启用'
+  if (!p.balance) return isCost(p) ? '尚未查询过费用' : '尚未查询过额度'
   const at = Date.parse(p.balance.fetched_at)
+  const detail = isCost(p) ? costDetail(p) : (bigmodelDetail(p) || volcengineDetail(p))
   const abs = Number.isNaN(at) ? p.balance.fetched_at : new Date(at).toLocaleString('zh-CN', { hour12: false })
   if (p.balance.status === 'error') {
     const why = p.balance.error_msg || '上游未返回结果'
     return p.balance.data
-      ? `更新于 ${abs}\n最近查询失败：${why}`
-      : `暂无有效余额\n查询失败：${why}`
+      ? `更新于 ${abs}${detail}\n最近查询失败：${why}`
+      : `暂无有效${isCost(p) ? '费用' : '余额'}\n查询失败：${why}`
   }
-  const detail = bigmodelDetail(p) || volcengineDetail(p)
   return `更新于 ${abs}${detail}`
+}
+
+function costDetail(p: ProviderSummary): string {
+  const d = p.balance?.data
+  if (!d) return ''
+  return `\n统计月份：${d.period}（UTC）\n范围：${d.scope === 'workspace' ? d.workspace_id : '整个组织'}\n已消费金额，非剩余余额；上游费用可能延迟，Priority Tier 费用不包含在内。`
 }
 
 // bigmodel 载荷是 {wallet, plan} 复合体，卡片单行放不下，明细挂 tooltip。
@@ -531,10 +558,10 @@ async function refreshBalance(p: ProviderSummary) {
   try {
     const res = await fetch(`${API_BASE}/providers/${p.id}/balance/refresh`, { method: 'POST' })
     const body = await res.json()
-    if (!res.ok) { message.error(body.error || '查询余额失败'); return }
+    if (!res.ok) { message.error(body.error || '查询费用或余额失败'); return }
     p.balance = body
   } catch {
-    message.error('查询余额失败')
+    message.error('查询费用或余额失败')
   } finally {
     refreshingId.value = null
   }
@@ -554,6 +581,7 @@ function flattenModels(state: FormState): { channel_type: string; model_id: stri
 function snapshotForm(state: FormState): string {
   return JSON.stringify({
     api_key: state.api_key.trim(),
+    workspace_id: state.workspace_id.trim(),
     is_enabled: state.is_enabled,
     channels: state.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url.trim(), is_enabled: c.is_enabled })),
     models: flattenModels(state)
@@ -594,6 +622,7 @@ async function openConfig(summary: ProviderSummary) {
   }
   form.value = {
     api_key: p.api_key || '',
+    workspace_id: p.workspace_id || '',
     is_enabled: p.is_enabled,
     channels: p.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, models_endpoint: c.models_endpoint, is_enabled: c.is_enabled })).sort((a, b) => a.channel_type.localeCompare(b.channel_type)),
     modelsByChannel,
@@ -610,7 +639,8 @@ async function fetchModels() {
   fetching.value = true
   try {
     const apiKey = form.value.api_key.trim()
-    const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}/fetch-models?api_key=${encodeURIComponent(apiKey)}&channel=${encodeURIComponent(selectedChannel.value)}`)
+    const workspaceQuery = supportsWorkspace.value ? `&workspace_id=${encodeURIComponent(form.value.workspace_id.trim())}` : ''
+    const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}/fetch-models?api_key=${encodeURIComponent(apiKey)}&channel=${encodeURIComponent(selectedChannel.value)}${workspaceQuery}`)
     if (res.ok) {
       const data = await res.json()
       const remote = (data.models || []).map((m: any) => ({ model_id: String(m.model_id), model_name: (m.model_name || String(m.model_id)).trim() }))
@@ -762,6 +792,7 @@ async function handleSave() {
   try {
     const body = {
       api_key: form.value.api_key,
+      ...(supportsWorkspace.value ? { workspace_id: form.value.workspace_id.trim() } : {}),
       is_enabled: form.value.is_enabled,
       channels: form.value.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
       models: flattenModels(form.value)
@@ -804,6 +835,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.quota-cost { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.quota-cost-label { font-size: 10px; color: var(--mb-text-3); }
 /* editorial catalog atmosphere: faint graph-paper dots on the page field */
 .providers {
   background-image: radial-gradient(circle at 1px 1px, var(--mb-grid-dot) 1px, transparent 1px);
@@ -906,7 +939,6 @@ onMounted(() => {
 .block-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 .model-block-header { align-items: center; }
 .section-label { display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: var(--mb-text-3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
-.section-help { margin: 0; color: var(--mb-text-3); font-size: 12px; line-height: 1.5; }
 .api-key-row { width: 100%; }
 .api-key-input { width: 100%; }
 .api-key-visibility-btn { display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; padding: 0; color: var(--mb-text-3); cursor: pointer; }

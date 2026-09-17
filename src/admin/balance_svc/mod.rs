@@ -2,6 +2,7 @@
 //! 全部封在各 adapter 模块内；输出的 JSON 载荷形状由 adapter 自定义，是 adapter 与
 //! 前端渲染之间的契约，后端不做统一归一化。
 
+mod anthropic;
 mod bigmodel;
 mod deepseek;
 mod http;
@@ -57,6 +58,7 @@ pub async fn fetch_balance(
     api_key: &str,
 ) -> anyhow::Result<Value> {
     match usage.adapter.as_str() {
+        "anthropic_cost" => anthropic::monthly_cost(client, api_key, &usage.params).await,
         "deepseek" => deepseek::deepseek_balance(client, api_key, &usage.params).await,
         "openrouter" => openrouter::openrouter_credits(client, api_key, &usage.params).await,
         "bigmodel" => bigmodel::bigmodel_usage(client, api_key, &usage.params).await,
@@ -71,8 +73,8 @@ fn now_rfc3339() -> String {
 }
 
 /// 成功快照落库（UPSERT）：覆写 data，清空 error_msg。
-pub async fn upsert_balance_ok(
-    pool: &SqlitePool,
+pub async fn upsert_balance_ok<'e>(
+    pool: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     provider_id: &str,
     adapter: &str,
     data: &Value,
@@ -94,8 +96,8 @@ pub async fn upsert_balance_ok(
 }
 
 /// 失败只更新错误状态，保留上次成功的数据和更新时间。首次失败仍插入空快照供 UI 显示错误。
-pub async fn upsert_balance_error(
-    pool: &SqlitePool,
+pub async fn upsert_balance_error<'e>(
+    pool: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     provider_id: &str,
     adapter: &str,
     error: &str,
@@ -128,23 +130,58 @@ pub async fn read_balance_row(pool: &SqlitePool, provider_id: &str) -> anyhow::R
 }
 
 /// 探测单个 provider 并落库，返回最新快照行。上游/契约失败落 error 行后仍返回该行
-/// （供 refresh 端点直接回显）；仅 DB 错误向上抛。
+/// （供 refresh 端点直接回显）；DB 错误及查询期间费用配置变更向上抛。
 pub async fn probe_one(state: &Arc<AppState>, def: &ProviderDef, api_key: &str) -> anyhow::Result<BalanceRow> {
     let Some(usage) = def.usage.as_ref() else {
         anyhow::bail!("provider '{}' has no usage adapter configured", def.id);
     };
-    let result = if api_key.is_empty() {
+    let mut usage = usage.clone();
+    let cost_key;
+    let api_key = if usage.adapter == "anthropic_cost" {
+        let config = crate::admin::provider_svc::get_provider_config(&state.db, &def.id).await?;
+        let workspace_id = config
+            .as_ref()
+            .map(|c| c.workspace_id.as_str())
+            .unwrap_or_default();
+        usage
+            .params
+            .insert("workspace_id".into(), Value::String(workspace_id.into()));
+        cost_key = config.map(|c| c.cost_api_key).unwrap_or_default();
+        cost_key.as_str()
+    } else {
+        api_key
+    };
+    let result = if api_key.is_empty() && usage.adapter == "anthropic_cost" {
+        Err(anyhow::anyhow!("未配置费用查询 API Key"))
+    } else if api_key.is_empty() {
         Err(anyhow::anyhow!("api_key 未配置"))
     } else {
-        fetch_balance(&state.client, usage, api_key).await
+        fetch_balance(&state.client, &usage, api_key).await
     };
-    match result {
-        Ok(data) => upsert_balance_ok(&state.db, &def.id, &usage.adapter, &data).await?,
-        Err(e) => {
-            tracing::warn!("balance probe failed for '{}': {}", def.id, e);
-            upsert_balance_error(&state.db, &def.id, &usage.adapter, &e.to_string()).await?;
+    let mut tx = state.db.begin().await?;
+    if usage.adapter == "anthropic_cost" {
+        // 配置保存与快照写入在同一 SQLite 事务内互斥，旧请求不能恢复已被清除的费用。
+        let current: (String, String) = sqlx::query_as(
+            "SELECT workspace_id, cost_api_key FROM provider_config WHERE provider_id = ?",
+        )
+        .bind(&def.id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or_default();
+        if current.0 != usage.params["workspace_id"].as_str().unwrap_or_default()
+            || current.1 != api_key
+        {
+            anyhow::bail!("费用配置已变更，请重新查询");
         }
     }
+    match result {
+        Ok(data) => upsert_balance_ok(&mut *tx, &def.id, &usage.adapter, &data).await?,
+        Err(e) => {
+            tracing::warn!("balance probe failed for '{}': {}", def.id, e);
+            upsert_balance_error(&mut *tx, &def.id, &usage.adapter, &e.to_string()).await?;
+        }
+    }
+    tx.commit().await?;
     read_balance_row(&state.db, &def.id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("balance row missing after upsert"))
@@ -175,6 +212,17 @@ pub async fn probe_balances(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
         if !enabled.get(&def.id).copied().unwrap_or(false) {
             continue;
+        }
+        if def
+            .usage
+            .as_ref()
+            .is_some_and(|u| u.adapter == "anthropic_cost")
+        {
+            let config =
+                crate::admin::provider_svc::get_provider_config(&state.db, &def.id).await?;
+            if config.is_none_or(|c| c.cost_api_key.is_empty()) {
+                continue;
+            }
         }
         let api_key = keys.get(&def.id).cloned().unwrap_or_default();
         if let Err(e) = probe_one(state, def, &api_key).await {
@@ -217,6 +265,193 @@ mod tests {
     async fn unknown_adapter_rejected() {
         let err = fetch_balance(&client(), &usage_def("nope", &Map::new()), "k").await.unwrap_err();
         assert!(err.to_string().contains("unknown usage adapter"));
+    }
+
+    #[tokio::test]
+    async fn anthropic_cost_converts_cents_to_dollars() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::header("x-api-key", "admin-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"results": [{"amount": "123.45", "currency": "USD", "workspace_id": null}]}],
+                "has_more": false, "next_page": null
+            }))).mount(&server).await;
+        let data = fetch_balance(
+            &client(),
+            &usage_def("anthropic_cost", &params_with_endpoint(&server.uri())),
+            "admin-key",
+        )
+        .await
+        .unwrap();
+        assert_eq!(data["cost_usd"], json!(1.2345));
+        assert_eq!(data["kind"], "cost");
+        assert_eq!(data["scope"], "organization");
+    }
+
+    #[tokio::test]
+    async fn anthropic_cost_paginates_and_selects_workspace() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::query_param(
+                "group_by[]",
+                "workspace_id",
+            ))
+            .and(wiremock::matchers::query_param("limit", "31"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"results": [
+                    {"amount": "100", "currency": "USD", "workspace_id": "wrkspc_a"},
+                    {"amount": "900", "currency": "USD", "workspace_id": "wrkspc_other"}
+                ]}], "has_more": true, "next_page": "page2"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(wiremock::matchers::query_param("page", "page2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"results": [{"amount": "250.5", "currency": "USD", "workspace_id": "wrkspc_a"}]}],
+                "has_more": false, "next_page": null
+            }))).with_priority(1).mount(&server).await;
+        let mut params = params_with_endpoint(&server.uri());
+        params.insert("workspace_id".into(), json!("wrkspc_a"));
+        let data = fetch_balance(&client(), &usage_def("anthropic_cost", &params), "admin")
+            .await
+            .unwrap();
+        assert_eq!(data["cost_usd"], json!(3.505));
+        assert_eq!(data["scope"], "workspace");
+        assert_eq!(data["workspace_id"], "wrkspc_a");
+        assert!(data["starting_at"]
+            .as_str()
+            .unwrap()
+            .ends_with("-01T00:00:00Z"));
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(reqs.len(), 2);
+        for req in reqs {
+            assert_eq!(
+                req.url
+                    .query_pairs()
+                    .find(|(k, _)| k == "starting_at")
+                    .unwrap()
+                    .1,
+                data["starting_at"].as_str().unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_cost_uses_separate_key_and_retains_snapshot_on_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::header("x-api-key", "admin-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [], "has_more": false, "next_page": null
+            })))
+            .mount(&server)
+            .await;
+        let def = def_with_usage("anthropic", "anthropic_cost", Some(&server.uri()));
+        let state = build_state(vec![def.clone()]).await;
+        set_provider_config(&state, "anthropic", true, "inference-key").await;
+        // 未配置管理凭证时自动刷新跳过，手动刷新报清晰错误，绝不拿推理 Key 试探。
+        probe_balances(&state).await.unwrap();
+        assert!(read_balance_row(&state.db, "anthropic")
+            .await
+            .unwrap()
+            .is_none());
+        let row = probe_one(&state, &def, "inference-key").await.unwrap();
+        assert_eq!(row.status, "error");
+        assert!(server.received_requests().await.unwrap().is_empty());
+        sqlx::query("UPDATE provider_config SET cost_api_key = 'admin-key'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        probe_balances(&state).await.unwrap();
+        let row = read_balance_row(&state.db, "anthropic")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, "ok");
+        assert_eq!(
+            serde_json::from_str::<Value>(row.data.as_ref().unwrap()).unwrap()["cost_usd"],
+            0.0
+        );
+        server.reset().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let failed = probe_one(&state, &def, "inference-key").await.unwrap();
+        assert_eq!(failed.status, "error");
+        assert_eq!(failed.data, row.data);
+        assert_eq!(failed.fetched_at, row.fetched_at);
+    }
+
+    #[tokio::test]
+    async fn anthropic_cost_rejects_invalid_amount_and_pagination() {
+        for body in [
+            json!({"data": [{"results": [{"amount": "NaN", "currency": "USD"}]}], "has_more": false}),
+            json!({"data": [{"results": [{"amount": "100", "currency": "CNY"}]}], "has_more": false}),
+            json!({"data": [], "has_more": true, "next_page": null}),
+            json!({"data": [], "has_more": true, "next_page": "same"}),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            assert!(fetch_balance(
+                &client(),
+                &usage_def("anthropic_cost", &params_with_endpoint(&server.uri())),
+                "admin"
+            )
+            .await
+            .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_cost_discards_inflight_result_after_settings_change() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_json(json!({"data": [], "has_more": false, "next_page": null})),
+            )
+            .mount(&server)
+            .await;
+        let def = def_with_usage("anthropic", "anthropic_cost", Some(&server.uri()));
+        let state = build_state(vec![def.clone()]).await;
+        set_provider_config(&state, "anthropic", true, "inference").await;
+        sqlx::query("UPDATE provider_config SET cost_api_key = 'admin'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let probing_state = state.clone();
+        let probe = tokio::spawn(async move { probe_one(&probing_state, &def, "inference").await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while server.received_requests().await.unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        crate::admin::provider_svc::update_provider(
+            &state.db,
+            "anthropic",
+            "inference",
+            true,
+            &[],
+            &[],
+            &crate::db::models::ProviderSettings {
+                workspace_id: Some("wrkspc_new".into()),
+                cost_api_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(probe.await.unwrap().is_err());
+        assert!(read_balance_row(&state.db, "anthropic")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

@@ -137,6 +137,12 @@ Providers are defined in three layers, merged at startup:
 
 A provider can declare multiple **channels** of different protocol types (`openai_chat`, `openai_responses`, `anthropic`). A model is bound to **one** channel — each entry in the model whitelist carries its `channel_type`, so serving the same model on two channels means adding it to each one separately. Non-`claude`/`anthropic` models reachable via an Anthropic channel are also exposed with a `claude-` prefix, so Claude-Code-style clients can address them.
 
+For the official Anthropic provider, the provider dialog accepts an optional **Workspace ID**. It is sent as `anthropic-workspace-id` for model discovery (manual and scheduled) and inference; a client's header cannot override it. Multi-workspace API keys require it, while keys scoped to one workspace can leave it empty. Model discovery follows Anthropic's `has_more` / `last_id` pagination and only replaces the saved upstream snapshot after every page succeeds.
+
+The backend retains optional **Cost API Key** support for credentials with Admin API permissions, but the provider dialog does not expose a cost-key input. Existing credentials are preserved when saving the form. This key is used only for cost queries, never inference, and is not returned by the configuration API. Without it, scheduled cost queries are skipped. Like upstream inference keys, it is stored in the local database, so protect that file.
+
+The Anthropic card shows **month-to-date spending in USD (UTC), not remaining credit balance**. A configured Workspace ID limits the total to that workspace; otherwise it covers the entire organization. Reports include all usage in that scope, not just traffic through this gateway. The adapter follows Cost API pagination and converts amounts from cents to dollars. Refresh uses the existing balance refresh interval/button; failures retain the last successful amount, month, and timestamp. Changing the workspace or cost key clears the old snapshot. Reporting can lag, and Priority Tier costs are excluded by the upstream Cost API. See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication) and [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api).
+
 ## Admin API
 
 Served on the loopback admin server at `/api/admin/`:
@@ -145,7 +151,7 @@ Served on the loopback admin server at `/api/admin/`:
 |---|---|---|
 | GET | `/providers` | list merged providers |
 | GET / PUT | `/providers/{id}` | get / update a provider (api_key, enabled, channels, models) |
-| GET | `/providers/{id}/fetch-models?api_key=...` | probe upstream `/v1/models` with the given key |
+| GET | `/providers/{id}/fetch-models?api_key=...&channel=anthropic&workspace_id=...` | probe upstream models; workspace ID is optional |
 | POST | `/providers/{id}/refresh` | force a full route table refresh |
 | GET / POST | `/api-keys` | list / create client keys |
 | GET / PUT / DELETE | `/api-keys/{id}` | reveal / toggle / delete a key |

@@ -9,6 +9,15 @@ pub struct ProviderConfigRow {
     pub provider_id: String,
     pub api_key: String,
     pub is_enabled: bool,
+    pub workspace_id: String,
+    pub cost_api_key: String,
+}
+
+/// 缺省字段保留旧值；空字符串显式清空，兼容只切换启用状态的旧客户端。
+#[derive(Default, serde::Deserialize)]
+pub struct ProviderSettings {
+    pub workspace_id: Option<String>,
+    pub cost_api_key: Option<String>,
 }
 
 /// 用户对 Channel 的配置覆盖（DB 存储）
@@ -37,6 +46,8 @@ pub struct ProviderDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub api_key: String,
+    pub workspace_id: String,
+    pub has_cost_api_key: bool,
     pub is_enabled: bool,
     pub channels: Vec<ChannelDetail>,
     pub models: Vec<ProviderModel>,
@@ -62,6 +73,7 @@ pub struct ProviderSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub is_enabled: bool,
+    pub has_cost_api_key: bool,
     pub channels: Vec<ChannelDetail>,
     /// 自上次打开"上游变更"弹窗以来的变化计数（baseline 为空/未查看过时为 None）
     #[serde(skip_serializing_if = "Option::is_none")]

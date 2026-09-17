@@ -5,8 +5,8 @@ use std::sync::Arc;
 use crate::config::{ChannelDef, ProviderDef};
 use crate::db::models::{
     BalanceRow, BalanceSummary, ChannelDetail, ChannelDrift, DriftSummary, ModelEntry,
-    ProviderChannelConfigRow, ProviderConfigRow, ProviderDetail, ProviderModel, ProviderSummary,
-    UpstreamModelRow,
+    ProviderChannelConfigRow, ProviderConfigRow, ProviderDetail, ProviderModel, ProviderSettings,
+    ProviderSummary, UpstreamModelRow,
 };
 use crate::state::{AppState, ProviderRoute};
 
@@ -81,6 +81,7 @@ pub async fn list_providers(
             name: def.name.clone(),
             icon: def.icon.clone(),
             is_enabled,
+            has_cost_api_key: config.as_ref().is_some_and(|c| !c.cost_api_key.is_empty()),
             channels,
             drift,
             usage: def.usage.clone(),
@@ -129,6 +130,11 @@ pub async fn get_provider(
         name: def.name.clone(),
         icon: def.icon.clone(),
         api_key,
+        workspace_id: config
+            .as_ref()
+            .map(|c| c.workspace_id.clone())
+            .unwrap_or_default(),
+        has_cost_api_key: config.as_ref().is_some_and(|c| !c.cost_api_key.is_empty()),
         is_enabled,
         channels,
         models,
@@ -145,6 +151,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     struct LoadedProvider<'a> {
         def: &'a ProviderDef,
         api_key: String,
+        workspace_id: String,
         channels: Vec<ChannelDetail>,
         models: Vec<ProviderModel>,
     }
@@ -174,7 +181,17 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         .bind(&def.id)
         .fetch_all(&state.db)
         .await?;
-        loaded.push(LoadedProvider { def, api_key, channels, models });
+        let workspace_id = config
+            .as_ref()
+            .map(|c| c.workspace_id.clone())
+            .unwrap_or_default();
+        loaded.push(LoadedProvider {
+            def,
+            api_key,
+            workspace_id,
+            channels,
+            models,
+        });
     }
 
     // ---- 预扫描：跨所有 provider 统计归一化裸名冲突 ----
@@ -257,6 +274,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     model_name: model.model_name.clone(),
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
+                    workspace_id: lp.workspace_id.clone(),
                 };
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
@@ -338,6 +356,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     model_name: model.model_name.clone(),
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
+                    workspace_id: String::new(),
                 };
                 if bare_counts.get(&key_lower).copied().unwrap_or(0) == 1 {
                     // 非冲突：裸名 key（count==1 保证唯一，无冲突分支）
@@ -407,17 +426,33 @@ pub async fn update_provider(
     is_enabled: bool,
     channels: &[(String, bool)], // (channel_type, is_enabled)
     models: &[(String, String, String)], // (channel_type, model_id, model_name)
+    settings: &ProviderSettings,
 ) -> anyhow::Result<()> {
+    let workspace_id = settings.workspace_id.as_deref().map(str::trim);
+    let cost_api_key = settings.cost_api_key.as_deref().map(str::trim);
+    if let Some(value) = workspace_id {
+        reqwest::header::HeaderValue::from_str(value)
+            .map_err(|_| anyhow::anyhow!("invalid workspace_id header value"))?;
+    }
     // 配置、通道与模型必须同时提交，失败时保留整份旧配置。
     let mut tx = pool.begin().await?;
+    // 查询范围或凭证变化后，旧费用不能继续显示成新配置的数据。
+    sqlx::query("DELETE FROM provider_balance WHERE provider_id = ? AND adapter = 'anthropic_cost'
+        AND EXISTS (SELECT 1 FROM provider_config WHERE provider_id = ?
+          AND (workspace_id != COALESCE(?, workspace_id) OR cost_api_key != COALESCE(?, cost_api_key)))")
+        .bind(id).bind(id).bind(workspace_id).bind(cost_api_key)
+        .execute(&mut *tx).await?;
     // upsert provider_config
     sqlx::query(
-        "INSERT INTO provider_config (provider_id, api_key, is_enabled) VALUES (?, ?, ?)
-         ON CONFLICT(provider_id) DO UPDATE SET api_key = excluded.api_key, is_enabled = excluded.is_enabled",
+        "INSERT INTO provider_config (provider_id, api_key, is_enabled, workspace_id, cost_api_key)
+         VALUES (?, ?, ?, COALESCE(?, ''), COALESCE(?, ''))
+         ON CONFLICT(provider_id) DO UPDATE SET api_key = excluded.api_key, is_enabled = excluded.is_enabled,
+           workspace_id = COALESCE(?, provider_config.workspace_id), cost_api_key = COALESCE(?, provider_config.cost_api_key)",
     )
     .bind(id)
     .bind(api_key)
     .bind(is_enabled as i32)
+    .bind(workspace_id).bind(cost_api_key).bind(workspace_id).bind(cost_api_key)
     .execute(&mut *tx)
     .await?;
 
@@ -468,6 +503,7 @@ pub async fn fetch_models_from_api(
     provider_id: &str,
     channel_type: &str,
     ui_api_key: &str,
+    workspace_id: &str,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let Some(def) = defs.iter().find(|d| d.id == provider_id) else {
         anyhow::bail!("provider not found");
@@ -487,46 +523,224 @@ pub async fn fetch_models_from_api(
         ui_api_key.to_string()
     };
 
-    let mut req = client.get(endpoint).timeout(std::time::Duration::from_secs(10));
-
-    // 鉴权方式按通道类型推导：anthropic 通道用 x-api-key（Anthropic 约定），
-    // 其余（openai_chat / openai_responses）用 Bearer。
-    match ch.channel_type.as_str() {
-        "anthropic" => {
+    let mut models = Vec::new();
+    let mut seen_models = std::collections::HashSet::new();
+    let mut cursors = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut req = client
+            .get(endpoint)
+            .timeout(std::time::Duration::from_secs(10));
+        if ch.channel_type == "anthropic" {
             req = req
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01");
-        }
-        _ => {
+            if !workspace_id.is_empty() {
+                req = req.header("anthropic-workspace-id", workspace_id);
+            }
+            if let Some(after_id) = &cursor {
+                req = req.query(&[("after_id", after_id)]);
+            }
+        } else {
             req = req.header("Authorization", format!("Bearer {}", api_key));
         }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("HTTP {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().await?;
+        let data = body["data"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("missing model data array"))?;
+        for model in data {
+            let id = model["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("missing model id"))?;
+            if seen_models.insert(id.to_string()) {
+                models.push((
+                    id.to_string(),
+                    model["display_name"].as_str().unwrap_or(id).to_string(),
+                ));
+            }
+        }
+        // 兼容不返回分页字段的 Anthropic-compatible 上游；只在明确有下一页时继续。
+        if ch.channel_type != "anthropic" || body["has_more"] != true {
+            break;
+        }
+        let next = body["last_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("missing last_id on paginated model response"))?;
+        if data.is_empty() || !cursors.insert(next.to_string()) {
+            anyhow::bail!("model pagination cursor did not advance");
+        }
+        cursor = Some(next.to_string());
     }
-
-    let resp = req.send().await?;
-
-    if !resp.status().is_success() {
-        anyhow::bail!("HTTP {}", resp.status());
-    }
-
-    let body: serde_json::Value = resp.json().await?;
-    let models: Vec<(String, String)> = body["data"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|m| {
-                    let id = m["id"].as_str().unwrap_or("").to_string();
-                    let name = m["display_name"].as_str().unwrap_or(&id).to_string();
-                    (id, name)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
     if models.is_empty() {
         anyhow::bail!("empty model list");
     }
 
     Ok(models)
+}
+
+#[cfg(test)]
+mod anthropic_model_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn anthropic_models_collects_all_pages() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(wiremock::matchers::header(
+                "anthropic-workspace-id",
+                "wrkspc_test",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "claude-a", "display_name": "A"}],
+                "has_more": true, "last_id": "claude-a"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(query_param("after_id", "claude-a"))
+            .and(wiremock::matchers::header(
+                "anthropic-workspace-id",
+                "wrkspc_test",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "claude-b", "display_name": "B"}],
+                "has_more": false, "last_id": "claude-b"
+            })))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let defs = vec![ProviderDef {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            icon: None,
+            channels: vec![ChannelDef {
+                channel_type: "anthropic".into(),
+                base_url: server.uri(),
+                models_endpoint: Some(format!("{}/v1/models", server.uri())),
+            }],
+            usage: None,
+            config_error: None,
+        }];
+        let models = fetch_models_from_api(
+            &reqwest::Client::new(),
+            &defs,
+            "anthropic",
+            "anthropic",
+            "key",
+            "wrkspc_test",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            models,
+            vec![
+                ("claude-a".into(), "A".into()),
+                ("claude-b".into(), "B".into())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_models_rejects_incomplete_or_cyclic_pages() {
+        for second_page in [
+            ResponseTemplate::new(500),
+            ResponseTemplate::new(200).set_body_json(json!({"data": [], "has_more": true})),
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"data": [{"id": "a"}], "has_more": true, "last_id": "a"})),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{"id": "a"}], "has_more": true, "last_id": "a"
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(query_param("after_id", "a"))
+                .respond_with(second_page)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            let defs: Vec<ProviderDef> = serde_json::from_value(json!([{
+                "id": "a", "name": "A", "channels": [{"type": "anthropic", "base_url": server.uri(), "models_endpoint": server.uri()}]
+            }])).unwrap();
+            assert!(fetch_models_from_api(
+                &reqwest::Client::new(),
+                &defs,
+                "a",
+                "anthropic",
+                "key",
+                ""
+            )
+            .await
+            .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_settings_preserve_on_omission_and_clear_explicitly() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        let settings = ProviderSettings {
+            workspace_id: Some(" wrkspc_a ".into()),
+            cost_api_key: Some(" admin ".into()),
+        };
+        update_provider(&pool, "a", "inference", true, &[], &[], &settings)
+            .await
+            .unwrap();
+        crate::admin::balance_svc::upsert_balance_ok(
+            &pool,
+            "a",
+            "anthropic_cost",
+            &json!({"cost_usd": 10}),
+        )
+        .await
+        .unwrap();
+        update_provider(
+            &pool,
+            "a",
+            "inference",
+            false,
+            &[],
+            &[],
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        let config = get_provider_config(&pool, "a").await.unwrap().unwrap();
+        assert_eq!(config.workspace_id, "wrkspc_a");
+        assert_eq!(config.cost_api_key, "admin");
+        assert!(crate::admin::balance_svc::read_balance_row(&pool, "a")
+            .await
+            .unwrap()
+            .is_some());
+        let clear = ProviderSettings {
+            workspace_id: Some("".into()),
+            cost_api_key: Some("".into()),
+        };
+        update_provider(&pool, "a", "inference", true, &[], &[], &clear)
+            .await
+            .unwrap();
+        let config = get_provider_config(&pool, "a").await.unwrap().unwrap();
+        assert!(config.workspace_id.is_empty());
+        assert!(config.cost_api_key.is_empty());
+        assert!(crate::admin::balance_svc::read_balance_row(&pool, "a")
+            .await
+            .unwrap()
+            .is_none());
+    }
 }
 
 /// 迁移辅助：把 schema 迁移后 channel_type 为空的 provider_models 行按启发式回填。
@@ -602,7 +816,7 @@ pub(crate) async fn get_provider_config(
     id: &str,
 ) -> Result<Option<ProviderConfigRow>, sqlx::Error> {
     sqlx::query_as::<_, ProviderConfigRow>(
-        "SELECT provider_id, api_key, is_enabled FROM provider_config WHERE provider_id = ?",
+        "SELECT provider_id, api_key, is_enabled, workspace_id, cost_api_key FROM provider_config WHERE provider_id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -799,12 +1013,17 @@ async fn replace_upstream_snapshot(
 /// 后台探测上游 /v1/models，刷新 upstream_models 快照。失败保留旧快照（仅 warn）。
 pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> {
     #[derive(sqlx::FromRow)]
-    struct CfgRow { provider_id: String, is_enabled: bool, api_key: String }
+    struct CfgRow {
+        provider_id: String,
+        is_enabled: bool,
+        api_key: String,
+        workspace_id: String,
+    }
     #[derive(sqlx::FromRow)]
     struct ChCfgRow { provider_id: String, channel_type: String, is_enabled: bool }
 
     let cfgs: Vec<CfgRow> = sqlx::query_as::<_, CfgRow>(
-        "SELECT provider_id, is_enabled, api_key FROM provider_config",
+        "SELECT provider_id, is_enabled, api_key, workspace_id FROM provider_config",
     )
     .fetch_all(&state.db).await?;
     let ch_cfgs: Vec<ChCfgRow> = sqlx::query_as::<_, ChCfgRow>(
@@ -827,9 +1046,30 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
         &state.provider_defs, &provider_enabled, &provider_api_key, &channel_enabled,
     );
 
+    let workspaces: HashMap<_, _> = cfgs
+        .iter()
+        .map(|c| (c.provider_id.as_str(), c.workspace_id.as_str()))
+        .collect();
     for t in targets {
-        tracing::debug!("probing upstream '{}' '{}' at {}", t.provider_id, t.channel_type, t.models_endpoint);
-        match fetch_models_from_api(&state.client, &state.provider_defs, &t.provider_id, &t.channel_type, &t.api_key).await {
+        tracing::debug!(
+            "probing upstream '{}' '{}' at {}",
+            t.provider_id,
+            t.channel_type,
+            t.models_endpoint
+        );
+        match fetch_models_from_api(
+            &state.client,
+            &state.provider_defs,
+            &t.provider_id,
+            &t.channel_type,
+            &t.api_key,
+            workspaces
+                .get(t.provider_id.as_str())
+                .copied()
+                .unwrap_or_default(),
+        )
+        .await
+        {
             Ok(models) => {
                 if let Err(e) = replace_upstream_snapshot(&state.db, &t.provider_id, &t.channel_type, &models).await {
                     tracing::warn!("upstream snapshot persist failed for '{}' '{}': {}", t.provider_id, t.channel_type, e);
@@ -1084,6 +1324,7 @@ mod update_provider_tests {
             true,
             &[("anthropic".into(), true)],
             &[("anthropic".into(), "m1".into(), "M1".into())],
+            &Default::default(),
         )
         .await
         .unwrap();
@@ -1100,6 +1341,7 @@ mod update_provider_tests {
             false,
             &[("anthropic".into(), false)],
             &dup,
+            &Default::default(),
         )
         .await;
         assert!(res.is_err());

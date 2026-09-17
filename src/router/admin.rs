@@ -85,6 +85,8 @@ pub struct UpdateProviderModel {
 
 #[derive(Deserialize)]
 pub struct UpdateProviderRequest {
+    #[serde(flatten)]
+    pub settings: crate::db::models::ProviderSettings,
     pub api_key: String,
     pub is_enabled: bool,
     pub channels: Vec<UpdateProviderChannel>,
@@ -115,6 +117,7 @@ pub async fn update_provider(
         req.is_enabled,
         &channels,
         &models,
+        &req.settings,
     )
     .await
     {
@@ -148,6 +151,7 @@ pub async fn update_provider(
 pub struct FetchModelsQuery {
     pub api_key: Option<String>,
     pub channel: Option<String>,
+    pub workspace_id: Option<String>,
 }
 
 pub async fn fetch_provider_models(
@@ -181,6 +185,7 @@ pub async fn fetch_provider_models(
         &id,
         channel,
         api_key,
+        query.workspace_id.as_deref().unwrap_or_default(),
     )
     .await
     {

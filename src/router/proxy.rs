@@ -268,6 +268,9 @@ async fn proxy_to_provider(
     match api_format {
         "anthropic" => {
             req = req.header("x-api-key", &route.api_key);
+            if !route.workspace_id.is_empty() {
+                req = req.header("anthropic-workspace-id", &route.workspace_id);
+            }
         }
         _ => {
             req = req.header("Authorization", format!("Bearer {}", route.api_key));

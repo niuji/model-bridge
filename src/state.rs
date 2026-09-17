@@ -16,6 +16,7 @@ pub struct ProviderRoute {
     pub model_name: String,
     pub base_url: String,
     pub api_key: String,
+    pub workspace_id: String,
 }
 
 /// 应用程序全局状态

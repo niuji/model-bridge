@@ -23,6 +23,7 @@ use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 
 use crate::db::schema::run_migrations;
+
 use crate::router::create_proxy_router;
 use crate::state::{AppState, ProviderRoute};
 use crate::config::{ChannelDef, ProviderDef};
@@ -85,6 +86,7 @@ fn route(model_id: &str, base_url: &str) -> ProviderRoute {
         model_name: model_id.into(),
         base_url: base_url.into(),
         api_key: UPSTREAM_KEY.into(),
+        workspace_id: String::new(),
     }
 }
 
@@ -491,6 +493,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -501,6 +504,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -649,6 +653,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-kimi-k3[1M]".into(), "Kimi K3".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -659,6 +664,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-kimi-k3[1M]".into(), "Kimi K3".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -716,6 +722,7 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -808,6 +815,7 @@ async fn anthropic_same_provider_1m_variant_preferred() {
             ("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into()),
             ("anthropic".into(), "claude-sonnet-4[1M]".into(), "Claude Sonnet 4".into()),
         ],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -929,6 +937,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -939,6 +948,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
         true,
         &[("anthropic".into(), true)],
         &[("anthropic".into(), "claude-sonnet-4".into(), "Claude Sonnet 4".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -1038,6 +1048,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
         true,
         &[("openai_chat".into(), true)],
         &[("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -1048,6 +1059,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
         true,
         &[("openai_chat".into(), true)],
         &[("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -1156,6 +1168,7 @@ async fn openai_chat_non_conflicting_uses_only_bare_key() {
         true,
         &[("openai_chat".into(), true)],
         &[("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into())],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -1247,6 +1260,7 @@ async fn openai_chat_responses_conflict_independent() {
             ("openai_chat".into(), "gpt-4o".into(), "GPT-4o".into()),
             ("openai_responses".into(), "gpt-4o".into(), "GPT-4o".into()),
         ],
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -1596,6 +1610,7 @@ async fn provider_refresh_test_state() -> Arc<AppState> {
             true,
             &[("openai_chat".into(), true)],
             &[("openai_chat".into(), id.into(), id.into())],
+            &Default::default(),
         )
         .await
         .unwrap();
@@ -1638,6 +1653,7 @@ async fn provider_save_reports_route_refresh_failure() {
         State(state.clone()),
         Path("p".into()),
         Json(UpdateProviderRequest {
+            settings: Default::default(),
             api_key: "new-key".into(),
             is_enabled: true,
             channels: vec![UpdateProviderChannel {
@@ -1671,5 +1687,82 @@ async fn provider_save_reports_route_refresh_failure() {
     assert_eq!(
         state.openai_chat_routes.read().await["p"].api_key,
         "old-key"
+    );
+}
+
+#[tokio::test]
+async fn anthropic_provider_saves_workspace_and_keeps_cost_key_private() {
+    use axum::{
+        extract::{Path, State},
+        response::IntoResponse,
+        Json,
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(header("x-api-key", "inference-key"))
+        .and(header("anthropic-workspace-id", "wrkspc_test"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "message-ok"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(header("x-api-key", "inference-key"))
+        .and(header("anthropic-workspace-id", "wrkspc_test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"id": "claude-discovered", "display_name": "Discovered"}], "has_more": false
+        })))
+        .mount(&server)
+        .await;
+    let defs: Vec<ProviderDef> = serde_json::from_value(serde_json::json!([{
+        "id": "anthropic", "name": "Anthropic", "channels": [{
+            "type": "anthropic", "base_url": server.uri(), "models_endpoint": format!("{}/models", server.uri())
+        }]
+    }])).unwrap();
+    let state = build_state_with_defs(defs).await;
+    let request = serde_json::from_value(serde_json::json!({
+        "api_key": "inference-key", "workspace_id": "wrkspc_test", "cost_api_key": "secret-admin-key",
+        "is_enabled": true, "channels": [{"channel_type": "anthropic", "is_enabled": true}],
+        "models": [{"channel_type": "anthropic", "model_id": "claude-test", "model_name": "Test"}]
+    })).unwrap();
+    let response = crate::router::admin::update_provider(
+        State(state.clone()),
+        Path("anthropic".into()),
+        Json(request),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 16384)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["workspace_id"], "wrkspc_test");
+    assert_eq!(body["has_cost_api_key"], true);
+    assert!(!String::from_utf8_lossy(&bytes).contains("secret-admin-key"));
+    crate::admin::provider_svc::probe_upstream_models(&state)
+        .await
+        .unwrap();
+    let discovered: String =
+        sqlx::query_scalar("SELECT model_id FROM upstream_models WHERE provider_id = 'anthropic'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(discovered, "claude-discovered");
+    let base = spawn_proxy(state).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/anthropic/v1/messages"))
+        .bearer_auth(TEST_KEY)
+        .header("anthropic-workspace-id", "client-must-not-override")
+        .json(&serde_json::json!({"model": "claude-test", "max_tokens": 10, "messages": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["id"],
+        "message-ok"
     );
 }

@@ -22,6 +22,20 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('provider_config')")
+            .fetch_all(pool)
+            .await?;
+    for column in ["workspace_id", "cost_api_key"] {
+        if !columns.iter().any(|name| name == column) {
+            sqlx::query(&format!(
+                "ALTER TABLE provider_config ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+            ))
+            .execute(pool)
+            .await?;
+        }
+    }
+
     // Channel 用户配置：base_url 一律以配置文件为准、不入库（仅存 channel 启用状态）
     sqlx::query(
         r#"
@@ -260,5 +274,32 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(name.as_deref(), Some("provider_balance"));
+    }
+
+    #[tokio::test]
+    async fn migration_preserves_existing_provider_credentials() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE provider_config (provider_id TEXT PRIMARY KEY, api_key TEXT NOT NULL, is_enabled INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO provider_config VALUES ('anthropic', 'existing-key', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+        let row: (String, String, String) =
+            sqlx::query_as("SELECT api_key, workspace_id, cost_api_key FROM provider_config")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row, ("existing-key".into(), "".into(), "".into()));
+        sqlx::query("UPDATE provider_config SET workspace_id = 'wrkspc_saved', cost_api_key = 'admin-saved'")
+            .execute(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let row: (String, String) =
+            sqlx::query_as("SELECT workspace_id, cost_api_key FROM provider_config")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row, ("wrkspc_saved".into(), "admin-saved".into()));
     }
 }
