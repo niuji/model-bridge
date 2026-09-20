@@ -534,6 +534,7 @@ pub async fn fetch_models_from_api(
         if ch.channel_type == "anthropic" {
             req = req
                 .header("x-api-key", &api_key)
+                .header("Authorization", format!("Bearer {}", api_key))
                 .header("anthropic-version", "2023-06-01");
             if !workspace_id.is_empty() {
                 req = req.header("anthropic-workspace-id", workspace_id);
@@ -598,6 +599,8 @@ mod anthropic_model_tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
+            .and(wiremock::matchers::header("x-api-key", "key"))
+            .and(wiremock::matchers::header("Authorization", "Bearer key"))
             .and(wiremock::matchers::header(
                 "anthropic-workspace-id",
                 "wrkspc_test",
@@ -611,6 +614,8 @@ mod anthropic_model_tests {
         Mock::given(method("GET"))
             .and(path("/v1/models"))
             .and(query_param("after_id", "claude-a"))
+            .and(wiremock::matchers::header("x-api-key", "key"))
+            .and(wiremock::matchers::header("Authorization", "Bearer key"))
             .and(wiremock::matchers::header(
                 "anthropic-workspace-id",
                 "wrkspc_test",
