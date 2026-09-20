@@ -1408,13 +1408,15 @@ async fn anthropic_path_traversal_rejected() {
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
 }
 
-/// 上游请求头白名单（proxy.rs 第 5 步）：只有 content-type / anthropic-version /
-/// anthropic-beta / user-agent / idempotency-key 会外发，其余客户端头一律丢弃。
-/// 两条断言是承重的，改白名单前先看它们为什么在：
+/// 上游请求头按「排除名单」转发（proxy.rs 第 5 步）：客户端头默认全部外发，
+/// 只剔除网关自管或会破坏链路的头。三条断言是承重的，改排除名单前先看它们为什么在：
 ///   - accept-encoding 必须丢：reqwest 未启用 gzip feature，上游压缩后 SSE 解析会静默失败。
-///   - authorization 必须丢：reqwest 的 .header() 是 append，透传会与上游 key 并存为两个头。
+///   - authorization / x-api-key 必须丢：reqwest 的 .header() 是 append，透传会与上游 key 并存为两个头。
+///   - cookie 必须丢：客户端 cookie 是发给网关的，转给 LLM 上游既无用又泄漏凭据。
+/// 反向断言（未列入排除名单的头必须外发）同样承重：Claude Code 每个版本会新增 capability
+/// 头，白名单写法会在版本升级时静默剥掉它们。
 #[tokio::test(flavor = "multi_thread")]
-async fn upstream_receives_only_whitelisted_client_headers() {
+async fn upstream_receives_client_headers_except_gateway_owned_ones() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/messages"))
@@ -1438,7 +1440,9 @@ async fn upstream_receives_only_whitelisted_client_headers() {
         // 大小写混写：HeaderMap 查找不区分大小写，客户端按 OpenAI 文档写法发也应命中
         .header("Idempotency-Key", "idem-42")
         .header("accept-encoding", "gzip")
-        .header("x-custom-thing", "nope")
+        .header("cookie", "session=secret")
+        .header("x-custom-thing", "kept")
+        .header("x-claude-code-session-id", "sess-42")
         .json(&serde_json::json!({"model": "claude-sonnet-4", "messages": []}))
         .send()
         .await
@@ -1465,7 +1469,10 @@ async fn upstream_receives_only_whitelisted_client_headers() {
     assert!(h.get("authorization").is_none(), "client mb- key leaked upstream");
 
     assert!(h.get("accept-encoding").is_none(), "accept-encoding must not be forwarded");
-    assert!(h.get("x-custom-thing").is_none());
+    assert!(h.get("cookie").is_none(), "client cookie must not be forwarded");
+    // 未列入排除名单的客户端头必须原样外发（Claude Code 每版本新增的 capability 头走这条路）
+    assert_eq!(got("x-custom-thing").as_deref(), Some("kept"));
+    assert_eq!(got("x-claude-code-session-id").as_deref(), Some("sess-42"));
 }
 
 /// query string 原样透传给上游（Claude Code 实际发的是 POST /v1/messages?beta=true）。
@@ -1539,11 +1546,11 @@ async fn query_does_not_break_endpoint_path_match() {
     assert_eq!(reqs[0].url.query(), Some("stream=1"));
 }
 
-/// openai-responses 端点与另外两个端点共用 proxy_to_provider 的头白名单与 URL 构造，
+/// openai-responses 端点与另外两个端点共用 proxy_to_provider 的头转发与 URL 构造，
 /// 此处直测一遍以免「结构上共用」的论证被后续改动悄悄推翻。
 /// 与 anthropic 端点的唯一差异是鉴权头格式：openai 协议用 Authorization: Bearer。
 #[tokio::test(flavor = "multi_thread")]
-async fn openai_responses_forwards_whitelisted_headers_and_query() {
+async fn openai_responses_forwards_headers_and_query() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/responses"))
@@ -1561,7 +1568,7 @@ async fn openai_responses_forwards_whitelisted_headers_and_query() {
         .header("user-agent", "claude-cli/1.2.3")
         .header("Idempotency-Key", "idem-42")
         .header("accept-encoding", "gzip")
-        .header("x-custom-thing", "nope")
+        .header("x-custom-thing", "kept")
         .json(&serde_json::json!({"model": "gpt-4o", "input": "hi"}))
         .send()
         .await
@@ -1586,7 +1593,7 @@ async fn openai_responses_forwards_whitelisted_headers_and_query() {
     assert_eq!(h.get_all("authorization").iter().count(), 1);
 
     assert!(h.get("accept-encoding").is_none(), "accept-encoding must not be forwarded");
-    assert!(h.get("x-custom-thing").is_none());
+    assert_eq!(got("x-custom-thing").as_deref(), Some("kept"));
 }
 
 async fn provider_refresh_test_state() -> Arc<AppState> {

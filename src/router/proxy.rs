@@ -277,16 +277,15 @@ async fn proxy_to_provider(
         }
     }
 
-    // 5. 透传客户端关键请求头（白名单，不是黑名单）
-    // 不得加入 accept-encoding：reqwest 未启用 gzip/brotli feature，上游一旦压缩，
-    // SSE 行解析与 usage 提取会在压缩字节上静默失败（响应本身仍能原样透传给客户端，不报错）。
-    // 不得加入 authorization/x-api-key：reqwest 的 .header() 是 append 而非 insert，
-    // 会与上面写入的上游凭证并存为两个同名头。
-    for header_name in super::request_log::FORWARDED_HEADERS {
-        if let Some(value) = headers.get(*header_name) {
-            if let Ok(v) = value.to_str() {
-                req = req.header(*header_name, v);
-            }
+    // 5. 透传客户端请求头（排除名单，不是白名单）：只剔除网关自管或会破坏链路的头，
+    // 其余一律原样外发——Claude Code 每版本新增的 capability 头（如自动模式服务端检查依赖的
+    // 相关头）必须能透传。必须排除的理由见 request_log::NON_FORWARDED_HEADERS。
+    for (name, value) in headers.iter() {
+        if !super::request_log::is_forwardable(name.as_str()) {
+            continue;
+        }
+        if let Ok(v) = value.to_str() {
+            req = req.header(name, v);
         }
     }
 
