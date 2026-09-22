@@ -513,6 +513,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             icon: None,
+            console_url: None,
             channels: vec![],
             usage: Some(UsageDef {
                 adapter: adapter.into(),
@@ -602,7 +603,7 @@ mod tests {
         let state = build_state(vec![
             def_with_usage("on", "deepseek", Some(&ep)),
             def_with_usage("off", "deepseek", Some(&ep)),
-            ProviderDef { id: "plain".into(), name: "plain".into(), icon: None, channels: vec![], usage: None, config_error: None },
+            ProviderDef { id: "plain".into(), name: "plain".into(), icon: None, console_url: None, channels: vec![], usage: None, config_error: None },
         ]).await;
         set_provider_config(&state, "on", true, "sk").await;
         set_provider_config(&state, "off", false, "sk").await;

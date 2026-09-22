@@ -72,6 +72,8 @@ pub struct ProviderSummary {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console_url: Option<String>,
     pub is_enabled: bool,
     pub has_cost_api_key: bool,
     pub channels: Vec<ChannelDetail>,

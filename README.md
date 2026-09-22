@@ -160,6 +160,8 @@ Providers are defined in three layers, merged at startup:
 2. **`~/.mb/providers.json`** — same schema; a matching `id` overrides the builtin, a new `id` is appended. Use this for private or corporate providers without forking the repo.
 3. **SQLite** (runtime overrides, via the admin UI) — upstream API key, enabled state, per-channel base URL, model whitelist.
 
+Set the optional `console_url` field to an HTTP(S) URL to show a console link on the provider card. For example, `[{"id":"deepseek","console_url":"https://platform.deepseek.com/"}]` in `~/.mb/providers.json` overrides the builtin link; `"console_url": null` hides it.
+
 A provider can declare multiple **channels** of different protocol types (`openai_chat`, `openai_responses`, `anthropic`). A model is bound to **one** channel — each entry in the model whitelist carries its `channel_type`, so serving the same model on two channels means adding it to each one separately. Non-`claude`/`anthropic` models reachable via an Anthropic channel are also exposed with a `claude-` prefix, so Claude-Code-style clients can address them.
 
 For the official Anthropic provider, the provider dialog accepts an optional **Workspace ID**. It is sent as `anthropic-workspace-id` for model discovery (manual and scheduled) and inference; a client's header cannot override it. Multi-workspace API keys require it, while keys scoped to one workspace can leave it empty. Model discovery follows Anthropic's `has_more` / `last_id` pagination and only replaces the saved upstream snapshot after every page succeeds.

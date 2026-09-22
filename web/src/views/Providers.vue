@@ -31,7 +31,19 @@
                   <span v-else class="card-icon-fallback serif" aria-hidden="true">{{ (p.name || '?').charAt(0) }}</span>
                 </div>
                 <div class="card-hero-text">
-                  <h2 class="card-name serif">{{ p.name }}</h2>
+                  <div class="card-title-row">
+                    <h2 class="card-name serif">{{ p.name }}</h2>
+                    <a
+                      v-if="p.console_url && /^https?:\/\//i.test(p.console_url)"
+                      class="console-link"
+                      :href="p.console_url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      :aria-label="`${p.name} 控制台（新标签页打开）`"
+                      @click.stop
+                      @keydown.stop
+                    >控制台 ↗</a>
+                  </div>
                   <div class="card-meta mono">
                     <span class="card-status-dot" :class="{ on: p.is_enabled && !p.config_error }" />
                     <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '在线' : '停用') }}</span>
@@ -343,7 +355,7 @@ interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?
 interface DriftSummary { new: number; removed: number }
 interface Balance { adapter: string; status: string; data?: Record<string, any> | null; error_msg?: string | null; fetched_at: string }
 interface UsageDef { adapter: string; params?: Record<string, any>; result?: string; display?: string }
-interface ProviderSummary { has_cost_api_key: boolean; id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
+interface ProviderSummary { console_url?: string; has_cost_api_key: boolean; id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
 interface ChangeEntry { model_id: string; model_name: string }
 interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
@@ -899,6 +911,10 @@ onMounted(() => {
 .card-icon { width: 24px; height: 24px; object-fit: contain; }
 .card-icon-fallback { font-size: 18px; font-weight: 600; color: var(--mb-text-2); line-height: 1; }
 .card-hero-text { min-width: 0; flex: 1; }
+.card-title-row { display: flex; align-items: center; gap: 8px; }
+.console-link { flex-shrink: 0; font-size: 11px; color: var(--mb-text-3); text-decoration: none; }
+.console-link:hover { color: var(--mb-success-d); }
+.console-link:focus-visible { outline: 2px solid var(--mb-success); outline-offset: 2px; border-radius: 2px; }
 .card-name { font-size: 18px; font-weight: 600; color: var(--mb-text-1); letter-spacing: -0.01em; margin: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--mb-text-3); }
 .card-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mb-muted); flex-shrink: 0; box-shadow: none; animation: none; }

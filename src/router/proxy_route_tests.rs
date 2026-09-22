@@ -467,6 +467,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
             id: "alpha".into(),
             name: "Alpha".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server_a.uri(),
@@ -479,6 +480,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
             id: "beta".into(),
             name: "Beta".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server_b.uri(),
@@ -628,6 +630,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
             id: "kimi".into(),
             name: "Kimi".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
@@ -640,6 +643,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
             id: "kimi2".into(),
             name: "Kimi2".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
@@ -710,6 +714,7 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
+        console_url: None,
         channels: vec![ChannelDef {
             channel_type: "anthropic".into(),
             base_url: server.uri(),
@@ -798,6 +803,7 @@ async fn anthropic_same_provider_1m_variant_preferred() {
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
+        console_url: None,
         channels: vec![ChannelDef {
             channel_type: "anthropic".into(),
             base_url: server.uri(),
@@ -912,6 +918,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
             id: "alpha".into(),
             name: "Alpha".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server_a.uri(),
@@ -924,6 +931,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
             id: "MyClaude".into(),
             name: "MyClaude".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server_b.uri(),
@@ -1023,6 +1031,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
             id: "alpha".into(),
             name: "Alpha".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "openai_chat".into(),
                 base_url: server_a.uri(),
@@ -1035,6 +1044,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
             id: "beta".into(),
             name: "Beta".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "openai_chat".into(),
                 base_url: server_b.uri(),
@@ -1156,6 +1166,7 @@ async fn openai_chat_non_conflicting_uses_only_bare_key() {
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
+        console_url: None,
         channels: vec![ChannelDef {
             channel_type: "openai_chat".into(),
             base_url: server.uri(),
@@ -1238,6 +1249,7 @@ async fn openai_chat_responses_conflict_independent() {
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
+        console_url: None,
         channels: vec![
             ChannelDef {
                 channel_type: "openai_chat".into(),
@@ -1603,6 +1615,7 @@ async fn provider_refresh_test_state() -> Arc<AppState> {
             id: id.into(),
             name: id.into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "openai_chat".into(),
                 base_url: "https://example.com/v1".into(),

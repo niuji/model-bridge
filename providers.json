@@ -1,6 +1,7 @@
 [
   {
     "id": "openai",
+    "console_url": "https://platform.openai.com/",
     "name": "OpenAI",
     "icon": "openai.svg",
     "channels": [
@@ -10,6 +11,7 @@
   },
   {
     "id": "deepseek",
+    "console_url": "https://platform.deepseek.com/",
     "name": "DeepSeek",
     "icon": "deepseek.svg",
     "channels": [
@@ -29,6 +31,7 @@
   },
   {
     "id": "kimi",
+    "console_url": "https://platform.kimi.com/console",
     "name": "Kimi",
     "icon": "kimi.ico",
     "channels": [
@@ -47,6 +50,7 @@
   },
   {
     "id": "minimax",
+    "console_url": "https://platform.minimax.cn/console/access?tab=api-keys",
     "name": "MiniMax",
     "icon": "minimax.ico",
     "channels": [
@@ -57,6 +61,7 @@
   },
   {
     "id": "mimo",
+    "console_url": "https://platform.xiaomimimo.com/",
     "name": "小米 MiMo",
     "icon": "mimo.png",
     "channels": [
@@ -67,6 +72,7 @@
   },
   {
     "id": "bigmodel",
+    "console_url": "https://open.bigmodel.cn/overview",
     "name": "智谱",
     "icon": "bigmodel.ico",
     "usage": { "adapter": "bigmodel" },
@@ -77,6 +83,7 @@
   },
   {
     "id": "anthropic",
+    "console_url": "https://platform.claude.com/",
     "name": "Anthropic",
     "icon": "anthropic.svg",
     "usage": { "adapter": "anthropic_cost" },
@@ -86,6 +93,7 @@
   },
   {
     "id": "siliconflow",
+    "console_url": "https://cloud.siliconflow.cn/",
     "name": "SiliconFlow",
     "icon": "siliconflow.png",
     "channels": [
@@ -103,6 +111,7 @@
   },
   {
     "id": "openrouter",
+    "console_url": "https://openrouter.ai/settings/keys",
     "name": "OpenRouter",
     "icon": "openrouter.png",
     "channels": [
@@ -122,6 +131,7 @@
   },
   {
     "id": "volcark",
+    "console_url": "https://console.volcengine.com/ark/",
     "name": "火山方舟",
     "icon": "volcark.svg",
     "channels": [

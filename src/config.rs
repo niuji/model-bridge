@@ -86,6 +86,8 @@ pub struct ProviderDef {
     #[serde(default)]
     pub icon: Option<String>,
     #[serde(default)]
+    pub console_url: Option<String>,
+    #[serde(default)]
     pub channels: Vec<ChannelDef>,
     /// 余额查询适配声明（可选）：adapter 为内置实现名（见 balance_svc），params 为该 adapter 的自定义参数。
     /// 注意 ~/.mb/providers.json 对同 id provider 是浅合并：只写 usage 即可为内置 provider 增配余额查询
@@ -301,6 +303,7 @@ mod tests {
             id: "p".into(),
             name: "P".into(),
             icon: None,
+            console_url: None,
             channels: types
                 .iter()
                 .map(|t| ChannelDef {

@@ -80,6 +80,7 @@ pub async fn list_providers(
             id: def.id.clone(),
             name: def.name.clone(),
             icon: def.icon.clone(),
+            console_url: def.console_url.clone(),
             is_enabled,
             has_cost_api_key: config.as_ref().is_some_and(|c| !c.cost_api_key.is_empty()),
             channels,
@@ -631,6 +632,7 @@ mod anthropic_model_tests {
             id: "anthropic".into(),
             name: "Anthropic".into(),
             icon: None,
+            console_url: None,
             channels: vec![ChannelDef {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
@@ -1167,7 +1169,7 @@ mod drift_tests {
         ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from) }
     }
     fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
-        ProviderDef { id: id.into(), name: id.into(), icon: None, channels: chans, usage: None, config_error: None }
+        ProviderDef { id: id.into(), name: id.into(), icon: None, console_url: None, channels: chans, usage: None, config_error: None }
     }
 
     #[test]
@@ -1279,6 +1281,7 @@ mod config_error_tests {
             id: "dup".into(),
             name: "Dup".into(),
             icon: None,
+            console_url: None,
             channels: vec![ch("https://a.example/v1"), ch("https://b.example/v1")],
             usage: None,
             config_error: None,
