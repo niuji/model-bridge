@@ -31,22 +31,10 @@
                   <span v-else class="card-icon-fallback serif" aria-hidden="true">{{ (p.name || '?').charAt(0) }}</span>
                 </div>
                 <div class="card-hero-text">
-                  <div class="card-title-row">
-                    <h2 class="card-name serif">{{ p.name }}</h2>
-                    <a
-                      v-if="p.console_url && /^https?:\/\//i.test(p.console_url)"
-                      class="console-link"
-                      :href="p.console_url"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      :aria-label="`${p.name} 控制台（新标签页打开）`"
-                      @click.stop
-                      @keydown.stop
-                    >控制台 ↗</a>
-                  </div>
+                  <h2 class="card-name serif">{{ p.name }}</h2>
                   <div class="card-meta mono">
                     <span class="card-status-dot" :class="{ on: p.is_enabled && !p.config_error }" />
-                    <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '在线' : '停用') }}</span>
+                    <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '已启用' : '已停用') }}</span>
                     <span class="meta-sep">·</span>
                     <span>{{ enabledModelTotal(p) }} 模型</span>
                     <span
@@ -67,8 +55,6 @@
                 <n-switch :value="p.is_enabled" size="small" :disabled="!!p.config_error || togglingProviders.has(p.id)" :loading="togglingProviders.has(p.id)" @update:value="(v: boolean) => quickToggle(p, v)" @click.stop />
               </div>
 
-              <div class="card-divider" />
-
               <div class="card-channels">
                 <div
                   v-for="ch in sortedChannels(p)"
@@ -82,49 +68,62 @@
                 </div>
               </div>
 
-              <div v-if="p.config_error || (p.is_enabled && p.usage)" class="card-quota">
-                <!-- 配置错误优先于余额，且只出图标：文案挂 title，避免撑开状态行 -->
-                <span v-if="p.config_error" class="quota-error" :title="`配置错误：${p.config_error}`">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                    <line x1="12" y1="9" x2="12" y2="13" />
-                    <line x1="12" y1="17" x2="12.01" y2="17" />
-                  </svg>
-                  <span class="sr-only">配置错误：{{ p.config_error }}</span>
-                </span>
-                <template v-else>
-                  <div v-if="isCost(p)" class="quota-cost" :title="stampTitle(p)">
-                    <span class="quota-cost-label mono">{{ costLabel(p) }}</span>
-                    <span class="quota-value mono" :class="{ err: p.balance?.status === 'error' }">{{ p.has_cost_api_key ? (balanceText(p) || '—') : '未配置费用 Key' }}</span>
-                  </div>
-                  <span
-                    v-else
-                    class="quota-value mono"
-                    :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) && !planChips(p).length }"
-                    :title="stampTitle(p)"
-                  >{{ balanceText(p) || (planChips(p).length ? '' : '—') }}</span>
-                  <!-- bigmodel 等复合载荷的第二段：编码计划配额窗口，chip 形式贴在金额后 -->
-                  <span v-if="planChips(p).length" class="quota-plan" :title="stampTitle(p)">
-                    <span v-for="c in planChips(p)" :key="c.label" class="plan-chip" :class="{ hot: c.used_pct >= 80 }">{{ c.label }} {{ Math.round(c.used_pct) }}%</span>
-                  </span>
-                </template>
-                <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
-                     不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
-                <button
-                  v-if="!p.config_error"
-                  class="quota-refresh"
-                  :class="{ spinning: refreshingId === p.id }"
-                  :disabled="refreshingId === p.id || (isCost(p) && !p.has_cost_api_key)"
-                  :aria-label="`重新查询 ${p.name} ${isCost(p) ? '费用' : '额度'}`"
-                  :title="isCost(p) ? '重新查询已消费金额' : '重新查询额度'"
-                  @click.stop="refreshBalance(p)"
+              <div class="card-footer">
+                <a
+                  v-if="p.console_url && /^https?:\/\//i.test(p.console_url)"
+                  class="console-link"
+                  :href="p.console_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :aria-label="`${p.name} 控制台（新标签页打开）`"
+                  @click.stop
                   @keydown.stop
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="23,4 23,10 17,10" />
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                  </svg>
-                </button>
+                >控制台 <span aria-hidden="true">↗</span></a>
+                <div v-if="p.config_error || (p.is_enabled && p.usage)" class="card-quota">
+                  <!-- 配置错误优先于余额，且只出图标：文案挂 title，避免撑开状态行 -->
+                  <span v-if="p.config_error" class="quota-error" :title="`配置错误：${p.config_error}`">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <line x1="12" y1="9" x2="12" y2="13" />
+                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    <span class="sr-only">配置错误：{{ p.config_error }}</span>
+                  </span>
+                  <template v-else>
+                    <div v-if="isCost(p)" class="quota-cost" :title="stampTitle(p)">
+                      <span class="quota-cost-label mono">{{ costLabel(p) }}</span>
+                      <span class="quota-value mono" :class="{ err: p.balance?.status === 'error' }">{{ p.has_cost_api_key ? (balanceText(p) || '—') : '未配置费用 Key' }}</span>
+                    </div>
+                    <span
+                      v-else
+                      class="quota-value mono"
+                      :class="{ neg: balanceNegative(p), pos: balancePositive(p), err: p.balance?.status === 'error', empty: !balanceText(p) && !planChips(p).length }"
+                      :title="stampTitle(p)"
+                    >{{ balanceText(p) || (planChips(p).length ? '' : '—') }}</span>
+                    <!-- bigmodel 等复合载荷的第二段：编码计划配额窗口，chip 形式贴在金额后 -->
+                    <span v-if="planChips(p).length" class="quota-plan" :title="stampTitle(p)">
+                      <span v-for="c in planChips(p)" :key="c.label" class="plan-chip" :class="{ hot: c.used_pct >= 80 }">{{ c.label }} {{ Math.round(c.used_pct) }}%</span>
+                    </span>
+                  </template>
+                  <!-- keydown 必须 stop：卡片自身监听 Enter/Space 打开配置弹窗，
+                       不拦住冒泡的话键盘按一次会既刷新额度又弹窗。 -->
+                  <button
+                    v-if="!p.config_error"
+                    class="quota-refresh"
+                    :class="{ spinning: refreshingId === p.id }"
+                    :disabled="refreshingId === p.id || (isCost(p) && !p.has_cost_api_key)"
+                    :aria-label="`重新查询 ${p.name} ${isCost(p) ? '费用' : '额度'}`"
+                    :title="isCost(p) ? '重新查询已消费金额' : '重新查询额度'"
+                    @click.stop="refreshBalance(p)"
+                    @keydown.stop
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="23,4 23,10 17,10" />
+                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                  </button>
+                </div>
+                <span v-else class="card-config-hint">配置模型 <span aria-hidden="true">→</span></span>
               </div>
             </article>
           </div>
@@ -864,7 +863,7 @@ onMounted(() => {
 .page-rule { margin-top: 16px; height: 1px; background: linear-gradient(90deg, var(--mb-border) 0%, transparent 96%); }
 
 /* ---- catalog grid ---- */
-.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; align-items: stretch; }
+.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; align-items: stretch; }
 
 /* ---- status groups ---- */
 /* 组名只留给 aria：状态本身卡片上已有（状态点/在线-停用文字/警告图标），
@@ -881,9 +880,9 @@ onMounted(() => {
   display: flex; flex-direction: column;
   background: var(--mb-surface);
   border: 1px solid var(--mb-border);
-  border-radius: 12px;
-  padding: 16px 18px;
-  min-height: 190px;
+  border-radius: 16px;
+  min-height: 245px;
+  box-shadow: var(--mb-shadow-1);
   cursor: pointer;
   overflow: hidden;
   opacity: var(--max-opacity);
@@ -891,10 +890,10 @@ onMounted(() => {
   animation: card-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
   animation-delay: calc(var(--i, 0) * 45ms);
 }
-.provider-card:hover { border-color: rgba(34,197,94,0.45); box-shadow: var(--mb-shadow-3); transform: translateY(-2px); }
+.provider-card:hover { border-color: rgba(34,197,94,0.45); box-shadow: var(--mb-shadow-2); transform: translateY(-2px); }
 .provider-card:focus-visible { outline: 2px solid rgba(34,197,94,0.5); outline-offset: 2px; }
-.provider-card.disabled { --max-opacity: 0.66; }
-.provider-card.config-error { cursor: default; --max-opacity: 0.66; }
+.provider-card.disabled .card-name { color: var(--mb-text-2); }
+.provider-card.config-error { cursor: default; border-color: rgba(245,158,11,0.35); }
 .provider-card.config-error:hover { transform: none; border-color: rgba(245,158,11,0.45); box-shadow: var(--mb-shadow-1); }
 .quota-error { display: inline-flex; align-items: center; color: var(--mb-warning); cursor: help; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
@@ -906,36 +905,35 @@ onMounted(() => {
   to   { opacity: var(--max-opacity); translate: 0 0; }
 }
 
-.card-hero { display: flex; align-items: center; gap: 12px; }
-.card-icon-well { flex-shrink: 0; width: 38px; height: 38px; border-radius: 8px; background: transparent; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.card-icon { width: 24px; height: 24px; object-fit: contain; }
+.card-hero { display: flex; align-items: center; gap: 12px; padding: 22px 20px 17px; }
+.card-hero > .n-switch { flex-shrink: 0; }
+.card-icon-well { flex-shrink: 0; width: 42px; height: 42px; border: 1px solid var(--mb-border); box-sizing: border-box; border-radius: 12px; background: #F1F5F9; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.card-icon { width: 27px; height: 27px; object-fit: contain; }
 .card-icon-fallback { font-size: 18px; font-weight: 600; color: var(--mb-text-2); line-height: 1; }
 .card-hero-text { min-width: 0; flex: 1; }
-.card-title-row { display: flex; align-items: center; gap: 8px; }
-.console-link { flex-shrink: 0; font-size: 11px; color: var(--mb-text-3); text-decoration: none; }
+.console-link { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 11px; color: var(--mb-text-2); text-decoration: none; padding: 5px 0; }
 .console-link:hover { color: var(--mb-success-d); }
 .console-link:focus-visible { outline: 2px solid var(--mb-success); outline-offset: 2px; border-radius: 2px; }
-.card-name { font-size: 18px; font-weight: 600; color: var(--mb-text-1); letter-spacing: -0.01em; margin: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--mb-text-3); }
+.card-name { font-size: 16px; font-weight: 600; color: var(--mb-text-1); letter-spacing: -0.01em; margin: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; color: var(--mb-text-3); }
 .card-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mb-muted); flex-shrink: 0; box-shadow: none; animation: none; }
-.card-status-dot.on { background: var(--mb-success); box-shadow: 0 0 6px rgba(34,197,94,0.45); animation: dot-pulse 3s ease-in-out infinite; }
+.card-status-dot.on { background: var(--mb-success); box-shadow: 0 0 0 3px var(--mb-tint-green); }
 .status-word { font-weight: 600; color: var(--mb-text-2); }
 .provider-card.disabled .status-word { color: var(--mb-text-3); }
 .meta-sep { color: var(--mb-muted); }
 
-/* single hairline between hero and the channel listing */
-.card-divider { height: 1px; margin: 14px 0 4px; background: var(--mb-divider); }
-
-/* per-channel listing: dot-led rows, label left, count right */
-.card-channels { display: flex; flex-direction: column; }
-.channel-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-.channel-row + .channel-row { border-top: 1px solid var(--mb-divider); }
-.ch-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mb-muted); flex-shrink: 0; box-sizing: border-box; }
+/* 通道数量按行对齐；底栏随卡片高度对齐，避免通道较少时操作入口上浮。 */
+.card-channels { display: flex; flex-direction: column; flex: 1; padding: 0 20px 18px; }
+.channel-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 7px; }
+.channel-row:nth-child(odd) { background: var(--mb-surface-inset); }
+.ch-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--mb-muted); flex-shrink: 0; box-sizing: border-box; }
 .ch-dot.on { background: var(--mb-success); }
-.channel-row.off .ch-dot { background: transparent; border: 1px solid var(--mb-muted); }
-.ch-label { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; color: var(--mb-text-2); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ch-count { font-size: 12px; font-weight: 600; color: #9a8c72; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.channel-row.off .ch-label, .channel-row.off .ch-count { color: var(--mb-muted); }
+.channel-row.off .ch-dot { background: transparent; border: 1px solid var(--mb-text-3); }
+.ch-label { flex: 1; min-width: 0; font-size: 11px; font-weight: 500; color: var(--mb-text-2); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-count { min-width: 25px; box-sizing: border-box; text-align: center; border-radius: 5px; padding: 2px 5px; font-size: 11px; font-weight: 500; color: var(--mb-text-2); background: var(--mb-item-hover); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.channel-row.off .ch-label, .channel-row.off .ch-count { color: var(--mb-text-3); }
+.card-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 49px; box-sizing: border-box; padding: 10px 20px; border-top: 1px solid var(--mb-divider); }
+.card-config-hint { margin-left: auto; font-size: 11px; color: var(--mb-text-3); }
 
 .provider-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 0; }
 .empty-mark { font-size: 30px; color: var(--mb-muted); line-height: 1; }
@@ -945,7 +943,7 @@ onMounted(() => {
 
 .config-modal { --n-title-text-color: var(--mb-text-1); }
 .modal-header-hero { display: flex; align-items: center; gap: 10px; }
-.modal-header-hero .card-icon-well { width: 30px; height: 30px; border-radius: 7px; background: transparent; }
+.modal-header-hero .card-icon-well { border: 0; width: 30px; height: 30px; border-radius: 7px; background: transparent; }
 .modal-header-hero .card-icon { width: 19px; height: 19px; }
 .modal-header-hero .card-icon-fallback { font-size: 15px; }
 .modal-header-name { font-size: 18px; font-weight: 600; color: var(--mb-text-1); letter-spacing: -0.01em; line-height: 1.2; }
@@ -1010,15 +1008,9 @@ onMounted(() => {
 .diff-group-label.renamed { color: var(--mb-warning); }
 .diff-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
 
-/* ---- 额度基座 ----
-   安静的底部元信息行：细分隔线 + 次要色小字，不与通道列表抢注意力；
-   margin-top:auto 把它压到卡底，让有额度的卡片一律以数字收尾。 */
-.card-channels:has(+ .card-quota) { margin-bottom: 10px; }
 .card-quota {
-  margin-top: auto;
-  padding-top: 9px;
-  border-top: 1px solid var(--mb-divider);
-  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  margin-left: auto; min-width: 0; max-width: 100%;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px;
 }
 .quota-value {
   font-size: 12px; font-weight: 500; color: var(--mb-text-2);
@@ -1031,7 +1023,7 @@ onMounted(() => {
 .quota-value.empty { color: var(--mb-text-3); }
 
 /* 配额窗口小徽章：与 channel-tab-count 同族（inset 底 + 次要色），hot=用量≥80% 转琥珀 */
-.quota-plan { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.quota-plan { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
 .plan-chip {
   font-size: 10px; padding: 1px 6px; border-radius: 6px;
   background: var(--mb-surface-inset); color: var(--mb-text-3);
@@ -1070,6 +1062,11 @@ onMounted(() => {
 .changes-group.added .changes-group-label { color: var(--mb-success-d); }
 .changes-group.removed .changes-group-label { color: var(--mb-error); }
 .changes-row { font-size: 13px; color: var(--mb-text-2); padding: 2px 0 2px 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-card { animation: none; transition: none; }
+  .provider-card:hover { transform: none; }
+}
 
 @media (max-width: 780px) {
   .model-table-header,

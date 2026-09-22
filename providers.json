@@ -61,7 +61,7 @@
   },
   {
     "id": "mimo",
-    "console_url": "https://platform.xiaomimimo.com/",
+    "console_url": "https://platform.xiaomimimo.com/console/api-keys",
     "name": "小米 MiMo",
     "icon": "mimo.png",
     "channels": [
