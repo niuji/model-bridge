@@ -156,7 +156,7 @@ Without `encryption_key`, client `mb-` keys are stored in plaintext (acceptable 
 
 Providers are defined in three layers, merged at startup:
 
-1. **Builtin `providers.json`** — id, name, channels, models endpoint. Embedded in the binary. Ships with **OpenAI, DeepSeek, Kimi, MiniMax, 小米 MiMo (Xiaomi MiMo), 智谱 (BigModel), Anthropic, SiliconFlow, OpenRouter, 火山方舟 (Volcengine Ark)** — `providers.json` is the source of truth for this list.
+1. **Builtin `providers.json`** — id, name, channels, models endpoint. Embedded in the binary. Ships with **OpenAI, DeepSeek, Kimi, MiniMax, 小米 MiMo (Xiaomi MiMo), 智谱 (BigModel), SiliconFlow, OpenRouter, 火山方舟 (Volcengine Ark)** — `providers.json` is the source of truth for this list.
 2. **`~/.mb/providers.json`** — same schema; a matching `id` overrides the builtin, a new `id` is appended. Use this for private or corporate providers without forking the repo.
 3. **SQLite** (runtime overrides, via the admin UI) — upstream API key, enabled state, per-channel base URL, model whitelist.
 

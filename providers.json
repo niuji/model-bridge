@@ -82,16 +82,6 @@
     ]
   },
   {
-    "id": "anthropic",
-    "console_url": "https://platform.claude.com/",
-    "name": "Anthropic",
-    "icon": "anthropic.svg",
-    "usage": { "adapter": "anthropic_cost" },
-    "channels": [
-      { "type": "anthropic", "base_url": "https://api.anthropic.com/v1", "models_endpoint": "https://api.anthropic.com/v1/models" }
-    ]
-  },
-  {
     "id": "siliconflow",
     "console_url": "https://cloud.siliconflow.cn/",
     "name": "SiliconFlow",
