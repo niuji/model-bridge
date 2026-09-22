@@ -56,6 +56,16 @@
     ]
   },
   {
+    "id": "mimo",
+    "name": "小米 MiMo",
+    "icon": "mimo.png",
+    "channels": [
+      { "type": "openai_chat", "base_url": "https://api.xiaomimimo.com/v1", "models_endpoint": "https://api.xiaomimimo.com/v1/models" },
+      { "type": "openai_responses", "base_url": "https://api.xiaomimimo.com/v1", "models_endpoint": "https://api.xiaomimimo.com/v1/models" },
+      { "type": "anthropic", "base_url": "https://api.xiaomimimo.com/anthropic/v1", "models_endpoint": "https://api.xiaomimimo.com/v1/models" }
+    ]
+  },
+  {
     "id": "bigmodel",
     "name": "智谱",
     "icon": "bigmodel.ico",

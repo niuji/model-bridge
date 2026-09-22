@@ -156,7 +156,7 @@ Without `encryption_key`, client `mb-` keys are stored in plaintext (acceptable 
 
 Providers are defined in three layers, merged at startup:
 
-1. **Builtin `providers.json`** — id, name, channels, models endpoint. Embedded in the binary. Ships with **OpenAI, DeepSeek, Kimi, MiniMax, 智谱 (BigModel), Anthropic, SiliconFlow, OpenRouter, 火山方舟 (Volcengine Ark)** — `providers.json` is the source of truth for this list.
+1. **Builtin `providers.json`** — id, name, channels, models endpoint. Embedded in the binary. Ships with **OpenAI, DeepSeek, Kimi, MiniMax, 小米 MiMo (Xiaomi MiMo), 智谱 (BigModel), Anthropic, SiliconFlow, OpenRouter, 火山方舟 (Volcengine Ark)** — `providers.json` is the source of truth for this list.
 2. **`~/.mb/providers.json`** — same schema; a matching `id` overrides the builtin, a new `id` is appended. Use this for private or corporate providers without forking the repo.
 3. **SQLite** (runtime overrides, via the admin UI) — upstream API key, enabled state, per-channel base URL, model whitelist.
 
@@ -167,6 +167,8 @@ For the official Anthropic provider, the provider dialog accepts an optional **W
 The backend retains optional **Cost API Key** support for credentials with Admin API permissions, but the provider dialog does not expose a cost-key input. Existing credentials are preserved when saving the form. This key is used only for cost queries, never inference, and is not returned by the configuration API. Without it, scheduled cost queries are skipped. Like upstream inference keys, it is stored in the local database, so protect that file.
 
 The Anthropic card shows **month-to-date spending in USD (UTC), not remaining credit balance**. A configured Workspace ID limits the total to that workspace; otherwise it covers the entire organization. Reports include all usage in that scope, not just traffic through this gateway. The adapter follows Cost API pagination and converts amounts from cents to dollars. Refresh uses the existing balance refresh interval/button; failures retain the last successful amount, month, and timestamp. Changing the workspace or cost key clears the old snapshot. Reporting can lag, and Priority Tier costs are excluded by the upstream Cost API. See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication) and [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api).
+
+Xiaomi MiMo uses the **pay-as-you-go API** at `api.xiaomimimo.com`, with OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages channels. Enter a pay-as-you-go API key in the provider dialog, sync and select models for each desired channel, then enable the provider. Token Plan keys use separate endpoints and do not work with this preset. See the [official setup guide](https://mimo.mi.com/docs/en-US/quick-start/summary/first-api-call). MiMo's Responses API does not support `previous_response_id`; clients must send conversation history with each request ([API reference](https://mimo.mi.com/docs/en-US/api/chat/responses)).
 
 ## Admin API
 
