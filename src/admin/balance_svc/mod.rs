@@ -132,6 +132,8 @@ pub async fn read_balance_row(pool: &SqlitePool, provider_id: &str) -> anyhow::R
 /// 探测单个 provider 并落库，返回最新快照行。上游/契约失败落 error 行后仍返回该行
 /// （供 refresh 端点直接回显）；DB 错误及查询期间费用配置变更向上抛。
 pub async fn probe_one(state: &Arc<AppState>, def: &ProviderDef, api_key: &str) -> anyhow::Result<BalanceRow> {
+    anyhow::ensure!(def.access_type == crate::config::AccessType::ApiKey && def.config_error.is_none(),
+        "balance is unavailable for this provider configuration");
     let Some(usage) = def.usage.as_ref() else {
         anyhow::bail!("provider '{}' has no usage adapter configured", def.id);
     };
@@ -162,7 +164,7 @@ pub async fn probe_one(state: &Arc<AppState>, def: &ProviderDef, api_key: &str) 
     if usage.adapter == "anthropic_cost" {
         // 配置保存与快照写入在同一 SQLite 事务内互斥，旧请求不能恢复已被清除的费用。
         let current: (String, String) = sqlx::query_as(
-            "SELECT workspace_id, cost_api_key FROM provider_config WHERE provider_id = ?",
+            "SELECT workspace_id, cost_api_key FROM provider_api_key_credentials WHERE provider_id = ?",
         )
         .bind(&def.id)
         .fetch_optional(&mut *tx)
@@ -197,7 +199,7 @@ pub async fn probe_balances(state: &Arc<AppState>) -> anyhow::Result<()> {
         api_key: String,
     }
     let cfgs: Vec<CfgRow> =
-        sqlx::query_as::<_, CfgRow>("SELECT provider_id, is_enabled, api_key FROM provider_config")
+        sqlx::query_as::<_, CfgRow>("SELECT c.provider_id,c.is_enabled,COALESCE(k.api_key,'') AS api_key FROM provider_config c LEFT JOIN provider_api_key_credentials k USING(provider_id)")
             .fetch_all(&state.db)
             .await?;
     let mut enabled: HashMap<String, bool> = HashMap::new();
@@ -207,7 +209,7 @@ pub async fn probe_balances(state: &Arc<AppState>) -> anyhow::Result<()> {
         keys.insert(c.provider_id, c.api_key);
     }
     for def in &state.provider_defs {
-        if def.usage.is_none() {
+        if def.usage.is_none() || def.access_type != crate::config::AccessType::ApiKey || def.config_error.is_some() {
             continue;
         }
         if !enabled.get(&def.id).copied().unwrap_or(false) {
@@ -358,7 +360,7 @@ mod tests {
         let row = probe_one(&state, &def, "inference-key").await.unwrap();
         assert_eq!(row.status, "error");
         assert!(server.received_requests().await.unwrap().is_empty());
-        sqlx::query("UPDATE provider_config SET cost_api_key = 'admin-key'")
+        sqlx::query("UPDATE provider_api_key_credentials SET cost_api_key = 'admin-key'")
             .execute(&state.db)
             .await
             .unwrap();
@@ -420,7 +422,7 @@ mod tests {
         let def = def_with_usage("anthropic", "anthropic_cost", Some(&server.uri()));
         let state = build_state(vec![def.clone()]).await;
         set_provider_config(&state, "anthropic", true, "inference").await;
-        sqlx::query("UPDATE provider_config SET cost_api_key = 'admin'")
+        sqlx::query("UPDATE provider_api_key_credentials SET cost_api_key = 'admin'")
             .execute(&state.db)
             .await
             .unwrap();
@@ -488,6 +490,8 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         run_migrations(&pool).await.unwrap();
         Arc::new(AppState {
+            subscription: std::sync::Arc::new(crate::providers::openai_subscription::SubscriptionService::new(pool.clone(), reqwest::Client::new(), None)),
+            admin_base_url: "http://localhost:10020".into(),
             updates: std::sync::Arc::new(crate::update::Manager::default()),
             usage_tasks: tokio_util::task::TaskTracker::new(),
             openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
@@ -509,7 +513,7 @@ mod tests {
         if let Some(url) = endpoint {
             params.insert("endpoint".into(), json!(url));
         }
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: id.into(),
             name: id.into(),
             icon: None,
@@ -526,11 +530,28 @@ mod tests {
     }
 
     async fn set_provider_config(state: &AppState, id: &str, enabled: bool, api_key: &str) {
-        sqlx::query("INSERT INTO provider_config (provider_id, api_key, is_enabled) VALUES (?, ?, ?)")
-            .bind(id).bind(api_key).bind(enabled)
+        sqlx::query("INSERT INTO provider_config (provider_id, is_enabled) VALUES (?, ?)")
+            .bind(id).bind(enabled)
             .execute(&state.db)
             .await
             .unwrap();
+        sqlx::query("INSERT INTO provider_api_key_credentials (provider_id, api_key) VALUES (?, ?)")
+            .bind(id).bind(api_key).execute(&state.db).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn balance_skips_subscription_residual_credentials_and_invalid_config() {
+        let mut subscription = def_with_usage("sub", "deepseek", None);
+        subscription.access_type = crate::config::AccessType::Subscription;
+        let mut invalid = def_with_usage("bad", "deepseek", None);
+        invalid.config_error = Some("invalid".into());
+        let state = build_state(vec![subscription.clone(), invalid]).await;
+        set_provider_config(&state, "sub", true, "").await;
+        set_provider_config(&state, "bad", true, "").await;
+        probe_balances(&state).await.unwrap();
+        assert!(read_balance_row(&state.db, "sub").await.unwrap().is_none());
+        assert!(read_balance_row(&state.db, "bad").await.unwrap().is_none());
+        assert!(probe_one(&state, &subscription, "").await.is_err());
     }
 
     #[tokio::test]
@@ -603,7 +624,7 @@ mod tests {
         let state = build_state(vec![
             def_with_usage("on", "deepseek", Some(&ep)),
             def_with_usage("off", "deepseek", Some(&ep)),
-            ProviderDef { id: "plain".into(), name: "plain".into(), icon: None, console_url: None, channels: vec![], usage: None, config_error: None },
+            ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None, id: "plain".into(), name: "plain".into(), icon: None, console_url: None, channels: vec![], usage: None, config_error: None },
         ]).await;
         set_provider_config(&state, "on", true, "sk").await;
         set_provider_config(&state, "off", false, "sk").await;

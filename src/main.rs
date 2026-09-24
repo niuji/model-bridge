@@ -3,6 +3,7 @@ mod config;
 mod crypto;
 mod db;
 mod middleware;
+mod providers;
 mod router;
 mod state;
 mod update;
@@ -106,7 +107,10 @@ async fn main() -> anyhow::Result<()> {
     };
     let proxy_base_url = format!("http://{}:{}", proxy_host, app_config.proxy.port);
 
+    let subscription = Arc::new(crate::providers::openai_subscription::SubscriptionService::new(pool.clone(), client.clone(), encryption_key));
     let state = Arc::new(AppState {
+        subscription,
+        admin_base_url: format!("http://localhost:{}", app_config.admin.port),
         updates: updates.clone(),
         usage_tasks: usage_tasks.clone(),
         request_log_enabled: tokio::sync::RwLock::new(false),

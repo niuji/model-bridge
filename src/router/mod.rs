@@ -3,6 +3,8 @@ pub mod update;
 pub mod models_list;
 pub mod proxy;
 mod request_log;
+mod subscription_proxy;
+mod subscription_admin;
 
 #[cfg(test)]
 mod proxy_route_tests;
@@ -52,6 +54,11 @@ pub fn create_proxy_router(state: Arc<AppState>) -> Router {
 /// 构建管理路由（Admin API + Web 管理界面）
 pub fn create_admin_router(state: Arc<AppState>) -> Router {
     let admin_api = Router::new()
+        .route("/providers/{id}/subscription/login", axum::routing::post(subscription_admin::login))
+        .route("/providers/{id}/subscription/login/{session}", axum::routing::get(subscription_admin::status).delete(subscription_admin::cancel))
+        .route("/providers/{id}/subscription/login/{session}/callback", axum::routing::post(subscription_admin::callback))
+        .route("/providers/{id}/subscription/account", axum::routing::delete(subscription_admin::logout))
+        .route("/providers/{id}/models/query", axum::routing::post(subscription_admin::models))
         .route("/update", axum::routing::get(update::status))
         .route("/update/check", axum::routing::post(update::check))
         .route("/update/apply", axum::routing::post(update::apply))

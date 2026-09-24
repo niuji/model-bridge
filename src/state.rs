@@ -8,6 +8,7 @@ use crate::config::ProviderDef;
 /// 内存中的 Provider 路由信息
 #[derive(Debug, Clone)]
 pub struct ProviderRoute {
+    pub access_type: crate::config::AccessType,
     pub provider_id: String,
     pub provider_name: String,
     /// 原始 model_id（保留大小写），用于上游请求
@@ -21,6 +22,8 @@ pub struct ProviderRoute {
 
 /// 应用程序全局状态
 pub struct AppState {
+    pub subscription: Arc<crate::providers::openai_subscription::SubscriptionService>,
+    pub admin_base_url: String,
     pub updates: Arc<crate::update::Manager>,
     pub usage_tasks: tokio_util::task::TaskTracker,
     /// 临时诊断开关：仅在内存中生效，每次启动均关闭。

@@ -79,7 +79,7 @@ fn hex_sha256(s: &str) -> String {
 
 /// 构造一个 ProviderRoute：model_id/model_name 同名，base_url 指向给定上游。
 fn route(model_id: &str, base_url: &str) -> ProviderRoute {
-    ProviderRoute {
+    ProviderRoute { access_type: crate::config::AccessType::ApiKey,
         provider_id: "prov".into(),
         provider_name: "Prov".into(),
         model_id: model_id.into(),
@@ -101,6 +101,8 @@ async fn build_state_with_defs(defs: Vec<ProviderDef>) -> Arc<AppState> {
     let mut cache = HashMap::new();
     cache.insert(hex_sha256(TEST_KEY), "key-1".to_string());
     Arc::new(AppState {
+            subscription: std::sync::Arc::new(crate::providers::openai_subscription::SubscriptionService::new(pool.clone(), reqwest::Client::new(), None)),
+            admin_base_url: "http://localhost:10020".into(),
         updates: std::sync::Arc::new(crate::update::Manager::default()),
         usage_tasks: tokio_util::task::TaskTracker::new(),
         openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
@@ -132,6 +134,8 @@ async fn build_state(
     let mut cache = HashMap::new();
     cache.insert(hex_sha256(TEST_KEY), "key-1".to_string());
     Arc::new(AppState {
+            subscription: std::sync::Arc::new(crate::providers::openai_subscription::SubscriptionService::new(pool.clone(), reqwest::Client::new(), None)),
+            admin_base_url: "http://localhost:10020".into(),
         updates: std::sync::Arc::new(crate::update::Manager::default()),
         usage_tasks: tokio_util::task::TaskTracker::new(),
         openai_chat_routes: Arc::new(RwLock::new(chat)),
@@ -463,7 +467,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
 
     // 两个 provider 声明同名模型 claude-sonnet-4，channel 均启用、base_url 各自指向自己的 mock
     let defs = vec![
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "alpha".into(),
             name: "Alpha".into(),
             icon: None,
@@ -476,7 +480,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
             usage: None,
             config_error: None,
         },
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "beta".into(),
             name: "Beta".into(),
             icon: None,
@@ -626,7 +630,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
 
     // 两个 provider 声明相同的「自带 claude- 前缀 + [1M] 后缀」模型 → 冲突 → 只走限定名
     let defs = vec![
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "kimi".into(),
             name: "Kimi".into(),
             icon: None,
@@ -639,7 +643,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
             usage: None,
             config_error: None,
         },
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "kimi2".into(),
             name: "Kimi2".into(),
             icon: None,
@@ -710,7 +714,7 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
         .mount(&server)
         .await;
 
-    let defs = vec![ProviderDef {
+    let defs = vec![ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
@@ -799,7 +803,7 @@ async fn anthropic_same_provider_1m_variant_preferred() {
         .mount(&server)
         .await;
 
-    let defs = vec![ProviderDef {
+    let defs = vec![ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
@@ -914,7 +918,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
 
     // 大写 provider id（用户自定义 provider 合法形态）声明同名模型 → 冲突 → 走限定名 key
     let defs = vec![
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "alpha".into(),
             name: "Alpha".into(),
             icon: None,
@@ -927,7 +931,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
             usage: None,
             config_error: None,
         },
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "MyClaude".into(),
             name: "MyClaude".into(),
             icon: None,
@@ -1027,7 +1031,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
 
     // 两个 provider 在 chat 通道声明同名 gpt-4o → 冲突 → 走限定名 key
     let defs = vec![
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "alpha".into(),
             name: "Alpha".into(),
             icon: None,
@@ -1040,7 +1044,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
             usage: None,
             config_error: None,
         },
-        ProviderDef {
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "beta".into(),
             name: "Beta".into(),
             icon: None,
@@ -1162,7 +1166,7 @@ async fn openai_chat_non_conflicting_uses_only_bare_key() {
         .mount(&server)
         .await;
 
-    let defs = vec![ProviderDef {
+    let defs = vec![ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
@@ -1245,7 +1249,7 @@ async fn openai_chat_responses_conflict_independent() {
         .await;
 
     // 单 provider，chat 与 responses 两通道各声明 gpt-4o → 跨表同名不冲突，各用裸名 key
-    let defs = vec![ProviderDef {
+    let defs = vec![ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
         id: "alpha".into(),
         name: "Alpha".into(),
         icon: None,
@@ -1611,7 +1615,7 @@ async fn openai_responses_forwards_headers_and_query() {
 async fn provider_refresh_test_state() -> Arc<AppState> {
     let defs = ["p", "other"]
         .into_iter()
-        .map(|id| ProviderDef {
+        .map(|id| ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: id.into(),
             name: id.into(),
             icon: None,
@@ -1703,7 +1707,7 @@ async fn provider_save_reports_route_refresh_failure() {
         .unwrap()
         .contains("配置已保存，但路由刷新失败"));
     let key: String =
-        sqlx::query_scalar("SELECT api_key FROM provider_config WHERE provider_id = 'p'")
+        sqlx::query_scalar("SELECT api_key FROM provider_api_key_credentials WHERE provider_id = 'p'")
             .fetch_one(&state.db)
             .await
             .unwrap();
@@ -1872,4 +1876,163 @@ async fn graceful_shutdown_waits_for_live_sse_and_its_usage_record_after_admin_e
     let usage:(i64,i64)=sqlx::query_as("SELECT input_tokens, output_tokens FROM usage_records").fetch_one(&state.db).await.unwrap();
     assert_eq!(usage,(7,3));
     upstream_task.abort();
+}
+
+
+async fn subscription_state(upstream: &str) -> Arc<AppState> {
+    let mut r=route("subscription-model", upstream);
+    r.access_type=crate::config::AccessType::Subscription;
+    r.provider_id="openai_subscription".into();
+    let state=build_state(HashMap::new(), HashMap::from([("subscription-model".into(),r)]),HashMap::new()).await;
+    let mut state=Arc::try_unwrap(state).ok().unwrap();
+    let key=[7u8;32];
+    state.encryption_key=Some(key);
+    state.subscription=Arc::new(crate::providers::openai_subscription::SubscriptionService::new(state.db.clone(),http(),Some(key)));
+    sqlx::query("INSERT INTO provider_subscription_accounts(provider_id,account_id,account_label,access_token_encrypted,refresh_token_encrypted,expires_at,credential_version,auth_status,updated_at) VALUES ('openai_subscription','acct-personal','test',?,?,?,'v1','authorized',0)")
+        .bind(crate::crypto::seal_required(Some(&key),"oauth-access").unwrap())
+        .bind(crate::crypto::seal_required(Some(&key),"oauth-refresh").unwrap())
+        .bind(chrono::Utc::now().timestamp()+3600).execute(&state.db).await.unwrap();
+    sqlx::query("INSERT INTO provider_config(provider_id,is_enabled) VALUES ('openai_subscription',1)").execute(&state.db).await.unwrap();
+    sqlx::query("INSERT INTO provider_models(id,provider_id,channel_type,model_id,model_name) VALUES ('subscription-selection','openai_subscription','openai_responses','subscription-model','model')").execute(&state.db).await.unwrap();
+    Arc::new(state)
+}
+
+#[tokio::test]
+async fn subscription_responses_uses_server_credentials_and_buffers_nonstream() {
+    let upstream=MockServer::start().await;
+    Mock::given(method("POST")).and(path("/responses"))
+        .and(header("authorization","Bearer oauth-access"))
+        .and(header("chatgpt-account-id","acct-personal"))
+        .and(body_partial_json(serde_json::json!({"model":"subscription-model","stream":true,"store":false})))
+        .respond_with(ResponseTemplate::new(200).insert_header("content-type","text/event-stream").set_body_raw(
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n", "text/event-stream"))
+        .expect(1).mount(&upstream).await;
+    let state=subscription_state(&upstream.uri()).await;
+    let base=spawn_proxy(state.clone()).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY)
+        .header("chatgpt-account-id","attacker-account")
+        .json(&serde_json::json!({"model":"subscription-model","input":"hello"})).send().await.unwrap();
+    assert_eq!(response.status(),200);
+    assert!(response.headers()["content-type"].to_str().unwrap().contains("application/json"));
+    let body = response.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(body["id"], "resp_1");
+    assert_eq!(body["output"][0]["content"][0]["text"], "OK");
+    let usage:(String,i64,i64)=sqlx::query_as("SELECT status,input_tokens,output_tokens FROM usage_records").fetch_one(&state.db).await.unwrap();
+    assert_eq!(usage,("success".into(),12,3));
+    let requests=upstream.received_requests().await.unwrap();
+    assert_eq!(requests[0].headers.get_all("authorization").iter().count(),1);
+    assert_eq!(requests[0].headers.get_all("chatgpt-account-id").iter().count(),1);
+}
+
+#[tokio::test]
+async fn subscription_missing_terminal_is_error_and_logout_revokes_cached_route() {
+    let upstream=MockServer::start().await;
+    Mock::given(method("POST")).respond_with(ResponseTemplate::new(200).insert_header("content-type","text/event-stream")
+        .set_body_raw("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n", "text/event-stream"))
+        .expect(1).mount(&upstream).await;
+    let state=subscription_state(&upstream.uri()).await;
+    let base=spawn_proxy(state.clone()).await;
+    let request=||http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY).json(&serde_json::json!({"model":"subscription-model","input":[]}));
+    assert_eq!(request().send().await.unwrap().status(),502);
+    let status:String=sqlx::query_scalar("SELECT status FROM usage_records").fetch_one(&state.db).await.unwrap();
+    assert_eq!(status,"error");
+    state.subscription.logout("openai_subscription").await.unwrap();
+    assert_eq!(request().send().await.unwrap().status(),502);
+}
+
+#[tokio::test]
+async fn subscription_stream_preserves_events_and_limit_is_not_retried() {
+    let upstream=MockServer::start().await;
+    let body="data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2}}}\n\n";
+    Mock::given(method("POST")).respond_with(ResponseTemplate::new(200).insert_header("content-type","text/event-stream").set_body_raw(body,"text/event-stream")).expect(1).mount(&upstream).await;
+    let state=subscription_state(&upstream.uri()).await;
+    let base=spawn_proxy(state.clone()).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY)
+        .json(&serde_json::json!({"model":"subscription-model","input":[],"stream":true})).send().await.unwrap();
+    assert_eq!(response.status(),200);
+    assert_eq!(response.text().await.unwrap(),body);
+    state.usage_tasks.close();state.usage_tasks.wait().await;
+    let status:String=sqlx::query_scalar("SELECT status FROM usage_records").fetch_one(&state.db).await.unwrap();
+    assert_eq!(status,"success");
+    upstream.reset().await;
+    Mock::given(method("POST")).respond_with(ResponseTemplate::new(429).insert_header("retry-after","60")).expect(1).mount(&upstream).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY)
+        .json(&serde_json::json!({"model":"subscription-model","input":[]})).send().await.unwrap();
+    assert_eq!(response.status(),429);
+    assert_eq!(response.headers()["retry-after"],"60");
+}
+
+#[tokio::test]
+async fn subscription_stale_route_cannot_use_account_after_selection_cleared() {
+    let upstream=MockServer::start().await;
+    Mock::given(method("POST")).respond_with(ResponseTemplate::new(429)).expect(0).mount(&upstream).await;
+    let state=subscription_state(&upstream.uri()).await;
+    sqlx::query("DELETE FROM provider_models WHERE provider_id='openai_subscription'").execute(&state.db).await.unwrap();
+    let base=spawn_proxy(state).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY)
+        .json(&serde_json::json!({"model":"subscription-model","input":[]})).send().await.unwrap();
+    assert_eq!(response.status(),404);
+}
+
+#[tokio::test]
+async fn subscription_nonstream_preserves_incomplete_response_and_usage() {
+    let upstream=MockServer::start().await;
+    Mock::given(method("POST")).respond_with(ResponseTemplate::new(200).set_body_raw(
+        "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_partial\",\"status\":\"incomplete\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"partial\"}]}],\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"output_tokens\":4}}}\n\n", "text/event-stream")).expect(1).mount(&upstream).await;
+    let state=subscription_state(&upstream.uri()).await;
+    let base=spawn_proxy(state.clone()).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY).json(&serde_json::json!({"model":"subscription-model","input":[]})).send().await.unwrap();
+    assert_eq!(response.status(),200);
+    let result:serde_json::Value=response.json().await.unwrap();
+    assert_eq!(result["status"],"incomplete");
+    assert_eq!(result["output"][0]["content"][0]["text"],"partial");
+    assert_eq!(result["incomplete_details"]["reason"],"max_output_tokens");
+    let usage:(String,i64)=sqlx::query_as("SELECT status,output_tokens FROM usage_records").fetch_one(&state.db).await.unwrap();
+    assert_eq!(usage,("error".into(),4));
+}
+
+#[tokio::test]
+async fn subscription_wrong_local_key_reports_decryption_not_upstream_auth() {
+    let state=subscription_state("http://127.0.0.1:1").await;
+    let mut state=Arc::try_unwrap(state).ok().unwrap();
+    state.subscription=Arc::new(crate::providers::openai_subscription::SubscriptionService::new(state.db.clone(),http(),Some([8;32])));
+    let base=spawn_proxy(Arc::new(state)).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY).json(&serde_json::json!({"model":"subscription-model","input":[]})).send().await.unwrap();
+    assert_eq!(response.status(),502);
+    let error:serde_json::Value=response.json().await.unwrap();
+    assert_eq!(error["error"]["message"],"local subscription credentials cannot be decrypted; restore database.encryption_key");
+}
+
+#[tokio::test]
+async fn subscription_malformed_frame_after_terminal_propagates_stream_error() {
+    use futures::StreamExt;
+    let (release, wait)=tokio::sync::oneshot::channel::<()>();
+    let wait=Arc::new(tokio::sync::Mutex::new(Some(wait)));
+    let app=Router::new().route("/responses",axum::routing::post(move || {
+        let wait=wait.clone();
+        async move {
+            let wait=wait.lock().await.take().unwrap();
+            let chunks=futures::stream::once(async { Ok::<_,std::io::Error>(Bytes::from_static(b"data: {\"type\":\"response.created\"}\n\n")) })
+                .chain(futures::stream::once(async move {
+                    let _=wait.await;
+                    Ok(Bytes::from_static(b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: invalid-json\n\n"))
+                }));
+            axum::response::Response::builder().header("content-type","text/event-stream").body(axum::body::Body::from_stream(chunks)).unwrap()
+        }
+    }));
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream=format!("http://{}",listener.local_addr().unwrap());
+    let server=tokio::spawn(async {axum::serve(listener,app).await.unwrap()});
+    let state=subscription_state(&upstream).await;
+    let base=spawn_proxy(state.clone()).await;
+    let response=http().post(format!("{base}/openai-responses/v1/responses")).bearer_auth(TEST_KEY).json(&serde_json::json!({"model":"subscription-model","input":[],"stream":true})).send().await.unwrap();
+    assert_eq!(response.status(),200);
+    let mut body=response.bytes_stream();
+    assert!(body.next().await.unwrap().is_ok());
+    release.send(()).unwrap();
+    assert!(body.next().await.is_some_and(|part|part.is_err()), "malformed terminal chunk must not become clean EOF");
+    state.usage_tasks.close();state.usage_tasks.wait().await;
+    let status:String=sqlx::query_scalar("SELECT status FROM usage_records").fetch_one(&state.db).await.unwrap();
+    assert_eq!(status,"error");
+    server.abort();
 }

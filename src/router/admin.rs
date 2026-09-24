@@ -14,7 +14,15 @@ use crate::{admin::provider_svc, admin::stats_svc, state::AppState};
 
 pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match provider_svc::list_providers(&state.db, &state.provider_defs).await {
-        Ok(providers) => Json(providers).into_response(),
+        Ok(providers) => {
+            let mut value = serde_json::to_value(providers).unwrap();
+            for item in value.as_array_mut().unwrap() {
+                if super::subscription_admin::decorate(&state, item).await.is_err() {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"failed to read authentication status"}))).into_response();
+                }
+            }
+            Json(value).into_response()
+        },
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -56,7 +64,7 @@ pub async fn get_provider(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match provider_svc::get_provider(&state.db, &state.provider_defs, &id).await {
-        Ok(Some(provider)) => Json(provider).into_response(),
+        Ok(Some(provider)) => provider_response(&state, provider).await,
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "provider not found"})),
@@ -87,6 +95,7 @@ pub struct UpdateProviderModel {
 pub struct UpdateProviderRequest {
     #[serde(flatten)]
     pub settings: crate::db::models::ProviderSettings,
+    #[serde(default)]
     pub api_key: String,
     pub is_enabled: bool,
     pub channels: Vec<UpdateProviderChannel>,
@@ -98,6 +107,13 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
+    let Some(def) = state.provider_defs.iter().find(|d| d.id == id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"provider not found"}))).into_response();
+    };
+    if def.access_type == crate::config::AccessType::Subscription &&
+        (!req.api_key.is_empty() || req.settings.workspace_id.as_deref().is_some_and(|v| !v.is_empty()) || req.settings.cost_api_key.as_deref().is_some_and(|v| !v.is_empty())) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"subscription provider does not accept API Key settings"}))).into_response();
+    }
     let channels: Vec<(String, bool)> = req
         .channels
         .into_iter()
@@ -110,16 +126,12 @@ pub async fn update_provider(
         .map(|m| (m.channel_type, m.model_id, m.model_name))
         .collect();
 
-    match provider_svc::update_provider(
-        &state.db,
-        &id,
-        &req.api_key,
-        req.is_enabled,
-        &channels,
-        &models,
-        &req.settings,
-    )
-    .await
+    let result = if def.access_type == crate::config::AccessType::Subscription {
+        provider_svc::update_subscription_provider(&state.db, &id, req.is_enabled, &channels, &models).await
+    } else {
+        provider_svc::update_provider(&state.db, &id, &req.api_key, req.is_enabled, &channels, &models, &req.settings).await
+    };
+    match result
     {
         Ok(()) => {
             if let Err(e) = provider_svc::refresh_routes(&state).await {
@@ -131,7 +143,7 @@ pub async fn update_provider(
             }
             // 返回更新后的详情
             match provider_svc::get_provider(&state.db, &state.provider_defs, &id).await {
-                Ok(Some(provider)) => Json(provider).into_response(),
+                Ok(Some(provider)) => provider_response(&state, provider).await,
                 _ => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "failed to read updated provider"})),
@@ -580,5 +592,13 @@ pub async fn stats_hourly(State(state): State<Arc<AppState>>) -> impl IntoRespon
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
+    }
+}
+
+async fn provider_response(state: &AppState, provider: crate::db::models::ProviderDetail) -> axum::response::Response {
+    let mut value = serde_json::to_value(provider).unwrap();
+    match super::subscription_admin::decorate(state, &mut value).await {
+        Ok(()) => Json(value).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"failed to read authentication status"}))).into_response(),
     }
 }

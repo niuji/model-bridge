@@ -2,7 +2,7 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::config::{ChannelDef, ProviderDef};
+use crate::config::{AccessType, ChannelDef, ProviderDef};
 use crate::db::models::{
     BalanceRow, BalanceSummary, ChannelDetail, ChannelDrift, DriftSummary, ModelEntry,
     ProviderChannelConfigRow, ProviderConfigRow, ProviderDetail, ProviderModel, ProviderSettings,
@@ -171,8 +171,10 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             continue;
         }
         let api_key = config.as_ref().map(|c| c.api_key.clone()).unwrap_or_default();
-        if api_key.is_empty() {
-            continue;
+        match def.access_type {
+            AccessType::ApiKey if api_key.is_empty() => continue,
+            AccessType::Subscription if state.subscription.summary(&def.id).await?.status != "authorized" => continue,
+            _ => {}
         }
         let channel_configs = get_channel_configs(&state.db, &def.id).await?;
         let channels = merge_channels(&def.channels, &channel_configs);
@@ -268,7 +270,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         //     model_name 改写为带 [{provider_id}] 前缀（列表侧区分同名来源，转发不看它）。
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
             for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
-                let route = ProviderRoute {
+                let route = ProviderRoute { access_type: def.access_type,
                     provider_id: def.id.clone(),
                     provider_name: def.name.clone(),
                     model_id: model.model_id.clone(),
@@ -350,7 +352,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             };
             for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let key_lower = model.model_id.to_lowercase();
-                let route = ProviderRoute {
+                let route = ProviderRoute { access_type: def.access_type,
                     provider_id: def.id.clone(),
                     provider_name: def.name.clone(),
                     model_id: model.model_id.clone(),
@@ -425,7 +427,47 @@ pub async fn update_provider(
     id: &str,
     api_key: &str,
     is_enabled: bool,
-    channels: &[(String, bool)], // (channel_type, is_enabled)
+    channels: &[(String, bool)],         // (channel_type, is_enabled)
+    models: &[(String, String, String)], // (channel_type, model_id, model_name)
+    settings: &ProviderSettings,
+) -> anyhow::Result<()> {
+    update_provider_inner(
+        pool,
+        id,
+        Some(api_key),
+        is_enabled,
+        channels,
+        models,
+        settings,
+    )
+    .await
+}
+
+pub async fn update_subscription_provider(
+    pool: &SqlitePool,
+    id: &str,
+    is_enabled: bool,
+    channels: &[(String, bool)],
+    models: &[(String, String, String)],
+) -> anyhow::Result<()> {
+    update_provider_inner(
+        pool,
+        id,
+        None,
+        is_enabled,
+        channels,
+        models,
+        &ProviderSettings::default(),
+    )
+    .await
+}
+
+async fn update_provider_inner(
+    pool: &SqlitePool,
+    id: &str,
+    api_key: Option<&str>,
+    is_enabled: bool,
+    channels: &[(String, bool)],         // (channel_type, is_enabled)
     models: &[(String, String, String)], // (channel_type, model_id, model_name)
     settings: &ProviderSettings,
 ) -> anyhow::Result<()> {
@@ -437,25 +479,35 @@ pub async fn update_provider(
     }
     // 配置、通道与模型必须同时提交，失败时保留整份旧配置。
     let mut tx = pool.begin().await?;
-    // 查询范围或凭证变化后，旧费用不能继续显示成新配置的数据。
-    sqlx::query("DELETE FROM provider_balance WHERE provider_id = ? AND adapter = 'anthropic_cost'
-        AND EXISTS (SELECT 1 FROM provider_config WHERE provider_id = ?
+    if api_key.is_some() {
+        // 查询范围或凭证变化后，旧费用不能继续显示成新配置的数据。
+        sqlx::query("DELETE FROM provider_balance WHERE provider_id = ? AND adapter = 'anthropic_cost'
+        AND EXISTS (SELECT 1 FROM provider_api_key_credentials WHERE provider_id = ?
           AND (workspace_id != COALESCE(?, workspace_id) OR cost_api_key != COALESCE(?, cost_api_key)))")
         .bind(id).bind(id).bind(workspace_id).bind(cost_api_key)
         .execute(&mut *tx).await?;
-    // upsert provider_config
-    sqlx::query(
-        "INSERT INTO provider_config (provider_id, api_key, is_enabled, workspace_id, cost_api_key)
-         VALUES (?, ?, ?, COALESCE(?, ''), COALESCE(?, ''))
-         ON CONFLICT(provider_id) DO UPDATE SET api_key = excluded.api_key, is_enabled = excluded.is_enabled,
-           workspace_id = COALESCE(?, provider_config.workspace_id), cost_api_key = COALESCE(?, provider_config.cost_api_key)",
-    )
-    .bind(id)
-    .bind(api_key)
-    .bind(is_enabled as i32)
-    .bind(workspace_id).bind(cost_api_key).bind(workspace_id).bind(cost_api_key)
-    .execute(&mut *tx)
-    .await?;
+    }
+    sqlx::query("INSERT INTO provider_config(provider_id,is_enabled) VALUES (?,?) ON CONFLICT(provider_id) DO UPDATE SET is_enabled=excluded.is_enabled")
+        .bind(id).bind(is_enabled).execute(&mut *tx).await?;
+    if let Some(api_key) = api_key {
+        // An empty key is also the legacy API-key clear action. Subscription callers
+        // do not persist credentials through this common configuration endpoint.
+        if !api_key.is_empty()
+            || sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM provider_api_key_credentials WHERE provider_id=?",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?
+                > 0
+            || workspace_id.is_some()
+            || cost_api_key.is_some()
+        {
+            sqlx::query("INSERT INTO provider_api_key_credentials(provider_id,api_key,workspace_id,cost_api_key) VALUES (?,?,COALESCE(?,''),COALESCE(?,'')) ON CONFLICT(provider_id) DO UPDATE SET api_key=excluded.api_key,workspace_id=COALESCE(?,provider_api_key_credentials.workspace_id),cost_api_key=COALESCE(?,provider_api_key_credentials.cost_api_key)")
+            .bind(id).bind(api_key).bind(workspace_id).bind(cost_api_key).bind(workspace_id).bind(cost_api_key)
+            .execute(&mut *tx).await?;
+        }
+    }
 
     // upsert channel_configs：base_url 以配置文件为准、不持久化，仅存 channel 启用状态
     for (channel_type, enabled) in channels {
@@ -628,7 +680,7 @@ mod anthropic_model_tests {
             .with_priority(1)
             .mount(&server)
             .await;
-        let defs = vec![ProviderDef {
+        let defs = vec![ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "anthropic".into(),
             name: "Anthropic".into(),
             icon: None,
@@ -823,7 +875,7 @@ pub(crate) async fn get_provider_config(
     id: &str,
 ) -> Result<Option<ProviderConfigRow>, sqlx::Error> {
     sqlx::query_as::<_, ProviderConfigRow>(
-        "SELECT provider_id, api_key, is_enabled, workspace_id, cost_api_key FROM provider_config WHERE provider_id = ?",
+        "SELECT c.provider_id, c.is_enabled, COALESCE(k.api_key, '') AS api_key, COALESCE(k.workspace_id, '') AS workspace_id, COALESCE(k.cost_api_key, '') AS cost_api_key FROM provider_config c LEFT JOIN provider_api_key_credentials k USING(provider_id) WHERE c.provider_id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -933,6 +985,9 @@ pub fn select_probe_targets(
 ) -> Vec<ProbeTarget> {
     let mut out = Vec::new();
     for def in defs {
+        if def.access_type != AccessType::ApiKey || def.config_error.is_some() {
+            continue;
+        }
         if !provider_enabled.get(&def.id).copied().unwrap_or(false) {
             continue;
         }
@@ -1002,8 +1057,25 @@ async fn replace_upstream_snapshot(
     provider_id: &str,
     channel_type: &str,
     models: &[(String, String)],
+    expected_account_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    // Account validation and replacement share the write lock so a completed
+    // login cannot be followed by an old account's delayed snapshot publication.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    if let Some(account_id) = expected_account_id {
+        let authorized: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM provider_subscription_accounts
+             WHERE provider_id = ? AND account_id = ? AND auth_status = 'authorized')",
+        )
+        .bind(provider_id)
+        .bind(account_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !authorized {
+            tx.rollback().await?;
+            return Ok(());
+        }
+    }
     sqlx::query("DELETE FROM upstream_models WHERE provider_id = ? AND channel_type = ?")
         .bind(provider_id).bind(channel_type).execute(&mut *tx).await?;
     for (id, name) in models {
@@ -1030,7 +1102,7 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
     struct ChCfgRow { provider_id: String, channel_type: String, is_enabled: bool }
 
     let cfgs: Vec<CfgRow> = sqlx::query_as::<_, CfgRow>(
-        "SELECT provider_id, is_enabled, api_key, workspace_id FROM provider_config",
+        "SELECT c.provider_id,c.is_enabled,COALESCE(k.api_key,'') AS api_key,COALESCE(k.workspace_id,'') AS workspace_id FROM provider_config c LEFT JOIN provider_api_key_credentials k USING(provider_id)",
     )
     .fetch_all(&state.db).await?;
     let ch_cfgs: Vec<ChCfgRow> = sqlx::query_as::<_, ChCfgRow>(
@@ -1047,6 +1119,18 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
     let mut channel_enabled: HashMap<(String, String), bool> = HashMap::new();
     for c in &ch_cfgs {
         channel_enabled.insert((c.provider_id.clone(), c.channel_type.clone()), c.is_enabled);
+    }
+
+    for def in state.provider_defs.iter().filter(|d| d.access_type == AccessType::Subscription && d.config_error.is_none()) {
+        if !provider_enabled.get(&def.id).copied().unwrap_or(false) ||
+            !channel_enabled.get(&(def.id.clone(), "openai_responses".into())).copied().unwrap_or(true) { continue; }
+        let summary = state.subscription.summary(&def.id).await?;
+        if summary.status != "authorized" { continue; }
+        let Some(account_id) = summary.account_id else { continue; };
+        match state.subscription.models(&def.id).await {
+            Ok(models) => replace_upstream_snapshot(&state.db, &def.id, "openai_responses", &models, Some(&account_id)).await?,
+            Err(_) => tracing::warn!(provider_id=%def.id, "subscription model discovery failed"),
+        }
     }
 
     let targets = select_probe_targets(
@@ -1078,7 +1162,7 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
         .await
         {
             Ok(models) => {
-                if let Err(e) = replace_upstream_snapshot(&state.db, &t.provider_id, &t.channel_type, &models).await {
+                if let Err(e) = replace_upstream_snapshot(&state.db, &t.provider_id, &t.channel_type, &models, None).await {
                     tracing::warn!("upstream snapshot persist failed for '{}' '{}': {}", t.provider_id, t.channel_type, e);
                 }
             }
@@ -1169,7 +1253,18 @@ mod drift_tests {
         ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from) }
     }
     fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
-        ProviderDef { id: id.into(), name: id.into(), icon: None, console_url: None, channels: chans, usage: None, config_error: None }
+        ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None, id: id.into(), name: id.into(), icon: None, console_url: None, channels: chans, usage: None, config_error: None }
+    }
+
+    #[test]
+    fn api_key_probe_skips_subscription_and_invalid_definitions() {
+        let mut subscription = def("sub", vec![chan("openai_responses", "https://x", Some("https://x/models"))]);
+        subscription.access_type = AccessType::Subscription;
+        let mut invalid = def("bad", subscription.channels.clone());
+        invalid.config_error = Some("invalid".into());
+        let enabled = [("sub".into(), true), ("bad".into(), true)].into();
+        let keys = [("sub".into(), "residual".into()), ("bad".into(), "key".into())].into();
+        assert!(select_probe_targets(&[subscription, invalid], &enabled, &keys, &Default::default()).is_empty());
     }
 
     #[test]
@@ -1225,6 +1320,28 @@ mod drift_tests {
     }
 
     #[tokio::test]
+    async fn subscription_snapshot_discards_old_account_and_logged_out_results() {
+        let pool = mempool().await;
+        sqlx::query("INSERT INTO provider_subscription_accounts VALUES ('p','new-account',NULL,'encrypted','encrypted',9999999999,'version','authorized',0)")
+            .execute(&pool).await.unwrap();
+        let current = vec![("new-model".into(), "New model".into())];
+        replace_upstream_snapshot(&pool, "p", "openai_responses", &current, Some("new-account")).await.unwrap();
+        let stale = vec![("old-model".into(), "Old model".into())];
+        replace_upstream_snapshot(&pool, "p", "openai_responses", &stale, Some("old-account")).await.unwrap();
+        let models: Vec<String> = sqlx::query_scalar("SELECT model_id FROM upstream_models WHERE provider_id='p'").fetch_all(&pool).await.unwrap();
+        assert_eq!(models, ["new-model"]);
+        sqlx::query("UPDATE provider_subscription_accounts SET auth_status='reauth_required' WHERE provider_id='p'").execute(&pool).await.unwrap();
+        replace_upstream_snapshot(&pool, "p", "openai_responses", &stale, Some("new-account")).await.unwrap();
+        let models: Vec<String> = sqlx::query_scalar("SELECT model_id FROM upstream_models WHERE provider_id='p'").fetch_all(&pool).await.unwrap();
+        assert_eq!(models, ["new-model"]);
+        sqlx::query("DELETE FROM provider_subscription_accounts WHERE provider_id='p'").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM upstream_models WHERE provider_id='p'").execute(&pool).await.unwrap();
+        replace_upstream_snapshot(&pool, "p", "openai_responses", &stale, Some("new-account")).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM upstream_models WHERE provider_id='p'").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
     async fn model_changes_returns_drift_then_lands_baseline() {
         let pool = mempool().await;
         // 当前快照：a, b（openai_chat 通道）
@@ -1260,13 +1377,61 @@ mod config_error_tests {
     use crate::db::schema::run_migrations;
     use sqlx::SqlitePool;
 
+    #[tokio::test]
+    async fn subscription_routes_require_authorized_account_and_enabled_channel() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        update_subscription_provider(&pool, "sub", true,
+            &[("openai_responses".into(), true)],
+            &[("openai_responses".into(), "gpt-test".into(), "GPT".into())]).await.unwrap();
+        let def: ProviderDef = serde_json::from_value(serde_json::json!({
+            "id":"sub", "name":"Subscription", "access_type":"subscription", "adapter":"openai_chatgpt",
+            "channels":[{"type":"openai_responses","base_url":"https://chatgpt.com/backend-api/codex"}]
+        })).unwrap();
+        let state = std::sync::Arc::new(crate::state::AppState {
+            subscription: std::sync::Arc::new(crate::providers::openai_subscription::SubscriptionService::new(pool.clone(), reqwest::Client::new(), None)),
+            admin_base_url: "http://localhost:10020".into(),
+            updates: std::sync::Arc::new(crate::update::Manager::default()),
+            usage_tasks: tokio_util::task::TaskTracker::new(),
+            openai_chat_routes: Default::default(),
+            openai_responses_routes: Default::default(),
+            anthropic_routes: Default::default(),
+            provider_defs: vec![def],
+            db: pool,
+            client: reqwest::Client::new(),
+            api_key_cache: Default::default(),
+            encryption_key: None,
+            request_log_enabled: tokio::sync::RwLock::new(false),
+            request_log_dir: std::env::temp_dir().join(format!("mb-request-log-{}", uuid::Uuid::new_v4())),
+            proxy_base_url: "http://test".into(),
+        });
+        refresh_routes(&state).await.unwrap();
+        assert!(state.openai_responses_routes.read().await.is_empty());
+        sqlx::query("INSERT INTO provider_subscription_accounts VALUES ('sub', 'account', NULL, 'encrypted', 'encrypted', 1, 'version', 'authorized', 1)")
+            .execute(&state.db).await.unwrap();
+        refresh_routes(&state).await.unwrap();
+        // Expiry alone leaves a refreshable account routable; no API Key row is needed.
+        assert!(state.openai_responses_routes.read().await.contains_key("gpt-test"));
+        sqlx::query("UPDATE provider_channel_config SET is_enabled=0 WHERE provider_id='sub'").execute(&state.db).await.unwrap();
+        refresh_routes(&state).await.unwrap();
+        assert!(state.openai_responses_routes.read().await.is_empty());
+        sqlx::query("UPDATE provider_channel_config SET is_enabled=1 WHERE provider_id='sub'").execute(&state.db).await.unwrap();
+        sqlx::query("UPDATE provider_subscription_accounts SET auth_status='reauth_required' WHERE provider_id='sub'").execute(&state.db).await.unwrap();
+        refresh_routes(&state).await.unwrap();
+        assert!(state.openai_responses_routes.read().await.is_empty());
+        sqlx::query("DELETE FROM provider_subscription_accounts WHERE provider_id='sub'").execute(&state.db).await.unwrap();
+        refresh_routes(&state).await.unwrap();
+        assert!(state.openai_responses_routes.read().await.is_empty());
+    }
+
     /// channel_type 重复的 provider 即使在 DB 里已启用且有 key，也不得建任何路由。
     #[tokio::test]
     async fn refresh_routes_skips_provider_with_config_error() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         run_migrations(&pool).await.unwrap();
-        sqlx::query("INSERT INTO provider_config (provider_id, api_key, is_enabled) VALUES ('dup', 'sk-x', 1)")
+        sqlx::query("INSERT INTO provider_config (provider_id, is_enabled) VALUES ('dup', 1)")
             .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO provider_api_key_credentials(provider_id, api_key) VALUES ('dup', 'sk-x')").execute(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO provider_models (id, provider_id, channel_type, model_id, model_name)
              VALUES ('m1', 'dup', 'openai_chat', 'gpt-4o', 'gpt-4o')",
@@ -1277,7 +1442,7 @@ mod config_error_tests {
             base_url: b.into(),
             models_endpoint: None,
         };
-        let mut def = ProviderDef {
+        let mut def = ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "dup".into(),
             name: "Dup".into(),
             icon: None,
@@ -1290,6 +1455,8 @@ mod config_error_tests {
         assert!(def.config_error.is_some(), "fixture must be invalid");
 
         let state = std::sync::Arc::new(crate::state::AppState {
+            subscription: std::sync::Arc::new(crate::providers::openai_subscription::SubscriptionService::new(pool.clone(), reqwest::Client::new(), None)),
+            admin_base_url: "http://localhost:10020".into(),
             updates: std::sync::Arc::new(crate::update::Manager::default()),
             usage_tasks: tokio_util::task::TaskTracker::new(),
             openai_chat_routes: Default::default(),
@@ -1321,6 +1488,22 @@ mod update_provider_tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::schema::run_migrations(&pool).await.unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn subscription_save_preserves_residual_api_key_credentials() {
+        let pool = mempool().await;
+        update_provider(&pool, "p", "old-key", true, &[], &[], &ProviderSettings {
+            workspace_id: Some("workspace".into()), cost_api_key: Some("cost".into()),
+        }).await.unwrap();
+        update_subscription_provider(&pool, "p", false,
+            &[("openai_responses".into(), true)],
+            &[("openai_responses".into(), "model".into(), "Model".into())]).await.unwrap();
+        let saved = get_provider_config(&pool, "p").await.unwrap().unwrap();
+        assert_eq!((saved.api_key.as_str(), saved.workspace_id.as_str(), saved.cost_api_key.as_str()), ("old-key", "workspace", "cost"));
+        assert!(!saved.is_enabled);
+        let model: String = sqlx::query_scalar("SELECT model_id FROM provider_models WHERE provider_id='p'").fetch_one(&pool).await.unwrap();
+        assert_eq!(model, "model");
     }
 
     #[tokio::test]
@@ -1364,7 +1547,7 @@ mod update_provider_tests {
                 .unwrap();
         assert_eq!(remaining, vec!["m1".to_string()]);
         let config: (String, bool) = sqlx::query_as(
-            "SELECT api_key, is_enabled FROM provider_config WHERE provider_id = 'p'",
+            "SELECT api_key, is_enabled FROM provider_config JOIN provider_api_key_credentials USING(provider_id) WHERE provider_id = 'p'",
         )
         .fetch_one(&pool)
         .await

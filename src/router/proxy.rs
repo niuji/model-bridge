@@ -243,6 +243,9 @@ async fn proxy_to_provider(
     };
 
     drop(routes);
+    if route.access_type == crate::config::AccessType::Subscription {
+        return super::subscription_proxy::proxy(state, route, method, headers, body, api_key_id, client).await;
+    }
 
     // 3. 构造目标 URL：base_url 自带完整版本前缀（如 .../v1 或 .../api/paas/v4），
     // 仅拼接 path，并去除两侧多余斜杠，避免出现 // 或重复 /v1。
@@ -785,7 +788,7 @@ fn inject_stream_options(api_format: &str, path: &str, body: &[u8]) -> Vec<u8> {
 ///   prompt_tokens_details.cached_tokens，回退顶层 cached_tokens / prompt_cache_hit_tokens。
 /// - anthropic 协议: input_tokens 不含缓存，归一化为 input_tokens + cache_read + cache_write，
 ///   使 input 列跨协议一致（均含缓存），cache_hit_rate = cache_read / input 也因此有界。
-fn extract_usage(usage: &serde_json::Value, api_format: &str) -> (i64, i64, i64, i64) {
+pub(super) fn extract_usage(usage: &serde_json::Value, api_format: &str) -> (i64, i64, i64, i64) {
     if api_format == "anthropic" {
         let input = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
         let output = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -845,7 +848,7 @@ fn error_chain(e: &reqwest::Error) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn write_usage(
+pub(super) async fn write_usage(
     state: Arc<AppState>,
     model_id: String,
     provider_id: String,
@@ -1255,6 +1258,8 @@ mod response_regression_tests {
         let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::schema::run_migrations(&db).await.unwrap();
         Arc::new(AppState {
+            subscription: std::sync::Arc::new(crate::providers::openai_subscription::SubscriptionService::new(db.clone(), reqwest::Client::new(), None)),
+            admin_base_url: "http://localhost:10020".into(),
             updates: std::sync::Arc::new(crate::update::Manager::default()),
             usage_tasks: tokio_util::task::TaskTracker::new(),
             openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),

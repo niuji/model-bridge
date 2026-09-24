@@ -1,6 +1,7 @@
 use sqlx::SqlitePool;
 
 pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
+    migrate_provider_credentials(pool).await?;
     // 删除旧表（Provider 从配置文件定义，DB 只存用户修改）
     sqlx::query("DROP TABLE IF EXISTS providers")
         .execute(pool)
@@ -8,33 +9,6 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query("DROP TABLE IF EXISTS provider_channels")
         .execute(pool)
         .await?;
-
-    // Provider 用户配置（只存覆盖值）
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS provider_config (
-            provider_id TEXT PRIMARY KEY,
-            api_key TEXT NOT NULL DEFAULT '',
-            is_enabled INTEGER DEFAULT 0
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    let columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('provider_config')")
-            .fetch_all(pool)
-            .await?;
-    for column in ["workspace_id", "cost_api_key"] {
-        if !columns.iter().any(|name| name == column) {
-            sqlx::query(&format!(
-                "ALTER TABLE provider_config ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
-            ))
-            .execute(pool)
-            .await?;
-        }
-    }
 
     // Channel 用户配置：base_url 一律以配置文件为准、不入库（仅存 channel 启用状态）
     sqlx::query(
@@ -203,9 +177,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
 
     // 每条统计/日志查询都按 created_at 过滤或排序（prune 清理亦然），无索引时是全表扫描
     // + 临时 B-tree 排序；保留期默认 730 天，表只增不减，故必须建索引。
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_usage_records_created_at ON usage_records(created_at)")
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_usage_records_created_at ON usage_records(created_at)",
+    )
+    .execute(pool)
+    .await?;
 
     // 上游模型快照：探测成功后按 (provider, channel) 整体替换；失败时保留旧值。
     sqlx::query(
@@ -258,9 +234,194 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The backup is taken before any destructive credential migration. Old binaries
+/// require restoring it; running them directly against the split schema is unsupported.
+async fn migrate_provider_credentials(pool: &SqlitePool) -> anyhow::Result<()> {
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('provider_config')")
+            .fetch_all(pool)
+            .await?;
+    let legacy = columns.iter().any(|c| c == "api_key");
+    if legacy {
+        let databases: Vec<(i64, String, String)> = sqlx::query_as("PRAGMA database_list")
+            .fetch_all(pool)
+            .await?;
+        if let Some((_, _, file)) = databases
+            .iter()
+            .find(|(_, name, file)| name == "main" && !file.is_empty())
+        {
+            let backup = std::path::PathBuf::from(format!(
+                "{file}.pre-subscription-{}.backup",
+                uuid::Uuid::new_v4()
+            ));
+            crate::update::backup::snapshot(std::path::Path::new(file), &backup).await?;
+            tracing::info!(path = %backup.display(), "saved pre-subscription database backup");
+        }
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS provider_config (provider_id TEXT PRIMARY KEY, is_enabled INTEGER DEFAULT 0)")
+        .execute(&mut *tx).await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS provider_api_key_credentials (
+        provider_id TEXT PRIMARY KEY,
+        api_key TEXT NOT NULL DEFAULT '',
+        workspace_id TEXT NOT NULL DEFAULT '',
+        cost_api_key TEXT NOT NULL DEFAULT ''
+    )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS provider_subscription_accounts (
+        provider_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        account_label TEXT,
+        access_token_encrypted TEXT NOT NULL,
+        refresh_token_encrypted TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        credential_version TEXT NOT NULL,
+        auth_status TEXT NOT NULL CHECK(auth_status IN ('authorized', 'reauth_required')),
+        updated_at INTEGER NOT NULL
+    )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    if legacy {
+        for column in ["workspace_id", "cost_api_key"] {
+            if !columns.iter().any(|name| name == column) {
+                sqlx::query(&format!(
+                    "ALTER TABLE provider_config ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                ))
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        sqlx::query("INSERT INTO provider_api_key_credentials (provider_id, api_key, workspace_id, cost_api_key)
+            SELECT provider_id, api_key, workspace_id, cost_api_key FROM provider_config
+            WHERE provider_id NOT IN (SELECT provider_id FROM provider_api_key_credentials)")
+            .execute(&mut *tx).await?;
+        let mismatches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM provider_config p
+            LEFT JOIN provider_api_key_credentials c ON p.provider_id = c.provider_id
+            WHERE c.provider_id IS NULL OR p.api_key IS NOT c.api_key
+            OR p.workspace_id IS NOT c.workspace_id OR p.cost_api_key IS NOT c.cost_api_key",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        anyhow::ensure!(
+            mismatches == 0,
+            "credential migration conflicts with existing credentials"
+        );
+        for column in ["api_key", "workspace_id", "cost_api_key"] {
+            sqlx::query(&format!("ALTER TABLE provider_config DROP COLUMN {column}"))
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO schema_migrations (name) VALUES ('split_provider_credentials')",
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn credential_conflict_rolls_back_without_overwriting() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE provider_config (provider_id TEXT PRIMARY KEY, api_key TEXT NOT NULL, is_enabled INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO provider_config VALUES ('p', 'old', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE provider_api_key_credentials (provider_id TEXT PRIMARY KEY, api_key TEXT NOT NULL, workspace_id TEXT NOT NULL, cost_api_key TEXT NOT NULL)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO provider_api_key_credentials VALUES ('p', 'new', '', '')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(run_migrations(&pool).await.is_err());
+        let old: String = sqlx::query_scalar("SELECT api_key FROM provider_config")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let new: String = sqlx::query_scalar("SELECT api_key FROM provider_api_key_credentials")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(old, "old");
+        assert_eq!(new, "new");
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('provider_config')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(!columns.contains(&"workspace_id".to_string()));
+    }
+
+    #[tokio::test]
+    async fn file_migration_backs_up_original_credentials() {
+        let dir = std::env::temp_dir().join(format!("mb-migration-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("database.db");
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap();
+        sqlx::query("CREATE TABLE provider_config (provider_id TEXT PRIMARY KEY, api_key TEXT NOT NULL, is_enabled INTEGER, workspace_id TEXT NOT NULL, cost_api_key TEXT NOT NULL)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO provider_config VALUES ('p', 'key', 1, 'workspace', 'cost')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "backup"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let backup = SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&backups[0])
+                .read_only(true),
+        )
+        .await
+        .unwrap();
+        let saved: (String, String, String, i64) = sqlx::query_as(
+            "SELECT api_key, workspace_id, cost_api_key, is_enabled FROM provider_config",
+        )
+        .fetch_one(&backup)
+        .await
+        .unwrap();
+        assert_eq!(saved, ("key".into(), "workspace".into(), "cost".into(), 1));
+        let current: (String, String, String) = sqlx::query_as(
+            "SELECT api_key, workspace_id, cost_api_key FROM provider_api_key_credentials",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current, ("key".into(), "workspace".into(), "cost".into()));
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('provider_config')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(columns, ["provider_id", "is_enabled"]);
+        backup.close().await;
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[tokio::test]
     async fn migrations_idempotent_and_create_provider_balance() {
@@ -286,17 +447,18 @@ mod tests {
             .await
             .unwrap();
         run_migrations(&pool).await.unwrap();
-        let row: (String, String, String) =
-            sqlx::query_as("SELECT api_key, workspace_id, cost_api_key FROM provider_config")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let row: (String, String, String) = sqlx::query_as(
+            "SELECT api_key, workspace_id, cost_api_key FROM provider_api_key_credentials",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(row, ("existing-key".into(), "".into(), "".into()));
-        sqlx::query("UPDATE provider_config SET workspace_id = 'wrkspc_saved', cost_api_key = 'admin-saved'")
+        sqlx::query("UPDATE provider_api_key_credentials SET workspace_id = 'wrkspc_saved', cost_api_key = 'admin-saved'")
             .execute(&pool).await.unwrap();
         run_migrations(&pool).await.unwrap();
         let row: (String, String) =
-            sqlx::query_as("SELECT workspace_id, cost_api_key FROM provider_config")
+            sqlx::query_as("SELECT workspace_id, cost_api_key FROM provider_api_key_credentials")
                 .fetch_one(&pool)
                 .await
                 .unwrap();

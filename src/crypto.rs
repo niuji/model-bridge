@@ -6,7 +6,7 @@
 
 use aes_gcm::{
     aead::{rand_core::OsRng, Aead, KeyInit},
-    Aes256Gcm, AeadCore, Key, Nonce,
+    AeadCore, Aes256Gcm, Key, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 
@@ -26,6 +26,35 @@ pub fn reveal(key: Option<&[u8; 32]>, stored: &str) -> String {
         Some(k) => decrypt(k, stored).unwrap_or_else(|| stored.to_string()),
         None => stored.to_string(),
     }
+}
+
+/// OAuth credentials must never fall back to plaintext on configuration or cipher errors.
+#[derive(Debug)]
+pub enum CredentialError { MissingKey, Encrypt, Decrypt }
+impl std::fmt::Display for CredentialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::MissingKey => "subscription credentials require database.encryption_key",
+            Self::Encrypt => "failed to encrypt subscription credentials",
+            Self::Decrypt => "local subscription credentials cannot be decrypted; restore database.encryption_key",
+        })
+    }
+}
+impl std::error::Error for CredentialError {}
+
+/// Only these fixed local errors may cross the Admin/proxy boundary unchanged.
+pub fn credential_error_message(error: &anyhow::Error) -> Option<String> {
+    error.downcast_ref::<CredentialError>().map(ToString::to_string)
+}
+
+pub fn seal_required(key: Option<&[u8; 32]>, plaintext: &str) -> anyhow::Result<String> {
+    let key = key.ok_or(CredentialError::MissingKey)?;
+    encrypt(key, plaintext).ok_or_else(|| CredentialError::Encrypt.into())
+}
+
+pub fn reveal_required(key: Option<&[u8; 32]>, stored: &str) -> anyhow::Result<String> {
+    let key = key.ok_or(CredentialError::MissingKey)?;
+    decrypt(key, stored).ok_or_else(|| CredentialError::Decrypt.into())
 }
 
 /// 解析配置中的 base64(32B) 密钥；格式非法返回 None。
@@ -64,6 +93,16 @@ fn decrypt(key: &[u8; 32], blob: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn strict_credentials_never_fall_back_to_plaintext() {
+        assert!(seal_required(None, "token").is_err());
+        assert!(reveal_required(None, "token").is_err());
+        assert!(reveal_required(Some(&[1; 32]), "token").is_err());
+        let sealed = seal_required(Some(&[1; 32]), "token").unwrap();
+        assert_eq!(reveal_required(Some(&[1; 32]), &sealed).unwrap(), "token");
+        assert!(reveal_required(Some(&[2; 32]), &sealed).is_err());
+    }
+
     fn fixed_key() -> [u8; 32] {
         let mut k = [0u8; 32];
         for (i, b) in k.iter_mut().enumerate() {
@@ -77,7 +116,10 @@ mod tests {
         let key = fixed_key();
         let plaintext = "mb-12345678-1234-1234-1234-1234567890ab";
         let sealed = seal(Some(&key), plaintext);
-        assert_ne!(sealed, plaintext, "sealed output must differ from plaintext");
+        assert_ne!(
+            sealed, plaintext,
+            "sealed output must differ from plaintext"
+        );
         assert_eq!(reveal(Some(&key), &sealed), plaintext);
     }
 

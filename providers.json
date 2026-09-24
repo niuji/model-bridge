@@ -1,12 +1,12 @@
 [
   {
-    "id": "openai",
-    "console_url": "https://platform.openai.com/",
-    "name": "OpenAI",
+    "id": "openai_subscription",
+    "name": "OpenAI 订阅",
     "icon": "openai.svg",
+    "access_type": "subscription",
+    "adapter": "openai_chatgpt",
     "channels": [
-      { "type": "openai_chat", "base_url": "https://api.openai.com/v1", "models_endpoint": "https://api.openai.com/v1/models" },
-      { "type": "openai_responses", "base_url": "https://api.openai.com/v1", "models_endpoint": "https://api.openai.com/v1/models" }
+      { "type": "openai_responses", "base_url": "https://chatgpt.com/backend-api/codex" }
     ]
   },
   {

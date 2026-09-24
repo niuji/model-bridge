@@ -78,8 +78,20 @@ fn default_balance_interval_min() -> u64 {
     10
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessType {
+    #[default]
+    ApiKey,
+    Subscription,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProviderDef {
+    #[serde(default)]
+    pub access_type: AccessType,
+    #[serde(default)]
+    pub adapter: Option<String>,
     pub id: String,
     pub name: String,
     /// 图标（emoji 或图片 URL）
@@ -170,6 +182,18 @@ pub fn load_config(cli: &Cli) -> anyhow::Result<AppConfig> {
 /// 会把同一批模型处理两遍，令冲突计数翻倍（裸名 key 退化为限定名，客户端原请求名 404），
 /// 两个 base_url 还会争抢同一个路由 key。故这类声明整体拒绝，不做部分接受。
 pub fn validate_channel_types(def: &ProviderDef) -> Option<String> {
+    if def.access_type == AccessType::Subscription
+        && (def.adapter.as_deref() != Some("openai_chatgpt")
+            || def.channels.len() != 1
+            || def.channels[0].channel_type != "openai_responses"
+            || def.channels[0].base_url != "https://chatgpt.com/backend-api/codex"
+            || def.channels[0].models_endpoint.is_some())
+    {
+        return Some("订阅接入仅支持 openai_chatgpt 的官方 HTTPS Responses 通道".into());
+    }
+    if def.access_type == AccessType::ApiKey && def.adapter.is_some() {
+        return Some("API Key 接入不支持订阅 adapter".into());
+    }
     let mut seen: Vec<&str> = Vec::new();
     let mut dups: Vec<&str> = Vec::new();
     for ch in &def.channels {
@@ -289,6 +313,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn access_type_defaults_and_subscription_constraints() {
+        let default: ProviderDef = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
+        assert_eq!(default.access_type, AccessType::ApiKey);
+        assert!(serde_json::from_str::<ProviderDef>(r#"{"id":"x","name":"X","access_type":"unknown"}"#).is_err());
+        let valid = serde_json::json!({"id":"s", "name":"S", "access_type":"subscription", "adapter":"openai_chatgpt",
+            "channels":[{"type":"openai_responses", "base_url":"https://chatgpt.com/backend-api/codex"}]});
+        let def: ProviderDef = serde_json::from_value(valid.clone()).unwrap();
+        assert!(validate_channel_types(&def).is_none());
+        for (path, value) in [
+            ("/adapter", "other"),
+            ("/channels/0/type", "openai_chat"),
+            ("/channels/0/base_url", "http://chatgpt.com/backend-api/codex"),
+            ("/channels/0/base_url", "https://chatgpt.com/backend-api/codex?redirect=evil"),
+            ("/channels/0/base_url", "https://chatgpt.com.evil.example/backend-api/codex"),
+        ] {
+            let mut invalid = valid.clone();
+            *invalid.pointer_mut(path).unwrap() = value.into();
+            let def: ProviderDef = serde_json::from_value(invalid).unwrap();
+            assert!(validate_channel_types(&def).is_some(), "{path}: {value}");
+        }
+    }
+
+    #[test]
+    fn subscription_rejects_untrusted_target() {
+        let def: ProviderDef = serde_json::from_value(serde_json::json!({
+            "id":"s", "name":"S", "access_type":"subscription", "adapter":"openai_chatgpt",
+            "channels":[{"type":"openai_responses", "base_url":"https://evil.example/backend-api/codex"}]
+        })).unwrap();
+        assert!(mark_config_errors(vec![def])[0].config_error.is_some());
+    }
+
+    #[test]
     fn bridge_defaults_probe_interval_when_absent() {
         // 旧配置（无 probe_interval_min / balance_interval_min）应解析成功并取默认
         let cfg: BridgeConfig = toml::from_str("refresh_interval_min = 5\n").unwrap();
@@ -300,6 +356,8 @@ mod tests {
 
     fn def_with_channels(types: &[&str]) -> ProviderDef {
         ProviderDef {
+            access_type: AccessType::ApiKey,
+            adapter: None,
             id: "p".into(),
             name: "P".into(),
             icon: None,

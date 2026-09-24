@@ -5,6 +5,18 @@
       <p class="page-subtitle mono">把你的 AI 工具指向 Model Bridge · 网关地址由服务端提供</p>
     </div>
 
+    <section class="subscription-guide">
+      <h2>OpenAI 订阅</h2>
+      <ol class="steps">
+        <li>在服务端配置 <code class="chip mono">database.encryption_key</code>，然后在「供应商 → OpenAI 订阅」登录账号。</li>
+        <li>在浏览器完成授权。远程访问时若无法自动回调，将地址栏中的完整回调 URL 粘贴回供应商配置弹窗。</li>
+        <li>同步模型，选择需要的模型并保存，再启用供应商。每个供应商条目只绑定一个账号。</li>
+        <li>客户端使用网关的 <code class="chip mono">mb-</code> 密钥，请求 <code class="chip mono">{{ proxyBase }}/openai-responses/v1/responses</code>。</li>
+      </ol>
+      <p class="tool-desc">订阅接入仅支持 Responses HTTP/SSE，不支持 Chat Completions、Anthropic 或 WebSocket。客户端需发送完整会话输入，不支持 previous_response_id、store:true 或 background:true。</p>
+      <p class="tool-desc">停用保留登录；退出清除本地凭据并停止后续请求，已经发出的请求可能继续完成。更换账号后需重新同步并选择模型；订阅额度暂不展示。</p>
+    </section>
+
     <div class="tool-cards">
       <div class="tool-card" @click="openTool('claude-code')">
         <div class="card-icon">
@@ -173,6 +185,9 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.subscription-guide { padding: 18px 22px; margin-bottom: 24px; border: 1px solid var(--mb-border); border-radius: 12px; background: var(--mb-surface); }
+.subscription-guide h2 { margin: 0; font-size: 17px; color: var(--mb-text-1); }
+.subscription-guide .tool-desc { margin: 12px 0 0; }
 .page-header { margin-bottom: 24px; }
 .page-title { font-size: 28px; font-weight: 600; color: var(--mb-text-1); margin: 0; letter-spacing: -0.02em; }
 .page-subtitle { margin: 6px 0 0; color: var(--mb-text-3); font-size: 13px; }

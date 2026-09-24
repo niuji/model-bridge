@@ -5,7 +5,7 @@
         <h1 class="page-title serif">供应商</h1>
         <span v-if="!loading" class="page-count mono">{{ pad2(providers.length) }} entries</span>
       </div>
-      <p class="page-subtitle mono">管理 Provider 的 API 密钥、通道与模型列表</p>
+      <p class="page-subtitle mono">管理 Provider 的接入凭据、通道与模型列表</p>
       <div class="page-rule" />
     </header>
 
@@ -35,6 +35,8 @@
                   <div class="card-meta mono">
                     <span class="card-status-dot" :class="{ on: p.is_enabled && !p.config_error }" />
                     <span class="status-word">{{ p.config_error ? '配置错误' : (p.is_enabled ? '已启用' : '已停用') }}</span>
+                    <span class="access-badge">{{ p.access_type === 'subscription' ? '订阅' : 'API Key' }}</span>
+                    <span v-if="p.access_type === 'subscription'">{{ authLabel(p.auth) }}</span>
                     <span class="meta-sep">·</span>
                     <span>{{ enabledModelTotal(p) }} 模型</span>
                     <span
@@ -79,7 +81,7 @@
                   @click.stop
                   @keydown.stop
                 >控制台 <span aria-hidden="true">↗</span></a>
-                <div v-if="p.config_error || (p.is_enabled && p.usage)" class="card-quota">
+                <div v-if="p.config_error || (p.access_type !== 'subscription' && p.is_enabled && p.usage)" class="card-quota">
                   <!-- 配置错误优先于余额，且只出图标：文案挂 title，避免撑开状态行 -->
                   <span v-if="p.config_error" class="quota-error" :title="`配置错误：${p.config_error}`">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -136,7 +138,7 @@
     </n-spin>
 
     <n-modal
-      v-model:show="showConfig"
+      :show="showConfig"
       style="width: 760px"
       preset="card"
       class="config-modal"
@@ -162,7 +164,27 @@
                 <div class="section-label">基础配置</div>
               </div>
             </div>
-            <n-form-item label="API Key">
+            <div v-if="isSubscription" class="subscription-auth">
+              <div>{{ authLabel(editProvider.auth) }}<span v-if="editProvider.auth?.account_label"> · {{ editProvider.auth.account_label }}</span></div>
+              <p class="sync-tip">停用会保留登录；退出会清除本地凭据并停止后续请求。</p>
+              <p v-if="editProvider.auth?.login_available === false" class="auth-error">请先配置 database.encryption_key，再登录订阅账号。</p>
+              <n-space>
+                <n-button :loading="loginStarting" :disabled="!!loginSession || accountBusy || saving || fetching || editProvider.auth?.login_available === false" @click="startLogin">{{ editProvider.auth?.status === 'unconfigured' || !editProvider.auth ? '登录订阅账号' : '重新登录' }}</n-button>
+                <n-button v-if="editProvider.auth && editProvider.auth.status !== 'unconfigured'" :loading="accountBusy" :disabled="loginStarting || saving || fetching" @click="logoutSubscription">退出账号</n-button>
+              </n-space>
+              <div v-if="loginSession" class="login-progress">
+                <p role="status">{{ loginStatus === 'exchanging' ? '正在完成授权…' : '等待浏览器授权，请在 10 分钟内完成。' }}</p>
+                <n-space>
+                  <a :href="loginSession.authorization_url" target="_blank" rel="noopener noreferrer">打开授权页面 ↗</a>
+                  <n-button size="small" @click="cancelLogin()">取消登录</n-button>
+                </n-space>
+                <p class="sync-tip">远程浏览器无法自动回调时，请复制地址栏中的完整回调 URL 并粘贴到下方。</p>
+                <n-input v-model:value="callbackUrl" type="textarea" :rows="2" placeholder="http://localhost:1455/auth/callback?..." aria-label="完整回调 URL" :input-props="{ autocomplete: 'off', spellcheck: false }" />
+                <n-button size="small" :loading="callbackBusy" :disabled="!callbackUrl.trim() || loginStatus === 'exchanging'" @click="submitCallback">提交回调</n-button>
+              </div>
+              <p v-if="loginNotice" role="status" class="sync-tip">{{ loginNotice }}</p>
+            </div>
+            <n-form-item v-else label="API Key">
               <div class="api-key-row">
                 <n-input v-model:value="form.api_key" :type="showApiKey ? 'text' : 'password'" placeholder="sk-..." class="mono api-key-input">
                   <template #suffix>
@@ -222,12 +244,13 @@
               </div>
               <n-space :size="8">
                 <n-button
-                  v-if="selectedChannelDef?.models_endpoint"
+                  v-if="isSubscription || selectedChannelDef?.models_endpoint"
                   size="small"
                   secondary
                   type="success"
                   @click="fetchModels"
                   :loading="fetching"
+                  :disabled="isSubscription && (editProvider.auth?.status !== 'authorized' || !!loginSession || loginStarting)"
                   class="sync-btn mono"
                 >
                   <template #icon>
@@ -256,7 +279,7 @@
             </div>
             <div class="model-toolbar">
               <span class="model-count-tip mono">{{ activeModelCount }} 条映射</span>
-              <span v-if="selectedChannelDef?.models_endpoint" class="sync-tip">从该通道 API 拉取模型并生成差异</span>
+              <span v-if="isSubscription || selectedChannelDef?.models_endpoint" class="sync-tip">从该通道 API 拉取模型并生成差异</span>
               <span v-else class="sync-tip">该通道未配置 models_endpoint，仅可手动添加</span>
             </div>
             <div class="model-table">
@@ -282,7 +305,7 @@
           <span class="dirty-tip mono" :class="{ active: isDirty }">{{ isDirty ? '有未保存变更' : '暂无变更' }}</span>
           <n-space justify="end">
             <n-button @click="requestCloseConfig">取消</n-button>
-            <n-button type="primary" @click="handleSave" :loading="saving" :disabled="!isDirty">保存</n-button>
+            <n-button type="primary" @click="handleSave" :loading="saving" :disabled="!isDirty || !!loginSession || loginStarting || accountBusy">保存</n-button>
           </n-space>
         </n-space>
       </template>
@@ -343,7 +366,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { adminRequest, errorMessage } from '../api'
 import { NButton, NCheckbox, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NSwitch, useMessage } from 'naive-ui'
 
@@ -354,11 +377,13 @@ interface ChannelInfo { channel_type: string; base_url: string; models_endpoint?
 interface DriftSummary { new: number; removed: number }
 interface Balance { adapter: string; status: string; data?: Record<string, any> | null; error_msg?: string | null; fetched_at: string }
 interface UsageDef { adapter: string; params?: Record<string, any>; result?: string; display?: string }
-interface ProviderSummary { console_url?: string; has_cost_api_key: boolean; id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
+interface AuthSummary { status: 'authorized' | 'reauth_required' | 'unconfigured'; account_label?: string; login_available?: boolean }
+interface ProviderAccess { access_type?: 'api_key' | 'subscription'; adapter?: string; auth?: AuthSummary }
+interface ProviderSummary extends ProviderAccess { console_url?: string; has_cost_api_key: boolean; id: string; name: string; icon?: string; is_enabled: boolean; channels: ChannelInfo[]; drift?: DriftSummary; usage?: UsageDef; balance?: Balance | null; config_error?: string }
 interface ChangeEntry { model_id: string; model_name: string }
 interface ChannelChange { channel_type: string; added: ChangeEntry[]; removed: ChangeEntry[] }
 interface ProviderModel { id: string; provider_id: string; channel_type: string; model_id: string; model_name: string }
-interface ProviderDetail { workspace_id: string; has_cost_api_key: boolean; id: string; name: string; icon?: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
+interface ProviderDetail extends ProviderAccess { workspace_id: string; has_cost_api_key: boolean; id: string; name: string; icon?: string; api_key: string; is_enabled: boolean; channels: ChannelInfo[]; models: ProviderModel[] }
 interface ModelForm { model_id: string; model_name: string }
 interface DiffItem { model_id: string; model_name: string; checked: boolean }
 interface DiffRenamed { model_id: string; local_name: string; remote_name: string; checked: boolean }
@@ -386,9 +411,165 @@ const form = ref<FormState>({ workspace_id: '', api_key: '', is_enabled: false, 
 const selectedChannel = ref('')
 const refreshingId = ref<string | null>(null)
 
+interface LoginSession { session_id: string; authorization_url: string; expires_at: number; providerId: string }
+const loginSession = ref<LoginSession | null>(null)
+const loginStarting = ref(false)
+const loginStatus = ref('')
+const loginNotice = ref('')
+const callbackUrl = ref('')
+const callbackBusy = ref(false)
+const accountBusy = ref(false)
+let loginTimer: ReturnType<typeof setTimeout> | undefined
+let loginGeneration = 0
+
+function authLabel(auth?: AuthSummary): string {
+  return auth?.status === 'authorized' ? '已登录' : auth?.status === 'reauth_required' ? '需要重新登录' : '未登录'
+}
+
+function sessionPath(session: LoginSession): string {
+  return `/providers/${session.providerId}/subscription/login/${encodeURIComponent(session.session_id)}`
+}
+
+function clearLogin() {
+  loginGeneration++
+  clearTimeout(loginTimer)
+  loginSession.value = null
+  callbackUrl.value = ''
+  loginStatus.value = ''
+}
+
+async function cancelLogin() {
+  const session = loginSession.value
+  clearLogin()
+  if (!session) return
+  try {
+    await adminRequest(sessionPath(session), { method: 'DELETE', keepalive: true })
+  } catch (error) {
+    message.error(errorMessage(error, '取消登录失败，会话将在到期后失效'))
+  }
+}
+
+async function refreshSubscription(providerId: string, reloadModels = false) {
+  const detail: ProviderDetail = await (await adminRequest(`/providers/${providerId}`)).json()
+  if (showConfig.value && editProvider.value?.id === providerId) {
+    editProvider.value.auth = detail.auth
+    // 登录后以服务端选择为准，避免更换账号后把旧账号模型重新保存。
+    if (reloadModels) {
+      const models: Record<string, ModelForm[]> = {}
+      for (const channel of detail.channels) models[channel.channel_type] = []
+      for (const model of detail.models) (models[model.channel_type] ||= []).push({ model_id: model.model_id, model_name: model.model_name || model.model_id })
+      form.value.modelsByChannel = models
+      const baseline = JSON.parse(initialSnapshot.value)
+      baseline.models = flattenModels(form.value)
+      initialSnapshot.value = JSON.stringify(baseline)
+      showSync.value = false
+      diffResult.value = { added: [], removed: [], renamed: [] }
+    }
+  }
+  await loadProviders()
+}
+
+async function pollLogin(session: LoginSession, generation: number) {
+  if (generation !== loginGeneration) return
+  try {
+    const result = await (await adminRequest(sessionPath(session))).json()
+    if (generation !== loginGeneration) return
+    loginStatus.value = result.status
+    if (result.status === 'pending' || result.status === 'exchanging') {
+      if (Date.now() >= session.expires_at * 1000) {
+        loginNotice.value = '登录已超时，请重新登录。'
+        await cancelLogin()
+      } else {
+        loginTimer = setTimeout(() => void pollLogin(session, generation), 1500)
+      }
+      return
+    }
+    clearLogin()
+    const labels: Record<string, string> = { succeeded: '登录成功，请同步并选择模型，保存后启用。', failed: '登录失败，请重试。', cancelled: '登录已取消。', expired: '登录已超时，请重新登录。' }
+    loginNotice.value = result.message || labels[result.status] || '登录状态异常，请重试。'
+    if (result.status === 'succeeded') {
+      accountBusy.value = true
+      form.value.modelsByChannel = {}
+      showSync.value = false
+      try {
+        await refreshSubscription(session.providerId, true)
+      } catch (error) {
+        loginNotice.value = errorMessage(error, '登录已完成，但读取账号失败，请关闭并重新打开配置')
+      } finally {
+        accountBusy.value = false
+      }
+    }
+  } catch (error) {
+    if (generation !== loginGeneration) return
+    loginNotice.value = errorMessage(error, '获取登录状态失败，请重新登录')
+    await cancelLogin()
+  }
+}
+
+async function startLogin() {
+  const providerId = editProvider.value?.id
+  if (!providerId || loginStarting.value || loginSession.value) return
+  loginStarting.value = true
+  loginNotice.value = ''
+  const generation = ++loginGeneration
+  try {
+    const data = await (await adminRequest(`/providers/${providerId}/subscription/login`, { method: 'POST' })).json()
+    const session: LoginSession = { ...data, providerId }
+    // 创建请求返回前也可能关闭弹窗；仍需撤销服务端新建的会话。
+    if (generation !== loginGeneration || !showConfig.value) {
+      await adminRequest(sessionPath(session), { method: 'DELETE', keepalive: true })
+      return
+    }
+    loginSession.value = session
+    loginStatus.value = 'pending'
+    window.open(session.authorization_url, '_blank', 'noopener,noreferrer')
+    void pollLogin(session, generation)
+  } catch (error) {
+    loginNotice.value = errorMessage(error, '启动登录失败')
+  } finally {
+    loginStarting.value = false
+  }
+}
+
+async function submitCallback() {
+  const session = loginSession.value
+  if (!session || callbackBusy.value) return
+  callbackBusy.value = true
+  const url = callbackUrl.value.trim()
+  callbackUrl.value = ''
+  try {
+    await adminRequest(`${sessionPath(session)}/callback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
+    })
+  } catch (error) {
+    loginNotice.value = errorMessage(error, '提交回调失败')
+  } finally {
+    callbackBusy.value = false
+  }
+}
+
+async function logoutSubscription() {
+  const providerId = editProvider.value?.id
+  if (!providerId || accountBusy.value) return
+  accountBusy.value = true
+  try {
+    await cancelLogin()
+    await adminRequest(`/providers/${providerId}/subscription/account`, { method: 'DELETE' })
+    loginNotice.value = '已退出，本地凭据已清除。'
+    await refreshSubscription(providerId)
+  } catch (error) {
+    message.error(errorMessage(error, '退出失败'))
+  } finally {
+    accountBusy.value = false
+  }
+}
+
+onBeforeUnmount(() => { void cancelLogin() })
+
 const CHANNEL_LABELS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }
 
-const supportsWorkspace = computed(() => editProvider.value?.id === 'anthropic')
+const isSubscription = computed(() => editProvider.value?.access_type === 'subscription')
+const supportsWorkspace = computed(() => !isSubscription.value && editProvider.value?.id === 'anthropic')
 
 const selectedChannelDef = computed(() => form.value.channels.find(c => c.channel_type === selectedChannel.value))
 const visibleModels = computed(() => form.value.modelsByChannel[selectedChannel.value] || [])
@@ -639,6 +820,7 @@ async function openConfig(summary: ProviderSummary) {
     modelsByChannel,
   }
   selectedChannel.value = p.channels[0]?.channel_type || ''
+  loginNotice.value = ''
   showApiKey.value = false
   diffResult.value = { added: [], removed: [], renamed: [] }
   initialSnapshot.value = snapshotForm(form.value)
@@ -649,9 +831,12 @@ async function fetchModels() {
   if (!editProvider.value || !selectedChannel.value) return
   fetching.value = true
   try {
-    const apiKey = form.value.api_key.trim()
-    const workspaceQuery = supportsWorkspace.value ? `&workspace_id=${encodeURIComponent(form.value.workspace_id.trim())}` : ''
-    const res = await fetch(`${API_BASE}/providers/${editProvider.value.id}/fetch-models?api_key=${encodeURIComponent(apiKey)}&channel=${encodeURIComponent(selectedChannel.value)}${workspaceQuery}`)
+    const res = await adminRequest(`/providers/${editProvider.value.id}/models/query`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: selectedChannel.value,
+        ...(!isSubscription.value ? { api_key: form.value.api_key.trim() } : {}),
+        ...(supportsWorkspace.value ? { workspace_id: form.value.workspace_id.trim() } : {}) })
+    })
     if (res.ok) {
       const data = await res.json()
       const remote = (data.models || []).map((m: any) => ({ model_id: String(m.model_id), model_name: (m.model_name || String(m.model_id)).trim() }))
@@ -666,6 +851,8 @@ async function fetchModels() {
       const err = await res.json()
       message.error(err.error || '获取模型列表失败')
     }
+  } catch (error) {
+    message.error(errorMessage(error, '获取模型列表失败'))
   } finally {
     fetching.value = false
   }
@@ -780,6 +967,7 @@ function addModelRow() { (form.value.modelsByChannel[selectedChannel.value] ||= 
 function removeModelRow(index: number) { form.value.modelsByChannel[selectedChannel.value].splice(index, 1) }
 
 function closeConfig() {
+  void cancelLogin()
   showConfig.value = false
   showCloseConfirm.value = false
   showApiKey.value = false
@@ -802,7 +990,7 @@ async function handleSave() {
   saving.value = true
   try {
     const body = {
-      api_key: form.value.api_key,
+      ...(!isSubscription.value ? { api_key: form.value.api_key } : {}),
       ...(supportsWorkspace.value ? { workspace_id: form.value.workspace_id.trim() } : {}),
       is_enabled: form.value.is_enabled,
       channels: form.value.channels.map(c => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
@@ -826,7 +1014,7 @@ async function quickToggle(p: ProviderSummary, enabled: boolean) {
   try {
     const detail = await (await adminRequest(`/providers/${p.id}`)).json()
     const body = {
-      api_key: detail.api_key || '',
+      ...(detail.access_type !== 'subscription' ? { api_key: detail.api_key || '' } : {}),
       is_enabled: enabled,
       channels: detail.channels.map((c: ChannelInfo) => ({ channel_type: c.channel_type, base_url: c.base_url, is_enabled: c.is_enabled })),
       models: (detail.models || []).map((m: any) => ({ channel_type: m.channel_type, model_id: m.model_id, model_name: m.model_name || m.model_id }))
@@ -846,6 +1034,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.access-badge { padding: 1px 6px; border: 1px solid var(--mb-border); border-radius: 5px; color: var(--mb-text-2); }
+.subscription-auth { display: flex; flex-direction: column; gap: 10px; }
+.subscription-auth p { margin: 0; }
+.login-progress { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 8px; background: var(--mb-surface-inset); }
+.login-progress a { color: var(--mb-success-d); }
+.auth-error { color: var(--mb-warning); font-size: 12px; }
 .quota-cost { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .quota-cost-label { font-size: 10px; color: var(--mb-text-3); }
 /* editorial catalog atmosphere: faint graph-paper dots on the page field */
