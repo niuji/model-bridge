@@ -132,9 +132,53 @@ async fn metadata(client: &Client, source: &Source, endpoint: &str) -> Result<Gi
         "{}/repos/niuji/model-bridge/releases/{endpoint}",
         source.api
     );
-    Ok(serde_json::from_slice(
-        &bytes(client, &url, 2 * 1024 * 1024).await?,
-    )?)
+    match bytes(client, &url, 2 * 1024 * 1024).await {
+        Ok(body) => Ok(serde_json::from_slice(&body)?),
+        Err(error)
+            if error.downcast_ref::<reqwest::Error>().is_some_and(|e| {
+                matches!(
+                    e.status(),
+                    Some(reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::TOO_MANY_REQUESTS)
+                )
+            }) =>
+        {
+            // Public release attachments remain accessible when the shared anonymous API quota is exhausted.
+            // Resolve latest once, then validate and download only from the pinned version's URLs.
+            let tag = if endpoint == "latest" {
+                let url = format!(
+                    "{}/niuji/model-bridge/releases/latest/download/update-manifest.json",
+                    source.web
+                );
+                let manifest: Manifest =
+                    serde_json::from_slice(&bytes(client, &url, 64 * 1024).await?)?;
+                stable_version(&manifest.version)?;
+                format!("v{}", manifest.version)
+            } else {
+                let tag = endpoint
+                    .strip_prefix("tags/v")
+                    .context("invalid release endpoint")?;
+                stable_version(tag)?;
+                format!("v{tag}")
+            };
+            let assets = [ASSET, "update-manifest.json", "SHA256SUMS"]
+                .into_iter()
+                .map(|name| GithubAsset {
+                    name: name.into(),
+                    browser_download_url: format!(
+                        "{}/niuji/model-bridge/releases/download/{tag}/{name}",
+                        source.web
+                    ),
+                })
+                .collect();
+            Ok(GithubRelease {
+                tag_name: tag,
+                draft: false,
+                prerelease: false,
+                assets,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub async fn check_release(client: &Client, current: &str) -> Result<Option<ReleaseInfo>> {
@@ -395,6 +439,68 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn rate_limited_api_falls_back_for_checks_and_pinned_installs() {
+        for status in [403, 429] {
+            let (server, client) = fixture(None, None).await;
+            let source = Source::test(&server.uri());
+            for endpoint in ["latest", "tags/v1.2.3"] {
+                Mock::given(path(format!(
+                    "/repos/niuji/model-bridge/releases/{endpoint}"
+                )))
+                .respond_with(ResponseTemplate::new(status))
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            }
+            Mock::given(path(
+                "/niuji/model-bridge/releases/latest/download/update-manifest.json",
+            ))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "Location",
+                format!(
+                    "{}/niuji/model-bridge/releases/download/v1.2.3/update-manifest.json",
+                    server.uri()
+                ),
+            ))
+            .mount(&server)
+            .await;
+            let release = check_from(&client, "1.2.2", &source)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(release.version, "1.2.3");
+            assert_eq!(release.size, 7);
+            assert_eq!(release.sha256, format!("{:x}", Sha256::digest(b"archive")));
+            assert!(check_from(&client, "1.2.3", &source)
+                .await
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                pinned_from(&client, "1.2.3", &source).await.unwrap().tag,
+                "v1.2.3"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limit_fallback_preserves_manifest_validation() {
+        for change in [
+            ("version", json!("1.2.4")),
+            ("target", json!("wrong")),
+            ("sha256", json!("f".repeat(64))),
+        ] {
+            let (server, client) = fixture(Some(change), None).await;
+            Mock::given(path("/repos/niuji/model-bridge/releases/tags/v1.2.3"))
+                .respond_with(ResponseTemplate::new(403))
+                .mount(&server)
+                .await;
+            assert!(pinned_from(&client, "1.2.3", &Source::test(&server.uri()))
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]
