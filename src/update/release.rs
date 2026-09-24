@@ -251,8 +251,13 @@ async fn validate(client: &Client, source: &Source, release: GithubRelease) -> R
     })
 }
 
-pub async fn download(client: &Client, release: &ReleaseInfo, destination: &Path) -> Result<()> {
-    download_from(client, release, destination, &Source::github()).await
+pub async fn download(
+    client: &Client,
+    release: &ReleaseInfo,
+    destination: &Path,
+    progress: impl FnMut(u64),
+) -> Result<()> {
+    download_from(client, release, destination, &Source::github(), progress).await
 }
 
 async fn download_from(
@@ -260,6 +265,7 @@ async fn download_from(
     release: &ReleaseInfo,
     destination: &Path,
     source: &Source,
+    mut progress: impl FnMut(u64),
 ) -> Result<()> {
     stable_version(&release.version)?;
     ensure!(
@@ -271,6 +277,7 @@ async fn download_from(
         release.size > 0 && release.size <= MAX_BYTES,
         "release archive size is outside allowed limits"
     );
+    progress(0);
     let mut response = client
         .get(&release.asset_url)
         .send()
@@ -298,6 +305,7 @@ async fn download_from(
             );
             digest.update(&chunk);
             file.write_all(&chunk).await?;
+            progress(size);
         }
         ensure!(size == release.size, "release archive size mismatch");
         if format!("{:x}", digest.finalize()) != release.sha256 {
@@ -447,20 +455,31 @@ mod tests {
         .await;
         let destination =
             std::env::temp_dir().join(format!("mb-release-test-{}", uuid::Uuid::new_v4()));
-        download_from(&client, &release, &destination, &source)
-            .await
-            .unwrap();
+        let mut progress = Vec::new();
+        download_from(&client, &release, &destination, &source, |bytes| {
+            progress.push(bytes)
+        })
+        .await
+        .unwrap();
+        assert_eq!(progress.first(), Some(&0));
+        assert_eq!(progress.last(), Some(&release.size));
+        assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(progress.iter().all(|bytes| *bytes <= release.size));
         assert_eq!(std::fs::read(&destination).unwrap(), b"archive");
         std::fs::remove_file(&destination).unwrap();
         release.sha256 = "f".repeat(64);
-        assert!(download_from(&client, &release, &destination, &source)
-            .await
-            .is_err());
+        assert!(
+            download_from(&client, &release, &destination, &source, |_| {})
+                .await
+                .is_err()
+        );
         assert!(!destination.exists());
         release.size = 6;
-        assert!(download_from(&client, &release, &destination, &source)
-            .await
-            .is_err());
+        assert!(
+            download_from(&client, &release, &destination, &source, |_| {})
+                .await
+                .is_err()
+        );
         assert!(!destination.exists());
     }
 

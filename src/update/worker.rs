@@ -1,6 +1,7 @@
 use super::{
     backup,
     journal::{self, Job, Phase},
+    progress::DownloadProgress,
     release, Paths,
 };
 use anyhow::{ensure, Context, Result};
@@ -150,7 +151,24 @@ async fn install(paths: &Paths, job: &mut Job, service: &impl Service) -> Result
         "installed binary changed during update"
     );
     let archive = dir.join(format!("download-{}.tar.gz", uuid::Uuid::new_v4()));
-    release::download(&client, &current, &archive).await?;
+    let mut last_progress = None::<std::time::Instant>;
+    release::download(&client, &current, &archive, |downloaded_bytes| {
+        if downloaded_bytes == 0
+            || downloaded_bytes == current.size
+            || last_progress.is_none_or(|last| last.elapsed() >= Duration::from_millis(500))
+        {
+            last_progress = Some(std::time::Instant::now());
+            let progress = DownloadProgress {
+                downloaded_bytes,
+                total_bytes: current.size,
+            };
+            // Progress is advisory; an unavailable progress file must not abort installation.
+            if let Err(error) = journal::write_json(&dir.join("progress.json"), &progress) {
+                tracing::warn!("cannot save download progress: {error}");
+            }
+        }
+    })
+    .await?;
     let candidate = dir.join(format!("candidate-{}", uuid::Uuid::new_v4()));
     extract(&archive, &candidate)?;
     verify_version(&candidate, &job.version).await?;

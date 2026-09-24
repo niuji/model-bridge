@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod journal;
 pub mod lifecycle;
+pub mod progress;
 pub mod release;
 pub mod worker;
 

@@ -18,11 +18,15 @@
         <p>若日志显示任务已中断，可执行恢复命令：</p>
         <code>systemctl --user start model-bridge-update</code>
       </n-alert>
-      <n-alert v-else-if="disconnected" :type="active ? 'info' : 'warning'" :show-icon="false">
-        {{ active ? '服务正在重启，正在等待重新连接…' : '暂时无法连接服务，正在重试…' }}
+      <n-alert v-if="disconnected" :type="active ? 'info' : 'warning'" :show-icon="false">
+        {{ active ? '正在等待服务恢复…' : '暂时无法连接服务，正在重试…' }} 已等待 {{ disconnectedSeconds }} 秒
       </n-alert>
       <n-alert v-if="status?.job" :type="jobType" :show-icon="false">
-        <div>{{ phaseLabel }} · v{{ status.job.version }}</div>
+        <div class="update-phase"><n-spin v-if="active && !disconnected" :size="14" /><span>{{ phaseLabel }} · v{{ status.job.version }}</span></div>
+        <div v-if="downloadProgress" class="download-progress">
+          <n-progress type="line" :percentage="downloadPercent" :show-indicator="true" :processing="!disconnected && downloadPercent < 100" aria-label="下载进度" />
+          <div class="update-note">{{ formatBytes(downloadProgress.downloaded_bytes) }} / {{ formatBytes(downloadProgress.total_bytes) }}<span v-if="disconnected"> · 连接中断，显示最后收到的进度</span></div>
+        </div>
         <div v-if="status.job.error" class="update-error">{{ status.job.error }}</div>
         <template v-if="needsRecovery">
           <p>请在安装服务的用户终端执行恢复命令：</p>
@@ -51,7 +55,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NModal, NSpace } from 'naive-ui'
+import { NAlert, NButton, NModal, NProgress, NSpace, NSpin } from 'naive-ui'
 import { adminRequest, errorMessage } from '../api'
 
 type ReleaseInfo = { version: string, html_url: string }
@@ -63,12 +67,17 @@ type UpdateStatus = {
   checking: boolean
   check: { checked_at: number | null, candidate: ReleaseInfo | null, error: string | null } | null
   job: Job | null
+  progress?: { downloaded_bytes: number, total_bytes: number } | null
 }
 
 const props = defineProps<{ version: string, collapsed: boolean }>()
 const show = ref(false)
 const status = ref<UpdateStatus | null>(null)
 const disconnected = ref(false)
+const disconnectedSince = ref<number | null>(null)
+const now = ref(Date.now())
+const disconnectedSeconds = computed(() => disconnectedSince.value === null ? 0 : Math.max(0, Math.floor((now.value - disconnectedSince.value) / 1000)))
+let elapsedTimer: ReturnType<typeof setInterval> | undefined
 const waitingTooLong = ref(false)
 let activeSince: number | undefined
 const requestError = ref('')
@@ -90,7 +99,22 @@ const phases: Record<string, string> = {
   rolling_back: '正在回滚', rollback_validating: '正在验证回滚结果', rolled_back: '已恢复原版本',
   failed: '更新失败', recovery_required: '需要恢复更新任务', restarting_old: '恢复原服务中',
 }
-const phaseLabel = computed(() => phases[status.value?.job?.phase || ''] || '正在更新')
+const downloadProgress = computed(() => {
+  const progress = status.value?.progress
+  return status.value?.job?.phase === 'downloading' && progress && progress.total_bytes > 0
+    && progress.downloaded_bytes >= 0 && progress.downloaded_bytes <= progress.total_bytes ? progress : null
+})
+const downloadPercent = computed(() => downloadProgress.value
+  ? Math.floor(downloadProgress.value.downloaded_bytes / downloadProgress.value.total_bytes * 100) : 0)
+const phaseLabel = computed(() => downloadProgress.value
+  ? downloadPercent.value === 100 ? '下载完成，正在校验和准备安装' : '正在下载'
+  : phases[status.value?.job?.phase || ''] || '正在更新')
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+}
 let timer: ReturnType<typeof setTimeout> | undefined
 let polling = false
 let disposed = false
@@ -113,6 +137,7 @@ async function poll() {
     initialVersion ||= next.current_version
     status.value = next
     disconnected.value = false
+    disconnectedSince.value = null
     if (requestedJob.value && next.job?.id === requestedJob.value && terminal.has(next.job.phase)) requestedJob.value = null
     // Only reload after the worker's success record; validation may briefly expose the new version.
     if (!reloadStarted && next.job?.phase === 'succeeded' && next.current_version !== initialVersion) {
@@ -121,6 +146,7 @@ async function poll() {
     }
   } catch {
     disconnected.value = true
+    disconnectedSince.value ??= Date.now()
   } finally {
     polling = false
     if (active.value) {
@@ -155,8 +181,11 @@ async function send(action: 'check' | 'apply') {
 }
 
 watch(show, () => { if (show.value) void poll(); else schedule() })
-onMounted(poll)
-onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
+onMounted(() => {
+  elapsedTimer = setInterval(() => { now.value = Date.now() }, 1000)
+  void poll()
+})
+onBeforeUnmount(() => { disposed = true; clearTimeout(timer); clearInterval(elapsedTimer) })
 </script>
 
 <style scoped>
@@ -166,5 +195,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
 .update-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--mb-primary); }
 .update-note { margin: 0; color: var(--mb-text-2); font-size: 12px; }
 .update-error, code { overflow-wrap: anywhere; }
+.update-phase { display: flex; align-items: center; gap: 8px; }
+.download-progress { margin-top: 10px; }
 a { color: var(--mb-primary); }
 </style>

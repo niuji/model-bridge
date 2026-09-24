@@ -62,7 +62,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Response {
         },
         None => None,
     };
-    Json(serde_json::json!({"current_version":env!("CARGO_PKG_VERSION"),"supported":updates.paths.is_some(),"unsupported_reason":updates.unsupported_reason,"checking":updates.checking.load(Ordering::Acquire),"check":*updates.check.lock().await,"job":job})).into_response()
+    let progress = updates
+        .paths
+        .as_ref()
+        .zip(job.as_ref())
+        .filter(|(_, job)| job.phase == crate::update::journal::Phase::Downloading)
+        .and_then(|(paths, job)| paths.job_dir(job).ok())
+        .and_then(|directory| crate::update::progress::read(&directory));
+    Json(serde_json::json!({"current_version":env!("CARGO_PKG_VERSION"),"supported":updates.paths.is_some(),"unsupported_reason":updates.unsupported_reason,"checking":updates.checking.load(Ordering::Acquire),"check":*updates.check.lock().await,"job":job,"progress":progress})).into_response()
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
