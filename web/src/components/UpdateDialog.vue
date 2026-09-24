@@ -42,11 +42,12 @@
       </template>
       <div v-else-if="status?.check?.checked_at && !status.check.error && !status.checking">当前已是最新稳定版本</div>
       <div v-if="status?.check?.checked_at" class="update-note">上次检查：{{ new Date(status.check.checked_at * 1000).toLocaleString() }}</div>
+      <div v-if="checkCooldown > 0 && !status?.checking" class="update-note">刚刚已检查更新，{{ checkCooldown }} 秒后可再次检查。</div>
       <n-alert v-if="requestError || status?.check?.error" type="error" :show-icon="false">
         {{ requestError || status?.check?.error }}
       </n-alert>
       <n-space justify="end">
-        <n-button :loading="status?.checking || sending === 'check'" :disabled="busy" @click="send('check')">检查更新</n-button>
+        <n-button :loading="status?.checking || sending === 'check'" :disabled="busy || checkCooldown > 0" @click="send('check')">{{ status?.checking ? '正在检查…' : checkCooldown > 0 ? `${checkCooldown} 秒后可重新检查` : '检查更新' }}</n-button>
         <n-button v-if="candidate" type="primary" :loading="sending === 'apply' || (active && !waitingTooLong)" :disabled="busy || !status?.supported" @click="send('apply')">更新并重启</n-button>
       </n-space>
     </n-space>
@@ -86,6 +87,10 @@ const requestedJob = ref<string | null>(null)
 const terminal = new Set(['succeeded', 'rolled_back', 'failed', 'recovery_required'])
 const active = computed(() => !!requestedJob.value || !!(status.value?.job && !terminal.has(status.value.job.phase)))
 const busy = computed(() => active.value || !!sending.value || !!status.value?.checking || status.value?.job?.phase === 'recovery_required')
+const checkCooldown = computed(() => {
+  const checkedAt = status.value?.check?.checked_at
+  return checkedAt == null ? 0 : Math.max(0, Math.ceil((checkedAt * 1000 + 60000 - now.value) / 1000))
+})
 const candidate = computed(() => status.value?.check?.candidate)
 const currentVersion = computed(() => status.value?.current_version || props.version)
 const needsRecovery = computed(() => status.value?.job?.phase === 'recovery_required')
@@ -161,6 +166,7 @@ async function poll() {
 }
 
 async function send(action: 'check' | 'apply') {
+  if (action === 'check' && (busy.value || checkCooldown.value > 0)) return
   sending.value = action
   requestError.value = ''
   try {
@@ -173,7 +179,12 @@ async function send(action: 'check' | 'apply') {
     if (action === 'apply') requestedJob.value = (await response.json()).job_id
     await poll()
   } catch (error) {
-    requestError.value = errorMessage(error, action === 'apply' ? '启动更新失败' : '检查更新失败')
+    // A background check or another tab can start a check after the last status poll.
+    if (action === 'check' && error instanceof Error && ['请等待 60 秒后再次检查', '正在检查版本'].includes(error.message)) {
+      await poll()
+    } else {
+      requestError.value = errorMessage(error, action === 'apply' ? '启动更新失败' : '检查更新失败')
+    }
   } finally {
     sending.value = ''
     schedule()
