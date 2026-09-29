@@ -209,11 +209,24 @@ pub(super) async fn proxy(
             return error(StatusCode::BAD_GATEWAY, &message);
         }
     };
-    if *state.request_log_enabled.read().await && super::request_log::write_request(&state.request_log_dir,
+    let debug_enabled = *state.request_log_enabled.read().await;
+    let request_id = if debug_enabled {
+        match super::request_log::write_request(
+            &state.request_log_dir,
             json!({"method":"POST","path":"responses","channel":"openai_responses","provider_id":route.provider_id,"route_model":route.model_id,"api_key_id":api_key_id}),
-            &headers, body, &serde_json::to_vec(&payload).unwrap()).await.is_err() {
-        tracing::warn!("failed to save subscription request diagnostic");
-    }
+            &headers,
+            body,
+            &serde_json::to_vec(&payload).unwrap(),
+        ).await {
+            Ok(id) => Some(id),
+            Err(_) => {
+                tracing::warn!("failed to save subscription request diagnostic");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let original_account = credentials.account_id.clone();
     let url = format!("{}/responses", route.base_url.trim_end_matches('/'));
     let mut response = None;
@@ -335,6 +348,25 @@ pub(super) async fn proxy(
     let status = resp.status();
     if !status.is_success() {
         let retry = resp.headers().get("retry-after").cloned();
+        if let Some(request_id) = request_id.as_deref() {
+            let mut secrets = vec![credentials.access_token.as_str()];
+            for name in ["authorization", "x-api-key", "cookie"] {
+                if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
+                    secrets.push(value.strip_prefix("Bearer ").unwrap_or(value));
+                }
+            }
+            if super::request_log::write_upstream_error(
+                &state.request_log_dir,
+                request_id,
+                resp,
+                &secrets,
+            )
+            .await
+            .is_err()
+            {
+                tracing::warn!("failed to save subscription response diagnostic");
+            }
+        }
         record(
             state,
             route,

@@ -1898,6 +1898,136 @@ async fn subscription_state(upstream: &str) -> Arc<AppState> {
 }
 
 #[tokio::test]
+async fn subscription_debug_captures_correlated_redacted_upstream_error_only_when_enabled() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/responses"))
+        .respond_with(ResponseTemplate::new(400)
+            .insert_header("x-request-id", "upstream-400")
+            .insert_header("set-cookie", "session=secret-cookie")
+            .set_body_json(serde_json::json!({"error": {
+                "message": format!("Unsupported parameter: temperature; oauth-access {TEST_KEY}"),
+                "param": "temperature", "access_token": "secret-token"
+            }})))
+        .mount(&upstream).await;
+    for enabled in [false, true] {
+        let state = subscription_state(&upstream.uri()).await;
+        *state.request_log_enabled.write().await = enabled;
+        let base = spawn_proxy(state.clone()).await;
+        let response = http().post(format!("{base}/openai-responses/v1/responses"))
+            .bearer_auth(TEST_KEY)
+            .json(&serde_json::json!({"model":"subscription-model","input":"hello"}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        let client_body = response.text().await.unwrap();
+        assert!(!client_body.contains("Unsupported parameter"));
+        if !enabled {
+            assert!(!state.request_log_dir.exists());
+            continue;
+        }
+        let paths: Vec<_> = std::fs::read_dir(&state.request_log_dir).unwrap()
+            .map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(paths.len(), 2, "debug must retain both request and upstream error");
+        let response_path = paths.iter().find(|p| p.to_string_lossy().ends_with(".response.json")).unwrap();
+        let raw = std::fs::read_to_string(response_path).unwrap();
+        let log: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let request_path = state.request_log_dir.join(format!("{}.json", log["request_id"].as_str().unwrap()));
+        assert!(request_path.exists());
+        assert_eq!(log["status"], 400);
+        assert_eq!(log["headers"]["x-request-id"], "upstream-400");
+        assert!(log["body"].as_str().unwrap().contains("Unsupported parameter: temperature"));
+        for secret in ["oauth-access", TEST_KEY, "secret-token", "secret-cookie"] {
+            assert!(!raw.contains(secret), "response log leaked a credential");
+        }
+        assert_eq!(log["truncated"], false);
+        std::fs::remove_dir_all(&state.request_log_dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn subscription_debug_bounds_text_error_and_preserves_retry_after() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/responses"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "30")
+            .set_body_string(format!("oauth-access {}", "x".repeat(70 * 1024))))
+        .mount(&upstream).await;
+    let state = subscription_state(&upstream.uri()).await;
+    *state.request_log_enabled.write().await = true;
+    let base = spawn_proxy(state.clone()).await;
+    let response = http().post(format!("{base}/openai-responses/v1/responses"))
+        .bearer_auth(TEST_KEY)
+        .json(&serde_json::json!({"model":"subscription-model","input":"hello"}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), 429);
+    assert_eq!(response.headers()["retry-after"], "30");
+    let path = std::fs::read_dir(&state.request_log_dir).unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with(".response.json")).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let log: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(log["truncated"], true);
+    assert_eq!(log["read_error"], serde_json::Value::Null);
+    assert!(log["body"].as_str().unwrap().len() <= 64 * 1024);
+    assert!(!raw.contains("oauth-access"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    std::fs::remove_dir_all(&state.request_log_dir).unwrap();
+}
+
+#[tokio::test]
+async fn subscription_debug_omits_incomplete_bodies_that_cannot_be_safely_redacted() {
+    let bodies = [
+        serde_json::json!({"access_token":"secret-token", "message":"x".repeat(70 * 1024)}).to_string(),
+        format!("{}oauth-access", "x".repeat(64 * 1024 - 6)),
+        "{\"access_token\":\"secret-token\",\"error\":".to_owned(),
+    ];
+    for body in bodies {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/responses"))
+            .respond_with(ResponseTemplate::new(400).set_body_string(body))
+            .mount(&upstream).await;
+        let state = subscription_state(&upstream.uri()).await;
+        *state.request_log_enabled.write().await = true;
+        let base = spawn_proxy(state.clone()).await;
+        let response = http().post(format!("{base}/openai-responses/v1/responses"))
+            .bearer_auth(TEST_KEY)
+            .json(&serde_json::json!({"model":"subscription-model","input":"hello"}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        let path = std::fs::read_dir(&state.request_log_dir).unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|p| p.to_string_lossy().ends_with(".response.json")).unwrap();
+        let raw = std::fs::read_to_string(path).unwrap();
+        assert!(!raw.contains("secret-token"), "partial JSON bypassed field redaction");
+        assert!(!raw.contains("oauth-"), "partial credential bypassed literal redaction");
+        let log: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(log["body_omitted"], true);
+        std::fs::remove_dir_all(&state.request_log_dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn subscription_debug_unwritable_directory_preserves_upstream_error() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/responses"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+        .mount(&upstream).await;
+    let state = subscription_state(&upstream.uri()).await;
+    *state.request_log_enabled.write().await = true;
+    std::fs::write(&state.request_log_dir, "not a directory").unwrap();
+    let base = spawn_proxy(state.clone()).await;
+    let response = http().post(format!("{base}/openai-responses/v1/responses"))
+        .bearer_auth(TEST_KEY)
+        .json(&serde_json::json!({"model":"subscription-model","input":"hello"}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(response.text().await.unwrap().contains("subscription upstream HTTP 400"));
+    std::fs::remove_file(&state.request_log_dir).unwrap();
+}
+
+#[tokio::test]
 async fn subscription_responses_uses_server_credentials_and_buffers_nonstream() {
     let upstream=MockServer::start().await;
     Mock::given(method("POST")).and(path("/responses"))

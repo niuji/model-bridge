@@ -189,6 +189,14 @@ Served on the loopback admin server at `/api/admin/`:
 
 `/stats/models` returns separate rows for each provider, channel, and model over the last 30 days. The dashboard supports provider/channel filtering; historical records without a channel are shown separately.
 
+With debug request logging enabled, OpenAI subscription HTTP errors also produce
+`request-logs/<request_id>.response.json`, paired with `<request_id>.json`.
+The response file contains the status, diagnostic response headers, and a redacted
+error body (up to 64 KiB, with a 5-second read deadline); `truncated` and `read_error`
+indicate incomplete capture. Incomplete or malformed JSON bodies are omitted to
+avoid bypassing credential redaction, with `body_omitted` set to true.
+These diagnostics are local files, separate from `/logs`.
+
 ## Build from source
 
 Requires Rust (stable) and Node 20+.

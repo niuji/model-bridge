@@ -81,6 +81,120 @@ pub(super) async fn write_request(
     Ok(request_id)
 }
 
+// Error capture is bounded so a diagnostic cannot buffer an arbitrary upstream body
+// or hold up the original error indefinitely. Only allowlisted response headers persist.
+pub(super) async fn write_upstream_error(
+    dir: &Path,
+    request_id: &str,
+    mut response: reqwest::Response,
+    secrets: &[&str],
+) -> anyhow::Result<()> {
+    const LIMIT: usize = 64 * 1024;
+    let status = response.status().as_u16();
+    let redact = |text: &str| {
+        let mut text = text.to_owned();
+        for secret in secrets.iter().filter(|s| !s.is_empty()) {
+            text = text.replace(secret, "[REDACTED]");
+        }
+        text
+    };
+    let headers: serde_json::Map<String, Value> = response
+        .headers()
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "content-type" | "x-request-id" | "request-id" | "retry-after" | "cf-ray"
+            )
+        })
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.to_string(), json!(redact(v))))
+        })
+        .collect();
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut read_error = None;
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    let remaining = LIMIT - bytes.len();
+                    bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                    if chunk.len() > remaining {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    read_error = Some("upstream body read failed");
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    if read.is_err() {
+        read_error = Some("upstream body read timed out");
+    }
+    let raw = String::from_utf8_lossy(&bytes);
+    let parsed = serde_json::from_str::<Value>(&raw);
+    // Partial JSON bypasses field redaction and can split a known token. Never
+    // persist incomplete bodies or malformed JSON-shaped bodies as raw text.
+    let body_omitted = truncated
+        || read_error.is_some()
+        || (parsed.is_err() && matches!(raw.trim_start().chars().next(), Some('{') | Some('[')));
+    let body = if body_omitted {
+        "[OMITTED: body could not be safely redacted]".to_owned()
+    } else if let Ok(mut value) = parsed {
+        redact_credential_fields(&mut value);
+        redact(&serde_json::to_string(&value)?)
+    } else {
+        redact(&raw)
+    };
+    let record = json!({
+        "request_id": request_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "status": status,
+        "headers": headers,
+        "body": body,
+        "body_omitted": body_omitted,
+        "truncated": truncated,
+        "read_error": read_error,
+    });
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(dir.join(format!("{request_id}.response.json")))
+        .await?;
+    file.write_all(&serde_json::to_vec_pretty(&record)?).await?;
+    file.flush().await?;
+    Ok(())
+}
+
+fn redact_credential_fields(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            for (name, value) in fields {
+                match name.to_ascii_lowercase().replace('-', "_").as_str() {
+                    "authorization" | "api_key" | "x_api_key" | "access_token"
+                    | "refresh_token" | "id_token" | "cookie" | "set_cookie" => {
+                        *value = json!("[REDACTED]");
+                    }
+                    _ => redact_credential_fields(value),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_credential_fields),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
