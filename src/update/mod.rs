@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod journal;
 pub mod lifecycle;
+pub mod network;
 pub mod progress;
 pub mod release;
 pub mod worker;
@@ -288,7 +289,8 @@ impl Manager {
         let this = self.clone();
         tokio::spawn(async move {
             let result = async {
-                release::check_release(&release::client()?, env!("CARGO_PKG_VERSION")).await
+                let client = release::client(this.paths.as_ref().map(|paths| paths.root.as_path()))?;
+                release::check_release(&client, env!("CARGO_PKG_VERSION")).await
             }
             .await;
             let mut check = this.check.lock().await;

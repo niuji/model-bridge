@@ -2166,3 +2166,118 @@ async fn subscription_malformed_frame_after_terminal_propagates_stream_error() {
     assert_eq!(status,"error");
     server.abort();
 }
+
+
+#[tokio::test]
+async fn update_proxy_settings_persist_validate_and_clear() {
+    let mut state = build_state(HashMap::new(), HashMap::new(), HashMap::new()).await;
+    let root = std::env::temp_dir().join(format!("mb-proxy-{}", uuid::Uuid::new_v4()));
+    let paths = crate::update::Paths {
+        root: root.clone(),
+        install: crate::update::Installation {
+            binary: root.join("binary"),
+            config: root.join("config"),
+            working_directory: root.clone(),
+        },
+        database: root.join("db"),
+        admin_url: String::new(),
+    };
+    Arc::get_mut(&mut state).unwrap().updates = Arc::new(crate::update::Manager {
+        paths: Some(paths),
+        ..Default::default()
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/api/admin/update/proxy",
+        listener.local_addr().unwrap()
+    );
+    let router = crate::router::create_admin_router(state);
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = http();
+    let response = client.get(&url).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["proxy_url"],
+        ""
+    );
+    let body = serde_json::json!({"proxy_url":"  http://127.0.0.1:7890  "});
+    assert_eq!(
+        client.put(&url).json(&body).send().await.unwrap().status(),
+        403
+    );
+    assert_eq!(
+        client
+            .put(&url)
+            .header("x-model-bridge-update", "1")
+            .header("Origin", "https://evil.example")
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let response = client
+        .put(&url)
+        .header("x-model-bridge-update", "1")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["proxy_url"],
+        "http://127.0.0.1:7890"
+    );
+    // A fresh disk reader models the independent worker, without in-process cached settings.
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("proxy.json")).unwrap()).unwrap();
+    assert_eq!(stored["proxy_url"], "http://127.0.0.1:7890");
+    for invalid in [
+        "127.0.0.1:7890",
+        "socks5://localhost:1080",
+        "file:///tmp/proxy",
+        "http://",
+        "http://localhost:7890/path",
+        "http://localhost:7890?query=1",
+    ] {
+        let response = client
+            .put(&url)
+            .header("x-model-bridge-update", "1")
+            .json(&serde_json::json!({"proxy_url":invalid}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "{invalid}");
+    }
+    let saved = client
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(saved["proxy_url"], "http://127.0.0.1:7890");
+    let response = client
+        .put(&url)
+        .header("x-model-bridge-update", "1")
+        .json(&serde_json::json!({"proxy_url":"  "}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let saved = client
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(saved["proxy_url"], "");
+    server.abort();
+    std::fs::remove_dir_all(root).unwrap();
+}

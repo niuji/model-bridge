@@ -138,7 +138,7 @@ async fn install(paths: &Paths, job: &mut Job, service: &impl Service) -> Result
     let dir = paths.job_dir(job)?;
     let expected: release::ReleaseInfo =
         journal::read_json(&dir.join("release.json"))?.context("missing pinned release")?;
-    let client = release::client()?;
+    let client = release::client(Some(&paths.root))?;
     let current = release::pinned_release(&client, &job.version).await?;
     ensure!(
         current.sha256 == expected.sha256

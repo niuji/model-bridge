@@ -12,6 +12,18 @@
       <n-alert v-if="status && !status.supported" type="info" :show-icon="false">
         {{ status.unsupported_reason || '此安装方式不支持网页更新，请使用安装脚本升级。' }}
       </n-alert>
+      <n-space v-if="status?.supported" vertical :size="8">
+        <label for="update-proxy">更新代理</label>
+        <n-input id="update-proxy" v-model:value="proxyUrl" placeholder="http://127.0.0.1:7890" :disabled="busy || !proxyLoaded" clearable />
+        <p class="update-note">支持 HTTP/HTTPS 代理（可使用 mixed 端口）。留空直接连接，不使用系统代理。保存后下次检查或下载生效，仅影响软件更新。</p>
+        <n-alert v-if="proxyError" type="error" :show-icon="false">{{ proxyError }}</n-alert>
+        <n-space align="center">
+          <n-button v-if="!proxyLoaded" :loading="proxyLoading" :disabled="proxyLoading" @click="loadProxy">重新加载代理配置</n-button>
+          <n-button v-else :loading="proxySaving" :disabled="busy || !proxyDirty" @click="saveProxy">保存代理配置</n-button>
+          <span v-if="proxyDirty" class="update-note">请先保存代理配置，再检查或安装更新。</span>
+          <span v-else-if="proxySaved" class="update-note">已保存</span>
+        </n-space>
+      </n-space>
       <n-alert v-if="waitingTooLong" type="warning" :show-icon="false">
         <p>等待已超过 3 分钟，尚未确认更新结果，页面会继续查询。请先查看日志：</p>
         <code>journalctl --user -u model-bridge-update -n 100</code>
@@ -47,8 +59,8 @@
         {{ requestError || status?.check?.error }}
       </n-alert>
       <n-space justify="end">
-        <n-button :loading="status?.checking || sending === 'check'" :disabled="busy || checkCooldown > 0" @click="send('check')">{{ status?.checking ? '正在检查…' : checkCooldown > 0 ? `${checkCooldown} 秒后可重新检查` : '检查更新' }}</n-button>
-        <n-button v-if="candidate" type="primary" :loading="sending === 'apply' || (active && !waitingTooLong)" :disabled="busy || !status?.supported" @click="send('apply')">更新并重启</n-button>
+        <n-button :loading="status?.checking || sending === 'check'" :disabled="busy || proxyDirty || checkCooldown > 0" @click="send('check')">{{ status?.checking ? '正在检查…' : checkCooldown > 0 ? `${checkCooldown} 秒后可重新检查` : '检查更新' }}</n-button>
+        <n-button v-if="candidate" type="primary" :loading="sending === 'apply' || (active && !waitingTooLong)" :disabled="busy || proxyDirty || !status?.supported" @click="send('apply')">更新并重启</n-button>
       </n-space>
     </n-space>
   </n-modal>
@@ -56,7 +68,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NModal, NProgress, NSpace, NSpin } from 'naive-ui'
+import { NAlert, NButton, NInput, NModal, NProgress, NSpace, NSpin } from 'naive-ui'
 import { adminRequest, errorMessage } from '../api'
 
 type ReleaseInfo = { version: string, html_url: string }
@@ -83,10 +95,57 @@ const waitingTooLong = ref(false)
 let activeSince: number | undefined
 const requestError = ref('')
 const sending = ref('')
+const proxyUrl = ref('')
+const savedProxyUrl = ref('')
+const proxyLoaded = ref(false)
+const proxyLoading = ref(false)
+const proxySaving = ref(false)
+const proxySaved = ref(false)
+const proxyError = ref('')
+const proxyDirty = computed(() => proxyLoaded.value && proxyUrl.value.trim() !== savedProxyUrl.value)
+
+async function loadProxy() {
+  proxyLoading.value = true
+  proxyLoaded.value = false
+  proxyError.value = ''
+  proxySaved.value = false
+  try {
+    const response = await adminRequest('/update/proxy', { signal: AbortSignal.timeout(10000) })
+    const settings = await response.json()
+    proxyUrl.value = savedProxyUrl.value = settings.proxy_url
+    proxyLoaded.value = true
+  } catch (error) {
+    proxyError.value = errorMessage(error, '读取更新代理失败')
+  } finally {
+    proxyLoading.value = false
+  }
+}
+
+async function saveProxy() {
+  proxySaving.value = true
+  proxyError.value = ''
+  proxySaved.value = false
+  try {
+    const response = await adminRequest('/update/proxy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Model-Bridge-Update': '1' },
+      body: JSON.stringify({ proxy_url: proxyUrl.value.trim() }),
+      signal: AbortSignal.timeout(10000),
+    })
+    const settings = await response.json()
+    proxyUrl.value = savedProxyUrl.value = settings.proxy_url
+    proxySaved.value = true
+  } catch (error) {
+    proxyError.value = errorMessage(error, '保存更新代理失败')
+  } finally {
+    proxySaving.value = false
+  }
+}
+
 const requestedJob = ref<string | null>(null)
 const terminal = new Set(['succeeded', 'rolled_back', 'failed', 'recovery_required'])
 const active = computed(() => !!requestedJob.value || !!(status.value?.job && !terminal.has(status.value.job.phase)))
-const busy = computed(() => active.value || !!sending.value || !!status.value?.checking || status.value?.job?.phase === 'recovery_required')
+const busy = computed(() => proxyLoading.value || proxySaving.value || active.value || !!sending.value || !!status.value?.checking || status.value?.job?.phase === 'recovery_required')
 const checkCooldown = computed(() => {
   const checkedAt = status.value?.check?.checked_at
   return checkedAt == null ? 0 : Math.max(0, Math.ceil((checkedAt * 1000 + 60000 - now.value) / 1000))
@@ -166,6 +225,7 @@ async function poll() {
 }
 
 async function send(action: 'check' | 'apply') {
+  if (proxyDirty.value || proxySaving.value || proxyLoading.value) return
   if (action === 'check' && (busy.value || checkCooldown.value > 0)) return
   sending.value = action
   requestError.value = ''
@@ -191,6 +251,9 @@ async function send(action: 'check' | 'apply') {
   }
 }
 
+watch([show, () => status.value?.supported], ([visible, supported]) => {
+  if (visible && supported) void loadProxy()
+})
 watch(show, () => { if (show.value) void poll(); else schedule() })
 onMounted(() => {
   elapsedTimer = setInterval(() => { now.value = Date.now() }, 1000)

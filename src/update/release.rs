@@ -77,8 +77,20 @@ impl Source {
     }
 }
 
-pub fn client() -> Result<Client> {
-    Ok(Client::builder()
+pub fn client(root: Option<&std::path::Path>) -> Result<Client> {
+    let settings = root
+        .map(super::network::Settings::read)
+        .transpose()?
+        .unwrap_or_default();
+    // Both processes reread the same file. Empty means direct, even with inherited proxy variables.
+    let mut builder = Client::builder().no_proxy();
+    if !settings.proxy_url.is_empty() {
+        builder = builder.proxy(
+            reqwest::Proxy::all(&settings.proxy_url)
+                .map_err(|_| anyhow::anyhow!("无法创建更新代理，请检查代理地址"))?,
+        );
+    }
+    Ok(builder
         .https_only(true)
         .user_agent(concat!("model-bridge-updater/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
@@ -372,6 +384,100 @@ mod tests {
     use serde_json::{json, Value};
     use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
 
+    #[tokio::test]
+    async fn update_proxy_client_rereads_settings_and_uses_https_tunnel() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let root = std::env::temp_dir().join(format!("mb-proxy-client-{}", uuid::Uuid::new_v4()));
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            super::super::network::Settings {
+                proxy_url: format!("http://{}", listener.local_addr().unwrap()),
+            }
+            .save(&root)
+            .unwrap();
+            let probe = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 4096];
+                let size = stream.read(&mut bytes).await.unwrap();
+                stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+                String::from_utf8(bytes[..size].to_vec()).unwrap()
+            });
+            // An unresolvable destination proves the client connects through the configured proxy.
+            let result = client(Some(&root))
+                .unwrap()
+                .get("https://update-proxy-test.invalid/asset")
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await;
+            assert!(
+                result.is_err(),
+                "proxy failure must not fall back to direct"
+            );
+            let request = tokio::time::timeout(Duration::from_secs(3), probe)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                request.starts_with("CONNECT update-proxy-test.invalid:443 HTTP/1.1\r\n"),
+                "{request}"
+            );
+        }
+        std::fs::write(root.join("proxy.json"), b"broken").unwrap();
+        assert!(
+            client(Some(&root)).is_err(),
+            "corrupt settings must not silently use direct mode"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_proxy_client_ignores_environment_when_unset() {
+        // A subprocess isolates environment changes from the parallel test suite.
+        const CHILD: &str = "MB_PROXY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let probe = tokio::spawn(async move {
+                listener.accept().await.unwrap();
+            });
+            let result = client(None)
+                .unwrap()
+                .get(format!("https://{address}/"))
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await;
+            assert!(result.is_err()); // The endpoint intentionally has no TLS server.
+            tokio::time::timeout(Duration::from_secs(3), probe)
+                .await
+                .expect("direct request must reach destination despite environment proxy")
+                .unwrap();
+            return;
+        }
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "update::release::tests::update_proxy_client_ignores_environment_when_unset",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("HTTPS_PROXY", "http://127.0.0.1:1")
+            .env("https_proxy", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .env("all_proxy", "http://127.0.0.1:1")
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
+
     async fn fixture(
         manifest_change: Option<(&str, Value)>,
         checksums: Option<String>,
@@ -622,7 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn updater_client_rejects_plain_http() {
-        assert!(client()
+        assert!(client(None)
             .unwrap()
             .get("http://127.0.0.1:1/")
             .send()

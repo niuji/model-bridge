@@ -74,6 +74,37 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Response {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckRequest {}
+
+pub async fn get_proxy(State(state): State<Arc<AppState>>) -> Response {
+    let Some(paths) = &state.updates.paths else {
+        return error(StatusCode::CONFLICT, "此安装方式不支持配置更新代理");
+    };
+    match crate::update::network::Settings::read(&paths.root) {
+        Ok(settings) => Json(settings).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+pub async fn set_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut settings): Json<crate::update::network::Settings>,
+) -> Response {
+    if !allowed_write(&headers) {
+        return error(StatusCode::FORBIDDEN, "更新操作需要同源 JSON 请求");
+    }
+    let Some(paths) = &state.updates.paths else {
+        return error(StatusCode::CONFLICT, "此安装方式不支持配置更新代理");
+    };
+    if let Err(e) = settings.validate() {
+        return error(StatusCode::BAD_REQUEST, e);
+    }
+    match settings.save(&paths.root) {
+        Ok(()) => Json(settings).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 pub async fn check(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

@@ -60,6 +60,7 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/providers/{id}/subscription/account", axum::routing::delete(subscription_admin::logout))
         .route("/providers/{id}/models/query", axum::routing::post(subscription_admin::models))
         .route("/update", axum::routing::get(update::status))
+        .route("/update/proxy", axum::routing::get(update::get_proxy).put(update::set_proxy))
         .route("/update/check", axum::routing::post(update::check))
         .route("/update/apply", axum::routing::post(update::apply))
         .route("/update/readiness", axum::routing::get(update::readiness))
