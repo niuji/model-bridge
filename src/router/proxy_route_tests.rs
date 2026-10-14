@@ -2202,7 +2202,26 @@ async fn update_proxy_settings_persist_validate_and_clear() {
         response.json::<serde_json::Value>().await.unwrap()["proxy_url"],
         ""
     );
-    let body = serde_json::json!({"proxy_url":"  http://127.0.0.1:7890  "});
+    // Existing configuration must survive a candidate proxy failing authentication.
+    crate::update::network::Settings {
+        proxy_url: "http://127.0.0.1:7890".into(),
+    }
+    .save(&root)
+    .unwrap();
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let candidate = format!("http://{}", proxy.local_addr().unwrap());
+    let probe = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut stream, _) = proxy.accept().await.unwrap();
+        let mut bytes = [0; 4096];
+        let size = stream.read(&mut bytes).await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        String::from_utf8(bytes[..size].to_vec()).unwrap()
+    });
+    let body = serde_json::json!({"proxy_url":format!("  {candidate}  ")});
     assert_eq!(
         client.put(&url).json(&body).send().await.unwrap().status(),
         403
@@ -2226,10 +2245,16 @@ async fn update_proxy_settings_persist_validate_and_clear() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 200);
-    assert_eq!(
-        response.json::<serde_json::Value>().await.unwrap()["proxy_url"],
-        "http://127.0.0.1:7890"
+    assert_eq!(response.status(), 502);
+    let failure = response.json::<serde_json::Value>().await.unwrap();
+    assert!(failure["error"].as_str().unwrap().contains("代理验证失败"));
+    let request = tokio::time::timeout(std::time::Duration::from_secs(2), probe)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        request.starts_with("CONNECT github.com:443 HTTP/1.1"),
+        "{request}"
     );
     // A fresh disk reader models the independent worker, without in-process cached settings.
     let stored: serde_json::Value =

@@ -15,11 +15,11 @@
       <n-space v-if="status?.supported" vertical :size="8">
         <label for="update-proxy">更新代理</label>
         <n-input id="update-proxy" v-model:value="proxyUrl" placeholder="http://127.0.0.1:7890" :disabled="busy || !proxyLoaded" clearable />
-        <p class="update-note">支持 HTTP/HTTPS 代理（可使用 mixed 端口）。留空直接连接，不使用系统代理。保存后下次检查或下载生效，仅影响软件更新。</p>
+        <p class="update-note">支持 HTTP/HTTPS 代理（可使用 mixed 端口）。保存前通过代理测试 GitHub 连接，最多等待 8 秒，失败保留原配置。留空直接连接，不使用系统代理。保存后下次检查或下载生效，仅影响软件更新。</p>
         <n-alert v-if="proxyError" type="error" :show-icon="false">{{ proxyError }}</n-alert>
         <n-space align="center">
           <n-button v-if="!proxyLoaded" :loading="proxyLoading" :disabled="proxyLoading" @click="loadProxy">重新加载代理配置</n-button>
-          <n-button v-else :loading="proxySaving" :disabled="busy || !proxyDirty" @click="saveProxy">保存代理配置</n-button>
+          <n-button v-else :loading="proxySaving" :disabled="busy || !proxyDirty" @click="saveProxy">{{ proxySaving && proxyUrl.trim() ? '正在测试代理…' : '保存代理配置' }}</n-button>
           <span v-if="proxyDirty" class="update-note">请先保存代理配置，再检查或安装更新。</span>
           <span v-else-if="proxySaved" class="update-note">已保存</span>
         </n-space>
@@ -130,7 +130,7 @@ async function saveProxy() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Model-Bridge-Update': '1' },
       body: JSON.stringify({ proxy_url: proxyUrl.value.trim() }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
     })
     const settings = await response.json()
     proxyUrl.value = savedProxyUrl.value = settings.proxy_url

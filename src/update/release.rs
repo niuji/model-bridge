@@ -82,6 +82,10 @@ pub fn client(root: Option<&std::path::Path>) -> Result<Client> {
         .map(super::network::Settings::read)
         .transpose()?
         .unwrap_or_default();
+    client_for_settings(&settings)
+}
+
+pub(super) fn client_for_settings(settings: &super::network::Settings) -> Result<Client> {
     // Both processes reread the same file. Empty means direct, even with inherited proxy variables.
     let mut builder = Client::builder().no_proxy();
     if !settings.proxy_url.is_empty() {

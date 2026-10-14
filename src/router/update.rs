@@ -99,6 +99,9 @@ pub async fn set_proxy(
     if let Err(e) = settings.validate() {
         return error(StatusCode::BAD_REQUEST, e);
     }
+    if let Err(e) = settings.verify().await {
+        return error(StatusCode::BAD_GATEWAY, e);
+    }
     match settings.save(&paths.root) {
         Ok(()) => Json(settings).into_response(),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
