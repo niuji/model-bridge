@@ -5,8 +5,81 @@ use crate::state::{
     AnthropicModelEntry, AnthropicModelsList, AppState, OpenAIModelEntry, OpenAIModelsList,
 };
 
+fn anthropic_model_id(key: &str, model_id: &str) -> String {
+    if model_id.to_lowercase().ends_with("[1m]") {
+        format!("{}{}", key, &model_id[model_id.len() - 4..])
+    } else {
+        key.to_string()
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ChannelModel {
+    id: String,
+    name: String,
+    provider_id: String,
+    provider_name: String,
+    provider_icon: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ChannelModels {
+    channel_type: &'static str,
+    models_endpoint: &'static str,
+    models: Vec<ChannelModel>,
+}
+
+pub async fn get_channel_models(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let mut channels = Vec::with_capacity(3);
+    for (channel_type, models_endpoint, routes_lock) in [
+        (
+            "openai_chat",
+            "/openai-chat/v1/models",
+            &state.openai_chat_routes,
+        ),
+        (
+            "openai_responses",
+            "/openai-responses/v1/models",
+            &state.openai_responses_routes,
+        ),
+        ("anthropic", "/anthropic/v1/models", &state.anthropic_routes),
+    ] {
+        let routes = routes_lock.read().await;
+        // 以生效路由为准，避免把已停用或登录失效的供应商配置展示为可用模型。
+        let mut models: Vec<_> = routes
+            .iter()
+            .map(|(key, route)| ChannelModel {
+                id: if channel_type == "anthropic" {
+                    anthropic_model_id(key, &route.model_id)
+                } else {
+                    key.clone()
+                },
+                name: route.model_name.clone(),
+                provider_id: route.provider_id.clone(),
+                provider_name: route.provider_name.clone(),
+                provider_icon: state
+                    .provider_defs
+                    .iter()
+                    .find(|provider| provider.id == route.provider_id)
+                    .and_then(|provider| provider.icon.clone()),
+            })
+            .collect();
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        channels.push(ChannelModels {
+            channel_type,
+            models_endpoint,
+            models,
+        });
+    }
+    axum::Json(channels)
+}
+
 async fn openai_models_list(
-    routes_lock: &Arc<tokio::sync::RwLock<std::collections::HashMap<String, crate::state::ProviderRoute>>>,
+    routes_lock: &Arc<
+        tokio::sync::RwLock<std::collections::HashMap<String, crate::state::ProviderRoute>>,
+    >,
     log_path: &str,
 ) -> Response {
     let routes = routes_lock.read().await;
@@ -55,13 +128,7 @@ pub async fn get_anthropic_models(state: Arc<AppState>) -> Response {
     // 路由表已将 [1m]/[1M] 后缀剥除（仅作 1M 变体标记），这里按原始 model_id 是否带该后缀补回，
     // 让 Claude Code 据此在本地开启 1M 上下文。
     for (key, route) in routes.iter() {
-        let id = if route.model_id.to_lowercase().ends_with("[1m]") {
-            // 补回原始大小写的后缀；[1m]/[1M] 为末 4 个 ASCII 字节，ends_with 已保证按字节切安全
-            let suffix = &route.model_id[route.model_id.len() - 4..];
-            format!("{}{}", key, suffix)
-        } else {
-            key.clone()
-        };
+        let id = anthropic_model_id(key, &route.model_id);
         models.push(AnthropicModelEntry {
             id,
             entry_type: "model".to_string(),

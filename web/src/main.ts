@@ -4,6 +4,7 @@ import App from './App.vue'
 
 const routes = [
   { path: '/', component: () => import('./views/Dashboard.vue') },
+  { path: '/models', component: () => import('./views/Models.vue') },
   { path: '/providers', component: () => import('./views/Providers.vue') },
   { path: '/api-keys', component: () => import('./views/ApiKeys.vue') },
   { path: '/logs', component: () => import('./views/Logs.vue') },

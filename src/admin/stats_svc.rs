@@ -325,9 +325,163 @@ pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlySta
         .collect())
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ChannelUsageRow {
+    pub date: String,
+    pub channel: String,
+    pub client: String,
+    pub model_id: String,
+    pub provider_id: String,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
+#[derive(Serialize)]
+pub struct ChannelUsage {
+    pub dates: Vec<String>,
+    pub rows: Vec<ChannelUsageRow>,
+}
+
+fn client_family(user_agent: &str) -> String {
+    let product = user_agent.split('(').next().unwrap_or("").trim();
+    let mut name = Vec::new();
+    for token in product.split_whitespace() {
+        let is_version = |value: &str| {
+            value.trim_start_matches(['v', 'V']).starts_with(|ch: char| ch.is_ascii_digit())
+        };
+        if is_version(token) {
+            break;
+        }
+        if let Some((client, version)) = token.rsplit_once('/') {
+            if is_version(version) {
+                name.push(client);
+                break;
+            }
+        }
+        name.push(token);
+    }
+    name.join(" ")
+}
+
+pub async fn get_channel_usage(pool: &SqlitePool) -> anyhow::Result<ChannelUsage> {
+    // 同一条 SQL 固定窗口边界，跨 UTC 午夜查询时日期轴与用量仍保持一致。
+    let rows = sqlx::query_as::<_, ChannelUsageRow>(
+        r#"
+        WITH RECURSIVE dates(d) AS (
+            SELECT DATE('now', '-6 days')
+            UNION ALL SELECT DATE(d, '+1 day') FROM dates WHERE d < DATE('now')
+        )
+        SELECT dates.d AS date, COALESCE(u.channel, '') AS channel,
+               COALESCE(u.client, '') AS client, COALESCE(u.model_id, '') AS model_id,
+               COALESCE(u.provider_id, '') AS provider_id,
+               COUNT(u.id) AS request_count,
+               COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+               COALESCE(SUM(u.output_tokens), 0) AS output_tokens
+        FROM dates
+        LEFT JOIN usage_records u ON u.created_at >= dates.d
+            AND u.created_at < datetime(dates.d, '+1 day')
+        GROUP BY dates.d, COALESCE(u.channel, ''), COALESCE(u.client, ''), u.model_id, u.provider_id
+        ORDER BY dates.d, channel, client, model_id, provider_id
+        "#,
+    ).fetch_all(pool).await?;
+    let mut dates = Vec::new();
+    for row in &rows {
+        if dates.last() != Some(&row.date) {
+            dates.push(row.date.clone());
+        }
+    }
+    // 在聚合层归一客户端，让历史版本立即合并，同时保留日志的原始 User-Agent。
+    let mut grouped = std::collections::BTreeMap::new();
+    for mut row in rows.into_iter().filter(|row| row.request_count > 0) {
+        row.client = client_family(&row.client);
+        let key = (
+            row.date.clone(), row.channel.clone(), row.client.clone(),
+            row.model_id.clone(), row.provider_id.clone(),
+        );
+        let group = grouped.entry(key).or_insert_with(|| ChannelUsageRow {
+            request_count: 0, input_tokens: 0, output_tokens: 0,
+            date: row.date.clone(), channel: row.channel.clone(), client: row.client.clone(),
+            model_id: row.model_id.clone(), provider_id: row.provider_id.clone(),
+        });
+        group.request_count += row.request_count;
+        group.input_tokens += row.input_tokens;
+        group.output_tokens += row.output_tokens;
+    }
+    Ok(ChannelUsage { dates, rows: grouped.into_values().collect() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn channel_usage_merges_client_versions_without_rewriting_logs() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        for (client, provider, model, channel, age, input, output) in [
+            ("claude-cli/2.1.302 (external, cli)", "p1", "m1", "anthropic", "-1 days", 100, 10),
+            ("claude-cli/2.1.303 (external, sdk-cli)", "p1", "m1", "anthropic", "-1 days", 200, 20),
+            ("claude-cli/2.1.303", "p2", "m1", "anthropic", "-1 days", 300, 30),
+            ("claude-cli/2.1.303", "p1", "m2", "anthropic", "-1 days", 400, 40),
+            ("claude-cli/2.1.303", "p1", "m1", "openai_chat", "-1 days", 500, 50),
+            ("claude-cli/2.1.303", "p1", "m1", "anthropic", "-2 days", 600, 60),
+            ("OpenAI/JS 7.20.0", "p1", "m1", "openai_responses", "-1 days", 10, 1),
+            ("OpenAI/JS 7.27.0", "p1", "m1", "openai_responses", "-1 days", 20, 2),
+            ("deepseek-harness/0.2.0-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)", "p1", "m1", "openai_responses", "-1 days", 30, 3),
+            ("deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)", "p1", "m1", "openai_responses", "-1 days", 40, 4),
+        ] {
+            sqlx::query("INSERT INTO usage_records (client, provider_id, model_id, channel, created_at, input_tokens, output_tokens) VALUES (?, ?, ?, ?, datetime('now', ?), ?, ?)")
+                .bind(client).bind(provider).bind(model).bind(channel).bind(age).bind(input).bind(output)
+                .execute(&pool).await.unwrap();
+        }
+        let stats = get_channel_usage(&pool).await.unwrap();
+        assert_eq!(stats.rows.len(), 7);
+        let merged = stats.rows.iter().find(|r| r.client == "claude-cli" && r.provider_id == "p1" && r.model_id == "m1" && r.channel == "anthropic" && r.request_count == 2).unwrap();
+        assert_eq!((merged.input_tokens, merged.output_tokens), (300, 30));
+        let js = stats.rows.iter().find(|r| r.client == "OpenAI/JS").unwrap();
+        assert_eq!((js.request_count, js.input_tokens, js.output_tokens), (2, 30, 3));
+        let harness = stats.rows.iter().find(|r| r.client == "deepseek-harness").unwrap();
+        assert_eq!((harness.request_count, harness.input_tokens, harness.output_tokens), (2, 70, 7));
+        assert_eq!(stats.rows.iter().map(|r| r.request_count).sum::<i64>(), 10);
+        let raw: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_records WHERE client = 'claude-cli/2.1.302 (external, cli)'").fetch_one(&pool).await.unwrap();
+        assert_eq!(raw.0, 1);
+    }
+
+    #[tokio::test]
+    async fn channel_usage_separates_dimensions_and_limits_to_seven_dates() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        for (client, model, provider, channel, input, output, age) in [
+            (Some("cli"), "m1", "p1", Some("openai_chat"), 10, 2, "-6 days"),
+            (Some("cli"), "m1", "p1", Some("openai_chat"), 20, 3, "-6 days"),
+            (Some("other"), "m1", "p1", Some("openai_chat"), 30, 4, "-6 days"),
+            (Some("cli"), "m2", "p1", Some("openai_chat"), 40, 5, "-6 days"),
+            (Some("cli"), "m1", "p2", Some("openai_chat"), 50, 6, "-6 days"),
+            (Some("cli"), "m1", "p1", Some("anthropic"), 60, 7, "-6 days"),
+            (None, "m1", "p1", None, 70, 8, "-1 days"),
+            (Some(""), "m1", "p1", None, 80, 9, "-1 days"),
+            (Some("cli"), "m1", "p1", Some("openai_chat"), 999, 999, "-7 days"),
+            (Some("cli"), "m1", "p1", Some("openai_chat"), 999, 999, "+1 days"),
+        ] {
+            sqlx::query("INSERT INTO usage_records (client, model_id, provider_id, channel, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))")
+                .bind(client).bind(model).bind(provider).bind(channel).bind(input).bind(output).bind(age)
+                .execute(&pool).await.unwrap();
+        }
+        let stats = get_channel_usage(&pool).await.unwrap();
+        assert_eq!(stats.dates.len(), 7);
+        assert_eq!(stats.rows.len(), 6);
+        let row = stats.rows.iter().find(|r| r.client == "cli" && r.model_id == "m1" && r.provider_id == "p1" && r.channel == "openai_chat").unwrap();
+        assert_eq!(row.date, stats.dates[0]);
+        assert_eq!((row.request_count, row.input_tokens, row.output_tokens), (2, 30, 5));
+        let unknown = stats.rows.iter().find(|r| r.client.is_empty()).unwrap();
+        assert_eq!(unknown.channel, "");
+        assert_eq!((unknown.request_count, unknown.input_tokens, unknown.output_tokens), (2, 150, 17));
+        sqlx::query("DELETE FROM usage_records").execute(&pool).await.unwrap();
+        let empty = get_channel_usage(&pool).await.unwrap();
+        assert_eq!(empty.dates.len(), 7);
+        assert!(empty.rows.is_empty());
+    }
 
     #[tokio::test]
     async fn model_stats_separate_provider_and_channel_in_same_window() {

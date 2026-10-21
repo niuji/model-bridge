@@ -560,6 +560,16 @@ pub async fn stats_models(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }
 }
 
+pub async fn stats_channel_usage(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match stats_svc::get_channel_usage(&state.db).await {
+        Ok(stats) => Json(stats).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct StatsQuery {
     #[serde(default = "default_days")]

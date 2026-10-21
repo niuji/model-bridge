@@ -38,6 +38,54 @@ const TEST_KEY: &str = "mb-test-key";
 const UPSTREAM_KEY: &str = "sk-upstream";
 
 #[tokio::test]
+async fn admin_channel_models_match_public_lists_and_refresh_live_routes() {
+    let mut other = route("Shared", "https://other.example");
+    other.provider_id = "other".into();
+    other.provider_name = "Other".into();
+    other.model_name = "Other Shared".into();
+    let mut state = build_state(
+        HashMap::from([
+            ("z-model".into(), route("Z-Model", "https://upstream.example")),
+            ("other/shared".into(), other),
+        ]),
+        HashMap::new(),
+        HashMap::from([("claude-prov/shared".into(), route("Shared[1M]", "https://upstream.example"))]),
+    ).await;
+    Arc::get_mut(&mut state).unwrap().provider_defs = vec![serde_json::from_value(serde_json::json!({
+        "id": "other", "name": "Other", "icon": "openai.svg", "channels": []
+    })).unwrap()];
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let admin_url = format!("http://{}/api/admin/channels/models", listener.local_addr().unwrap());
+    let admin = crate::router::create_admin_router(state.clone());
+    tokio::spawn(async move { axum::serve(listener, admin).await.unwrap(); });
+    let proxy = spawn_proxy(state.clone()).await;
+    let client = http();
+    let response = client.get(&admin_url).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let channels: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(channels.as_array().unwrap().len(), 3);
+    assert_eq!(channels[0]["channel_type"], "openai_chat");
+    assert_eq!(channels[1]["channel_type"], "openai_responses");
+    assert_eq!(channels[2]["channel_type"], "anthropic");
+    assert_eq!(channels[1]["models"], serde_json::json!([]));
+    assert_eq!(channels[0]["models"][0], serde_json::json!({
+        "id": "other/shared", "name": "Other Shared", "provider_id": "other", "provider_name": "Other", "provider_icon": "openai.svg"
+    }));
+    assert!(channels[0]["models"][1]["provider_icon"].is_null());
+    assert_eq!(channels[2]["models"][0]["id"], "claude-prov/shared[1M]");
+    for channel in channels.as_array().unwrap() {
+        let public: serde_json::Value = client.get(format!("{proxy}{}", channel["models_endpoint"].as_str().unwrap()))
+            .bearer_auth(TEST_KEY).send().await.unwrap().json().await.unwrap();
+        let public_ids: Vec<_> = public["data"].as_array().unwrap().iter().map(|m| m["id"].clone()).collect();
+        let admin_ids: Vec<_> = channel["models"].as_array().unwrap().iter().map(|m| m["id"].clone()).collect();
+        assert_eq!(admin_ids, public_ids);
+    }
+    state.openai_chat_routes.write().await.clear();
+    let refreshed: serde_json::Value = client.get(&admin_url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(refreshed[0]["models"], serde_json::json!([]));
+}
+
+#[tokio::test]
 async fn request_logging_settings_are_memory_only_and_control_capture() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))

@@ -102,6 +102,8 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/settings", axum::routing::get(admin::get_settings).put(admin::update_settings))
         .route("/logs", axum::routing::get(admin::stats_logs))
         .route("/stats/overview", axum::routing::get(admin::stats_overview))
+        .route("/channels/models", axum::routing::get(models_list::get_channel_models))
+        .route("/stats/channels", axum::routing::get(admin::stats_channel_usage))
         .route("/stats/models", axum::routing::get(admin::stats_models))
         .route("/stats/daily", axum::routing::get(admin::stats_daily))
         .route("/stats/hourly", axum::routing::get(admin::stats_hourly))

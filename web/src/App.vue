@@ -126,10 +126,15 @@ const HelpIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '1
   h('path', { d: 'M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3' }),
   h('line', { x1: '12', y1: '17', x2: '12.01', y2: '17' }),
 ])
+const ModelIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+  h('path', { d: 'M4 6h16M4 12h16M4 18h16' }),
+  h('circle', { cx: 8, cy: 6, r: 2 }), h('circle', { cx: 16, cy: 12, r: 2 }), h('circle', { cx: 10, cy: 18, r: 2 }),
+])
 function renderIcon(icon: () => any) { return () => h(NIcon, null, { default: icon }) }
 const menuOptions = [
   { label: '仪表盘', key: '/', icon: renderIcon(DashboardIcon) },
   { label: '供应商', key: '/providers', icon: renderIcon(ProviderIcon) },
+  { label: '通道信息', key: '/models', icon: renderIcon(ModelIcon) },
   { label: 'API 密钥', key: '/api-keys', icon: renderIcon(KeyIcon) },
   { label: '日志', key: '/logs', icon: renderIcon(LogIcon) },
   { label: '接入指南', key: '/help', icon: renderIcon(HelpIcon) },
