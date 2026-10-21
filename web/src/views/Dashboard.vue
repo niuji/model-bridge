@@ -280,16 +280,16 @@ onMounted(() => {
 .page-subtitle { margin: 6px 0 0; color: var(--mb-text-3); font-size: 13px; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.stat-card { background: var(--mb-surface); border: 1px solid var(--mb-border); border-radius: 14px; padding: 22px; transition: box-shadow 0.2s, transform 0.2s, background-color 0.2s, border-color 0.2s; }
+.stat-card { display: grid; grid-template-columns: 36px 1fr; align-items: center; gap: 16px 12px; background: var(--mb-surface); border: 1px solid var(--mb-border); border-radius: 14px; padding: 22px; transition: box-shadow 0.2s, transform 0.2s, background-color 0.2s, border-color 0.2s; }
 .stat-card:hover { box-shadow: var(--mb-shadow-2); transform: translateY(-1px); }
-.stat-icon { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
+.stat-icon { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; }
 .stat-icon svg { width: 20px; height: 20px; }
 .stat-icon.ico-g { background: var(--mb-tint-blue); color: var(--mb-primary); }
 .stat-icon.ico-a { background: var(--mb-tint-cyan); color: var(--mb-cyan); }
 .stat-icon.ico-t { background: var(--mb-tint-green); color: var(--mb-success-d); }
 .stat-icon.ico-l { background: var(--mb-tint-amber); color: var(--mb-warning); }
-.stat-label { font-size: 12px; font-weight: 500; color: var(--mb-text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-.stat-value { font-size: 28px; font-weight: 600; color: var(--mb-text-1); line-height: 1; }
+.stat-label { font-size: 12px; font-weight: 500; color: var(--mb-text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-value { grid-column: 1 / -1; font-size: 28px; font-weight: 600; color: var(--mb-text-1); line-height: 1; }
 .stat-unit { font-size: 16px; color: var(--mb-text-3); font-weight: 400; margin-left: 3px; }
 
 .card { background: var(--mb-surface); border: 1px solid var(--mb-border); border-radius: 14px; overflow: hidden; transition: background-color 0.2s, border-color 0.2s; }
