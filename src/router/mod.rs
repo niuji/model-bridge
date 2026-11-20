@@ -18,7 +18,7 @@ use crate::state::AppState;
 static WEB_UI_DIR: include_dir::Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
-/// 构建代理路由（OpenAI Chat / OpenAI Responses / Anthropic 三套独立端点，各带 API Key 认证）
+/// 构建代理路由（LLM 与 System One 端点均带 API Key 认证）
 pub fn create_proxy_router(state: Arc<AppState>) -> Router {
     let openai_chat_router = Router::new()
         .route("/v1/{*path}", axum::routing::any(proxy::openai_chat_handler))
@@ -44,7 +44,17 @@ pub fn create_proxy_router(state: Arc<AppState>) -> Router {
             crate::middleware::auth::auth_middleware,
         ));
 
+    let system_one_router = Router::new()
+        .route("/v1/systemone", axum::routing::post(proxy::system_one_handler))
+        .route("/v1/models", axum::routing::get(models_list::get_system_one_models))
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_system_one,
+        ));
+
     Router::new()
+        .nest("/system-one", system_one_router)
         .nest("/openai-chat", openai_chat_router)
         .nest("/openai-responses", openai_responses_router)
         .nest("/anthropic", anthropic_router)

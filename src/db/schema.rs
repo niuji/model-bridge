@@ -115,6 +115,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             id TEXT PRIMARY KEY,
             key_hash TEXT UNIQUE NOT NULL,
             api_key TEXT NOT NULL DEFAULT '',
+            proxy_scope TEXT NOT NULL DEFAULT 'llm',
             name TEXT,
             is_enabled INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -128,6 +129,17 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await
         .ok();
+
+    let has_proxy_scope: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('api_keys') WHERE name = 'proxy_scope')",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !has_proxy_scope {
+        sqlx::query("ALTER TABLE api_keys ADD COLUMN proxy_scope TEXT NOT NULL DEFAULT 'llm'")
+            .execute(pool)
+            .await?;
+    }
 
     sqlx::query(
         r#"

@@ -350,6 +350,7 @@ mod tests {
             openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
             openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
             anthropic_routes: Arc::new(RwLock::new(HashMap::new())),
+            system_one_routes: Default::default(),
             provider_defs: defs,
             db,
             client,

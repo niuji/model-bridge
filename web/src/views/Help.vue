@@ -5,6 +5,20 @@
       <p class="page-subtitle mono">把你的 AI 工具指向 Model Bridge · 网关地址由服务端提供</p>
     </div>
 
+    <section v-if="systemOne" class="subscription-guide">
+      <h2>System One 决策 API</h2>
+      <ol class="steps">
+        <li>在 System One 的「供应商」页填写上游 API Key。托管服务可以同步模型，百炼和方舟可手动添加模型 ID。</li>
+        <li>百炼还需要业务空间 ID，默认使用北京地域。百炼模型可填 <code class="chip mono">decision-model-preview</code>，方舟可填 <code class="chip mono">doubao-seed-2-1-lite-260915</code>。</li>
+        <li>启用供应商和通道，在 System One 的「API 密钥」页生成网关密钥。通过 <code class="chip mono">GET {{ proxyBase }}/system-one/v1/models</code> 读取可用模型的 <code class="chip mono">name</code>。</li>
+      </ol>
+      <div class="code-block">
+        <n-button size="tiny" text class="copy-btn" @click="copy(systemOneSnippet, 'System One 请求')">复制</n-button>
+        <pre class="mono"><code>{{ systemOneSnippet }}</code></pre>
+      </div>
+      <p class="tool-desc">请求使用 Bearer 鉴权，提交 <code class="chip mono">state</code> 和 <code class="chip mono">questions</code>，从响应的 <code class="chip mono">answers</code> 按问题 ID 取结果。</p>
+    </section>
+    <template v-else>
     <section class="subscription-guide">
       <h2>OpenAI 订阅</h2>
       <ol class="steps">
@@ -132,6 +146,7 @@
         </div>
       </div>
     </n-modal>
+    </template>
   </div>
 </template>
 
@@ -139,9 +154,20 @@
 import { ref, computed, onMounted } from 'vue'
 import { NButton, NModal, useMessage } from 'naive-ui'
 
+defineProps<{ systemOne?: boolean }>()
 const message = useMessage()
 const API_BASE = '/api/admin'
 const proxyBase = ref('http://localhost:10010')
+const systemOneSnippet = computed(() => [
+  `curl '${proxyBase.value}/system-one/v1/systemone'`,
+  '  -H "Authorization: Bearer $SYSTEM_ONE_API_KEY"',
+  "  -H 'Content-Type: application/json'",
+  `  --data '${JSON.stringify({
+    model: '<模型列表中的 name>',
+    state: '订单被重复扣款了',
+    questions: { duplicate: { type: 'noul', instructions: '客户是否报告重复扣款？' } },
+  }, null, 2)}'`,
+].join(' \\' + '\n'))
 const activeTool = ref<'claude-code' | 'cursor' | 'copilot'>('claude-code')
 const showModal = ref(false)
 

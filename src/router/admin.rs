@@ -8,7 +8,7 @@ use serde::Deserialize;
 use sha2::Digest;
 use std::sync::Arc;
 
-use crate::{admin::provider_svc, admin::stats_svc, state::AppState};
+use crate::{admin::provider_svc, admin::stats_svc, middleware::auth::KeyScope, state::AppState};
 
 // ===== Provider handlers =====
 
@@ -113,6 +113,28 @@ pub async fn update_provider(
     if def.access_type == crate::config::AccessType::Subscription &&
         (!req.api_key.is_empty() || req.settings.workspace_id.as_deref().is_some_and(|v| !v.is_empty()) || req.settings.cost_api_key.as_deref().is_some_and(|v| !v.is_empty())) {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"subscription provider does not accept API Key settings"}))).into_response();
+    }
+    if def.channels.iter().any(|ch| {
+        ch.channel_type == "system_one" && ch.base_url.contains("{workspace_id}")
+    }) {
+        let workspace = match req.settings.workspace_id.as_deref() {
+            Some(value) => value.trim().to_owned(),
+            None if req.is_enabled => match provider_svc::get_provider(&state.db, &state.provider_defs, &id).await {
+                Ok(Some(provider)) => provider.workspace_id,
+                Ok(None) => String::new(),
+                Err(error) => return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": error.to_string()})),
+                ).into_response(),
+            },
+            None => String::new(),
+        };
+        if (req.is_enabled || !workspace.is_empty()) && !provider_svc::valid_workspace_subdomain(&workspace) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "请输入有效的 Workspace ID"})),
+            ).into_response();
+        }
     }
     let channels: Vec<(String, bool)> = req
         .channels
@@ -297,7 +319,16 @@ pub async fn refresh_balance(
 
 // ===== API Key handlers =====
 
-pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+#[derive(Deserialize)]
+pub struct ApiKeyQuery {
+    #[serde(default)]
+    scope: KeyScope,
+}
+
+pub async fn list_api_keys(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<ApiKeyQuery>,
+) -> impl IntoResponse {
     #[derive(sqlx::FromRow)]
     struct ApiKeyRow {
         id: String,
@@ -308,8 +339,9 @@ pub async fn list_api_keys(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }
 
     let rows = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, api_key, name, is_enabled, created_at FROM api_keys ORDER BY created_at DESC",
+        "SELECT id, api_key, name, is_enabled, created_at FROM api_keys WHERE proxy_scope = ? ORDER BY created_at DESC",
     )
+    .bind(query.scope.as_str())
     .fetch_all(&state.db)
     .await;
 
@@ -352,6 +384,8 @@ pub(crate) fn mask_key(key: &str) -> String {
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
     pub name: String,
+    #[serde(default)]
+    scope: KeyScope,
 }
 
 pub async fn create_api_key(
@@ -366,11 +400,12 @@ pub async fn create_api_key(
     // 明文仅在创建时返回一次；落库的是加密后的密文（无 key 时退化为明文）。
     let sealed = crate::crypto::seal(state.encryption_key.as_ref(), &raw_key);
 
-    let result = sqlx::query("INSERT INTO api_keys (id, key_hash, api_key, name) VALUES (?, ?, ?, ?)")
+    let result = sqlx::query("INSERT INTO api_keys (id, key_hash, api_key, name, proxy_scope) VALUES (?, ?, ?, ?, ?)")
         .bind(&id)
         .bind(&key_hash_hex)
         .bind(&sealed)
         .bind(&req.name)
+        .bind(req.scope.as_str())
         .execute(&state.db)
         .await;
 
@@ -513,6 +548,8 @@ pub async fn update_api_key(
 
 #[derive(Deserialize, Default)]
 pub struct LogsQuery {
+    #[serde(default)]
+    pub scope: stats_svc::ProxyScope,
     #[serde(default = "default_page")]
     pub page: i64,
     #[serde(default = "default_page_size")]
@@ -526,7 +563,7 @@ pub async fn stats_logs(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<LogsQuery>,
 ) -> impl IntoResponse {
-    match stats_svc::get_logs(&state.db, params.page, params.page_size, state.encryption_key.as_ref()).await {
+    match stats_svc::get_logs(&state.db, params.page, params.page_size, state.encryption_key.as_ref(), params.scope).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -538,8 +575,11 @@ pub async fn stats_logs(
 
 // ===== Stats handlers =====
 
-pub async fn stats_overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match stats_svc::get_overview(&state.db).await {
+pub async fn stats_overview(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<StatsQuery>,
+) -> impl IntoResponse {
+    match stats_svc::get_overview(&state.db, params.scope).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -549,8 +589,11 @@ pub async fn stats_overview(State(state): State<Arc<AppState>>) -> impl IntoResp
     }
 }
 
-pub async fn stats_models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match stats_svc::get_model_stats(&state.db).await {
+pub async fn stats_models(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<StatsQuery>,
+) -> impl IntoResponse {
+    match stats_svc::get_model_stats(&state.db, params.scope).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -560,8 +603,11 @@ pub async fn stats_models(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }
 }
 
-pub async fn stats_channel_usage(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match stats_svc::get_channel_usage(&state.db).await {
+pub async fn stats_channel_usage(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<StatsQuery>,
+) -> impl IntoResponse {
+    match stats_svc::get_channel_usage(&state.db, params.scope).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -572,6 +618,8 @@ pub async fn stats_channel_usage(State(state): State<Arc<AppState>>) -> impl Int
 
 #[derive(Deserialize, Default)]
 pub struct StatsQuery {
+    #[serde(default)]
+    pub scope: stats_svc::ProxyScope,
     #[serde(default = "default_days")]
     pub days: i64,
 }
@@ -584,7 +632,7 @@ pub async fn stats_daily(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<StatsQuery>,
 ) -> impl IntoResponse {
-    match stats_svc::get_daily_stats(&state.db, params.days).await {
+    match stats_svc::get_daily_stats(&state.db, params.days, params.scope).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -594,8 +642,11 @@ pub async fn stats_daily(
     }
 }
 
-pub async fn stats_hourly(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match stats_svc::get_hourly_stats(&state.db).await {
+pub async fn stats_hourly(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<StatsQuery>,
+) -> impl IntoResponse {
+    match stats_svc::get_hourly_stats(&state.db, params.scope).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -118,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
         openai_chat_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         openai_responses_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         anthropic_routes: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        system_one_routes: Default::default(),
         provider_defs,
         db: pool.clone(),
         client,

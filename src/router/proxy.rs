@@ -99,6 +99,29 @@ pub async fn anthropic_handler(
     handle_request(state, "anthropic", method, path, query, headers, body_bytes, api_key_id).await
 }
 
+pub async fn system_one_handler(
+    State(state): State<Arc<AppState>>,
+    RawQuery(query): RawQuery,
+    request: Request,
+) -> Response {
+    let api_key_id = request.extensions().get::<AuthenticatedKey>().map(|key| key.0.clone());
+    let headers = request.headers().clone();
+    let body = match axum::body::to_bytes(request.into_body(), MAX_PROXY_BODY).await {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                axum::Json(serde_json::json!({"error": "request body too large"})),
+            ).into_response();
+        }
+    };
+    let client = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(str::to_owned);
+    proxy_to_provider(
+        state.clone(), "system_one", "system_one", Method::POST, "systemone",
+        query.as_deref(), headers, &body, api_key_id, client, state.system_one_routes.clone(),
+    ).await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_request(
     state: Arc<AppState>,
@@ -280,11 +303,17 @@ async fn proxy_to_provider(
         }
     }
 
+    if route.system_one_beta {
+        req = req.header("ark-beta-systemone-api", "true");
+    }
+
     // 5. 透传客户端请求头（排除名单，不是白名单）：只剔除网关自管或会破坏链路的头，
     // 其余一律原样外发——Claude Code 每版本新增的 capability 头（如自动模式服务端检查依赖的
     // 相关头）必须能透传。必须排除的理由见 request_log::NON_FORWARDED_HEADERS。
     for (name, value) in headers.iter() {
-        if !super::request_log::is_forwardable(name.as_str()) {
+        if !super::request_log::is_forwardable(name.as_str())
+            || (route.system_one_beta && name == "ark-beta-systemone-api")
+        {
             continue;
         }
         if let Ok(v) = value.to_str() {
@@ -1265,6 +1294,7 @@ mod response_regression_tests {
             openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
             openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
             anthropic_routes: Arc::new(RwLock::new(HashMap::new())),
+            system_one_routes: Default::default(),
             provider_defs: vec![],
             db,
             client: reqwest::Client::new(),

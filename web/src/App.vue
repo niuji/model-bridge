@@ -18,6 +18,14 @@
               </div>
               <span v-show="!collapsed" class="brand-text serif">Model Bridge</span>
             </div>
+            <nav class="proxy-switch" aria-label="代理类型">
+              <router-link to="/" :class="{ active: !systemOne }" :aria-current="!systemOne ? 'true' : undefined" title="LLM 代理">
+                {{ collapsed ? 'LLM' : 'LLM 代理' }}
+              </router-link>
+              <router-link to="/system-one" :class="{ active: systemOne }" :aria-current="systemOne ? 'true' : undefined" title="System One 代理">
+                {{ collapsed ? 'S1' : 'System One' }}
+              </router-link>
+            </nav>
             <n-menu
               :options="menuOptions"
               :value="currentRoute"
@@ -54,7 +62,7 @@
               <div class="content">
                 <router-view v-slot="{ Component }">
                   <transition name="page" mode="out-in">
-                    <component :is="Component" />
+                    <component :is="Component" :key="currentRoute" />
                   </transition>
                 </router-view>
               </div>
@@ -106,6 +114,7 @@ onBeforeUnmount(() => collapseMql?.removeEventListener('change', syncCollapse))
 
 const router = useRouter(); const route = useRoute()
 const currentRoute = computed(() => route.path)
+const systemOne = computed(() => route.meta.systemOne === true)
 
 const DashboardIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
   h('path', { d: 'M3 3v18h18' }), h('polyline', { points: '7,14 11,9 14,12 19,6' }),
@@ -131,7 +140,7 @@ const ModelIcon = () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '
   h('circle', { cx: 8, cy: 6, r: 2 }), h('circle', { cx: 16, cy: 12, r: 2 }), h('circle', { cx: 10, cy: 18, r: 2 }),
 ])
 function renderIcon(icon: () => any) { return () => h(NIcon, null, { default: icon }) }
-const menuOptions = [
+const proxyPages = [
   { label: '仪表盘', key: '/', icon: renderIcon(DashboardIcon) },
   { label: '供应商', key: '/providers', icon: renderIcon(ProviderIcon) },
   { label: '通道信息', key: '/models', icon: renderIcon(ModelIcon) },
@@ -139,6 +148,10 @@ const menuOptions = [
   { label: '日志', key: '/logs', icon: renderIcon(LogIcon) },
   { label: '接入指南', key: '/help', icon: renderIcon(HelpIcon) },
 ]
+const menuOptions = computed(() => proxyPages.map(page => ({
+  ...page,
+  key: systemOne.value ? `/system-one${page.key === '/' ? '' : page.key}` : page.key,
+})))
 function navigate(key: string) { router.push(key) }
 
 // --- AI SaaS · 浅底克制企业风（亮/暗同族翻转，非霓虹）---
@@ -340,6 +353,11 @@ body {
 .sidebar.n-layout-sider--collapsed .sidebar-brand { justify-content: center; padding: 22px 15px; }
 .brand-icon { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: linear-gradient(135deg, #3B82F6, #06B6D4 50%, #22C55E); color: #FFFFFF; }
 .brand-text { font-size: 18px; font-weight: 600; color: var(--mb-text-1); letter-spacing: -0.01em; white-space: nowrap; transition: color 0.2s ease; }
+.proxy-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 12px 10px 0; padding: 3px; border: 1px solid var(--mb-border); border-radius: 8px; background: var(--mb-surface-inset); }
+.proxy-switch a { padding: 6px 3px; border-radius: 5px; color: var(--mb-text-2); text-align: center; text-decoration: none; white-space: nowrap; font-size: 12px; }
+.proxy-switch a.active { background: var(--mb-surface); color: var(--mb-text-1); font-weight: 600; }
+.proxy-switch a:hover { color: var(--mb-text-1); }
+.sidebar.n-layout-sider--collapsed .proxy-switch { grid-template-columns: 1fr; margin-inline: 8px; }
 .sidebar-menu { padding: 8px 8px 48px 8px; background: transparent !important; }
 .sidebar-menu .n-menu-item-content { font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; }
 .sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 14px; border-top: 1px solid var(--mb-border); background: var(--mb-surface); transition: background-color 0.2s ease, border-color 0.2s ease; }

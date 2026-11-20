@@ -5,34 +5,24 @@
 [![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?style=flat)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/github/license/niuji/model-bridge?style=flat)](LICENSE)
 
-A self-hosted **LLM API gateway** that routes OpenAI- and Anthropic-compatible requests to multiple upstream providers (OpenAI, DeepSeek, MiniMax, Anthropic, …) behind a single set of client keys. Expose one endpoint to your apps, swap providers without touching clients, and track usage per model.
+A self-hosted model gateway with two proxies. The **LLM proxy** routes OpenAI Chat, OpenAI Responses, and Anthropic requests. The **System One proxy** routes structured decision requests to System One-compatible providers. The admin UI provides provider configuration, API keys, model discovery, and usage for each proxy.
 
-- **One endpoint, many providers.** Clients speak OpenAI or Anthropic protocol; Model Bridge looks the model up in its route table and forwards to the right upstream with the correct auth header.
+- **Model-based routing.** Model Bridge looks up the requested model within its protocol channel and forwards the request using the configured upstream credentials.
 - **Self-contained binary.** The Vue admin UI and the builtin provider list are embedded at compile time — download one file and run.
 - **Client key management.** Issue `mb-...` gateway keys, hashed (SHA-256) for auth, optionally encrypted (AES-256-GCM) at rest.
 - **Usage & cost visibility.** Per-model token counts (incl. cache read/write), request logs, daily/hourly charts in the dashboard.
-- **SSE streaming** with cross-chunk usage extraction.
+- **LLM SSE streaming** with cross-chunk usage extraction.
 - **Case-insensitive model routing** — clients can send any case; the canonical id is forwarded upstream.
 - **Hardened defaults.** Loopback-bound admin API, disabled HTTP redirects (SSRF), `http(s)`-only upstream base URLs, 64 MiB body limit, SQLite WAL.
 
 ## How it works
 
-```
-            ┌────────────────── model-bridge ───────────────────┐
-  client    │  proxy  :10010                admin  :10020       │
-  ────────► │  /openai-chat/v1/*      ─┐    (loopback only)     │
-  mb- key   │  /openai-responses/v1/* ─┤    /api/admin/*  REST  │
-            │  /anthropic/v1/*        ─┤    /             Vue   │
-            │                          ▼                        │
-            │   three independent route tables                  │
-            │   (model → provider), one per endpoint            │
-            └───────────────────────────────────────────────────┘
-                            │
-                            ▼
-                 upstream LLM provider
-```
+| Proxy | Client endpoints on port 10010 |
+| --- | --- |
+| LLM | `/openai-chat/v1/*`, `/openai-responses/v1/*`, `/anthropic/v1/*` |
+| System One | `POST /system-one/v1/systemone`, `GET /system-one/v1/models` |
 
-Two HTTP servers run side by side: a **proxy** (port `10010`) your clients call, and an **admin** (port `10020`, loopback) where you configure providers, keys, and view stats. Each endpoint owns its own in-memory `model → provider` map — three tables, no shared state — rebuilt on startup, on a timer, and after any config change.
+The admin server runs on loopback port `10020` by default. Each protocol channel has its own model route table. Existing client keys are scoped to LLM. Issue a key from the System One section to call decision endpoints.
 
 ## Quick start
 
@@ -136,6 +126,21 @@ client = Anthropic(base_url="http://localhost:10010/anthropic", api_key="mb-..."
 ```
 
 The `mb-` key is accepted as either `Authorization: Bearer` or `x-api-key`; Model Bridge rewrites the request with the correct upstream auth header (Bearer for OpenAI-style, `x-api-key` for Anthropic-style) and rewrites the body's `model` to the canonical case stored for that route.
+
+### Call System One
+
+1. Select **System One → 供应商** in the admin UI. Enter an upstream API key, enable the provider and channel, and select a model.
+2. For the hosted System One service, fetch models from the upstream catalog. For Alibaba Cloud Model Studio, enter the workspace ID and add `decision-model-preview`. The built-in provider uses Beijing. For Volcano Ark, add `doubao-seed-2-1-lite-260915` or your inference endpoint ID. The gateway sends Ark's required beta header.
+3. Create a gateway key in **System One → API 密钥**. Use it to call `GET /system-one/v1/models` and copy the model's `name`.
+
+```bash
+curl http://localhost:10010/system-one/v1/systemone \
+  -H "Authorization: Bearer $SYSTEM_ONE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"decision-model-preview","state":"I was charged twice","questions":{"duplicate":{"type":"noul","instructions":"Did the customer report a duplicate charge?"}}}'
+```
+
+Read the result at `answers.duplicate`. The upstream determines available question types, input limits, and output fields. For a custom provider, use channel type `system_one` and set `base_url` to the upstream version prefix before `/systemone`.
 
 ## Configuration
 

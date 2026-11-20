@@ -13,7 +13,15 @@ const routes = [
 
 const router = createRouter({
   history: createWebHashHistory(),
-  routes,
+  routes: [
+    ...routes,
+    ...routes.map(route => ({
+      ...route,
+      path: `/system-one${route.path === '/' ? '' : route.path}`,
+      props: { systemOne: true },
+      meta: { systemOne: true },
+    })),
+  ],
 })
 
 const app = createApp(App)

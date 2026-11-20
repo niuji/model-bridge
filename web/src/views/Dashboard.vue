@@ -99,7 +99,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, h } from 'vue'
 import { NSpin, NDataTable, NSwitch, NSelect, NAlert, NButton, NEmpty, NTooltip } from 'naive-ui'
-import { adminRequest, errorMessage } from '../api'
+import { adminRequest, errorMessage, proxyScopedPath } from '../api'
 import { formatLocalHour } from '../utils'
 import type { DataTableColumns } from 'naive-ui'
 import VChart from 'vue-echarts'
@@ -159,7 +159,7 @@ const heatRange = computed(() => data.heat?.length ? [data.heat[0].date, data.he
 const selectedProvider = ref<string | null>(null)
 const selectedChannel = ref<string | null>(null)
 function channelLabel(channel: string): string {
-  return ({ openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' } as Record<string, string>)[channel] || channel || '历史未记录'
+  return ({ openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic', system_one: 'System One' } as Record<string, string>)[channel] || channel || '历史未记录'
 }
 const providerOptions = computed(() => [...new Set(modelData.value.map(r => r.provider_id))].sort().map(id => ({ label: id, value: id })))
 const channelOptions = computed(() => [...new Set(modelData.value.map(r => r.channel))].sort().map(channel => ({ label: channelLabel(channel), value: channel })))
@@ -200,7 +200,8 @@ async function loadProviderMap() {
   } catch { /* 与日志列表一致：供应商信息不可用时回退到字母缩写，不阻塞用量。 */ }
 }
 
-function channelMeta(ch: any): { text: string; tier: 'openai' | 'anthropic' } | null {
+function channelMeta(ch: any): { text: string; tier: 'openai' | 'anthropic' | 'system-one' } | null {
+  if (ch === 'system_one') return { text: 'System One', tier: 'system-one' }
   if (ch === 'anthropic') return { text: 'anthropic', tier: 'anthropic' }
   if (ch === 'openai_responses') return { text: 'responses', tier: 'openai' }
   if (ch === 'openai_chat') return { text: 'chat', tier: 'openai' }
@@ -244,6 +245,7 @@ const modelColumns = computed<DataTableColumns<ModelRow>>(() => [
 // 不再被 .card 的 overflow:hidden 裁掉右侧列。
 const scrollX = computed(() => modelColumns.value.reduce((s, c) => s + (Number((c as any).width) || 0), 0))
 function formatNum(n: number): string { if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'; if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'; return String(n) }
+const props = defineProps<{ systemOne?: boolean }>()
 const endpoints: Record<Section, string> = {
   overview: '/stats/overview',
   hourly: '/stats/hourly',
@@ -256,7 +258,7 @@ async function loadSection(section: Section) {
   loading[section] = true
   errors[section] = ''
   try {
-    data[section] = await (await adminRequest(endpoints[section])).json()
+    data[section] = await (await adminRequest(proxyScopedPath(endpoints[section], props.systemOne))).json()
   } catch (error) {
     errors[section] = errorMessage(error, '加载失败')
   } finally {
@@ -322,6 +324,7 @@ onMounted(() => {
 /* 通道标签：按协议族着色（openai 系青、anthropic 赭），hover 显完整 channel 类型。 */
 .dashboard :deep(.ch-tag) { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.02em; white-space: nowrap; line-height: 1.4; }
 .dashboard :deep(.ch-tag.ch-openai) { color: var(--mb-cyan); background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.18); }
+.dashboard :deep(.ch-tag.ch-system-one) { color: var(--mb-success-d); background: var(--mb-surface-inset); border: 1px solid var(--mb-border); }
 .dashboard :deep(.ch-tag.ch-anthropic) { color: var(--mb-warning); background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.18); }
 .dashboard :deep(.ch-tag.ch-na) { color: var(--mb-text-3); }
 .dashboard :deep(.token-cell) { color: var(--mb-success-d); font-weight: 500; }

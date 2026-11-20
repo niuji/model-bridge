@@ -63,7 +63,7 @@ async fn admin_channel_models_match_public_lists_and_refresh_live_routes() {
     let response = client.get(&admin_url).send().await.unwrap();
     assert_eq!(response.status(), 200);
     let channels: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(channels.as_array().unwrap().len(), 3);
+    assert_eq!(channels.as_array().unwrap().len(), 4);
     assert_eq!(channels[0]["channel_type"], "openai_chat");
     assert_eq!(channels[1]["channel_type"], "openai_responses");
     assert_eq!(channels[2]["channel_type"], "anthropic");
@@ -74,6 +74,7 @@ async fn admin_channel_models_match_public_lists_and_refresh_live_routes() {
     assert!(channels[0]["models"][1]["provider_icon"].is_null());
     assert_eq!(channels[2]["models"][0]["id"], "claude-prov/shared[1M]");
     for channel in channels.as_array().unwrap() {
+        if channel["channel_type"] == "system_one" { continue; }
         let public: serde_json::Value = client.get(format!("{proxy}{}", channel["models_endpoint"].as_str().unwrap()))
             .bearer_auth(TEST_KEY).send().await.unwrap().json().await.unwrap();
         let public_ids: Vec<_> = public["data"].as_array().unwrap().iter().map(|m| m["id"].clone()).collect();
@@ -135,6 +136,7 @@ fn route(model_id: &str, base_url: &str) -> ProviderRoute {
         base_url: base_url.into(),
         api_key: UPSTREAM_KEY.into(),
         workspace_id: String::new(),
+        system_one_beta: false,
     }
 }
 
@@ -156,6 +158,7 @@ async fn build_state_with_defs(defs: Vec<ProviderDef>) -> Arc<AppState> {
         openai_chat_routes: Arc::new(RwLock::new(HashMap::new())),
         openai_responses_routes: Arc::new(RwLock::new(HashMap::new())),
         anthropic_routes: Arc::new(RwLock::new(HashMap::new())),
+        system_one_routes: Default::default(),
         provider_defs: defs,
         db: pool,
         client,
@@ -189,6 +192,7 @@ async fn build_state(
         openai_chat_routes: Arc::new(RwLock::new(chat)),
         openai_responses_routes: Arc::new(RwLock::new(responses)),
         anthropic_routes: Arc::new(RwLock::new(anthropic)),
+        system_one_routes: Default::default(),
         provider_defs: vec![],
         db: pool,
         client,
@@ -524,6 +528,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
                 channel_type: "anthropic".into(),
                 base_url: server_a.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -537,6 +542,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
                 channel_type: "anthropic".into(),
                 base_url: server_b.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -687,6 +693,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -700,6 +707,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -771,6 +779,7 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
             channel_type: "anthropic".into(),
             base_url: server.uri(),
             models_endpoint: None,
+            system_one_beta: false,
         }],
         usage: None,
         config_error: None,
@@ -860,6 +869,7 @@ async fn anthropic_same_provider_1m_variant_preferred() {
             channel_type: "anthropic".into(),
             base_url: server.uri(),
             models_endpoint: None,
+            system_one_beta: false,
         }],
         usage: None,
         config_error: None,
@@ -975,6 +985,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
                 channel_type: "anthropic".into(),
                 base_url: server_a.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -988,6 +999,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
                 channel_type: "anthropic".into(),
                 base_url: server_b.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -1088,6 +1100,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
                 channel_type: "openai_chat".into(),
                 base_url: server_a.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -1101,6 +1114,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
                 channel_type: "openai_chat".into(),
                 base_url: server_b.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -1223,6 +1237,7 @@ async fn openai_chat_non_conflicting_uses_only_bare_key() {
             channel_type: "openai_chat".into(),
             base_url: server.uri(),
             models_endpoint: None,
+            system_one_beta: false,
         }],
         usage: None,
         config_error: None,
@@ -1307,11 +1322,13 @@ async fn openai_chat_responses_conflict_independent() {
                 channel_type: "openai_chat".into(),
                 base_url: server_chat.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             },
             ChannelDef {
                 channel_type: "openai_responses".into(),
                 base_url: server_resp.uri(),
                 models_endpoint: None,
+                system_one_beta: false,
             },
         ],
         usage: None,
@@ -1672,6 +1689,7 @@ async fn provider_refresh_test_state() -> Arc<AppState> {
                 channel_type: "openai_chat".into(),
                 base_url: "https://example.com/v1".into(),
                 models_endpoint: None,
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -2353,4 +2371,117 @@ async fn update_proxy_settings_persist_validate_and_clear() {
     assert_eq!(saved["proxy_url"], "");
     server.abort();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn system_one_routes_decisions_and_records_usage() {
+    let upstream = MockServer::start().await;
+    let request = serde_json::json!({
+        "model": "decision",
+        "state": {"message": "Please refund my order"},
+        "questions": {"refund": {"type": "noul", "instructions": "Is this a refund request?"}}
+    });
+    let answer = serde_json::json!({
+        "answers": {"refund": {"type": "noul", "noul": 0.9}},
+        "usage": {"input_tokens": 18, "output_tokens": 0}
+    });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/systemone"))
+        .and(header("authorization", format!("Bearer {UPSTREAM_KEY}").as_str()))
+        .and(header("ark-beta-systemone-api", "true"))
+        .and(body_partial_json(request.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(answer.clone()))
+        .expect(1)
+        .mount(&upstream).await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "models": [{"name": "decision", "displayName": "Decision"}]
+        })))
+        .mount(&upstream).await;
+
+    let mut state = build_state(HashMap::new(), HashMap::new(), HashMap::new()).await;
+    Arc::get_mut(&mut state).unwrap().provider_defs = vec![serde_json::from_value(serde_json::json!({
+        "id": "ark-test", "name": "Ark", "channels": [{
+            "type": "system_one", "base_url": format!("{}/api/v1", upstream.uri()), "system_one_beta": true,
+            "models_endpoint": format!("{}/api/v1/models", upstream.uri())
+        }]
+    })).unwrap()];
+    let models = crate::admin::provider_svc::fetch_models_from_api(
+        &state.client, &state.provider_defs, "ark-test", "system_one", UPSTREAM_KEY, "",
+    ).await.unwrap();
+    assert_eq!(models, [("decision".into(), "Decision".into())]);
+    update_provider(&state.db, "ark-test", UPSTREAM_KEY, true,
+        &[("system_one".into(), true)],
+        &[("system_one".into(), "decision".into(), "Decision".into())],
+        &Default::default()).await.unwrap();
+    refresh_routes(&state).await.unwrap();
+
+    let system_one_key = "mb-system-one-test";
+    for (id, key, scope) in [("key-1", TEST_KEY, "llm"), ("key-2", system_one_key, "system_one")] {
+        sqlx::query("INSERT INTO api_keys (id, key_hash, proxy_scope) VALUES (?, ?, ?)")
+            .bind(id).bind(hex_sha256(key)).bind(scope).execute(&state.db).await.unwrap();
+    }
+    crate::middleware::auth::refresh_api_key_cache(&state).await.unwrap();
+    let proxy = spawn_proxy(state.clone()).await;
+    let endpoint = format!("{proxy}/system-one/v1/systemone");
+    let client = http();
+    assert_eq!(client.post(&endpoint).json(&request).send().await.unwrap().status(), 401);
+    let response = client.post(&endpoint).bearer_auth(system_one_key)
+        .header("ark-beta-systemone-api", "false")
+        .json(&request).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.json::<serde_json::Value>().await.unwrap(), answer);
+
+    let models: serde_json::Value = client.get(format!("{proxy}/system-one/v1/models"))
+        .bearer_auth(system_one_key).send().await.unwrap().json().await.unwrap();
+    assert_eq!(models["models"][0]["name"], "decision");
+    assert_eq!(client.post(format!("{proxy}/openai-chat/v1/chat/completions"))
+        .bearer_auth(TEST_KEY).json(&request).send().await.unwrap().status(), 404);
+    let row = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(row) = sqlx::query_as::<_, (String, i64)>(
+                "SELECT channel, input_tokens FROM usage_records WHERE model_id = 'decision'"
+            ).fetch_optional(&state.db).await.unwrap() {
+                break row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    assert_eq!(row, ("system_one".into(), 18));
+}
+
+#[tokio::test]
+async fn api_keys_are_scoped_to_their_proxy() {
+    let state = build_state(HashMap::new(), HashMap::new(), HashMap::new()).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let admin_url = format!("http://{}/api/admin/api-keys", listener.local_addr().unwrap());
+    let admin = crate::router::create_admin_router(state.clone());
+    tokio::spawn(async move { axum::serve(listener, admin).await.unwrap(); });
+    let client = http();
+    let proxy = spawn_proxy(state).await;
+    let mut keys = Vec::new();
+    for body in [
+        serde_json::json!({"name": "LLM key"}),
+        serde_json::json!({"name": "System One key", "scope": "system_one"}),
+    ] {
+        let response = client.post(&admin_url).json(&body).send().await.unwrap();
+        assert_eq!(response.status(), 201);
+        let data: serde_json::Value = response.json().await.unwrap();
+        keys.push(data["key"].as_str().unwrap().to_owned());
+    }
+    for (scope, endpoint, authorized) in [
+        ("llm", "/openai-chat/v1/models", 0),
+        ("system_one", "/system-one/v1/models", 1),
+    ] {
+        let listed: Vec<serde_json::Value> = client.get(&admin_url).query(&[("scope", scope)])
+            .send().await.unwrap().json().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        for (index, key) in keys.iter().enumerate() {
+            let response = client.get(format!("{proxy}{endpoint}")).bearer_auth(key)
+                .send().await.unwrap();
+            assert_eq!(response.status(), if index == authorized { 200 } else { 401 });
+        }
+    }
 }
