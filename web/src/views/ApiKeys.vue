@@ -10,11 +10,37 @@
       <n-data-table :columns="columns" :data="keys" :loading="loading" :bordered="false" size="small" class="keys-table" />
     </div>
     <div v-if="!loading && keys.length === 0" class="empty-state"><p class="empty-text">暂无 API 密钥</p><p class="empty-hint mono">点击「生成密钥」创建第一个访问令牌</p></div>
-    <n-modal v-model:show="showCreate" title="生成 API 密钥" class="create-modal">
-      <n-card style="width: 400px" :bordered="false" size="small">
-        <n-form :model="form" label-placement="left" label-width="60px"><n-form-item label="名称"><n-input v-model:value="form.name" placeholder="为密钥命名以便识别" class="mono" /></n-form-item></n-form>
-        <template #footer><n-space justify="end"><n-button @click="showCreate = false">取消</n-button><n-button type="primary" :loading="creating" @click="handleCreate">生成</n-button></n-space></template>
-      </n-card>
+    <n-modal
+      v-model:show="showCreate"
+      preset="card"
+      class="key-create-dialog"
+      aria-labelledby="key-create-title"
+      aria-describedby="key-create-description"
+      transform-origin="center"
+      closable
+    >
+      <template #header>
+        <h2 id="key-create-title" class="key-create-title">生成 API 密钥</h2>
+        <p id="key-create-description" class="key-create-description">
+          适用代理 <strong>{{ systemOne ? 'System One' : 'LLM' }}</strong>
+        </p>
+      </template>
+      <label for="key-create-name" class="key-create-label">
+        密钥名称 <span>选填</span>
+      </label>
+      <n-input
+        v-model:value="form.name"
+        :input-props="{ id: 'key-create-name' }"
+        placeholder="例如：开发环境"
+        size="large"
+        autofocus
+      />
+      <template #action>
+        <n-space justify="end" :size="10">
+          <n-button @click="showCreate = false">取消</n-button>
+          <n-button type="primary" :loading="creating" @click="handleCreate">生成密钥</n-button>
+        </n-space>
+      </template>
     </n-modal>
     <n-modal v-model:show="showRename" title="重命名 API 密钥" class="create-modal">
       <n-card style="width: 400px" :bordered="false" size="small">
@@ -144,4 +170,54 @@ onMounted(loadKeys)
 .empty-text { margin: 0; font-size: 16px; font-weight: 500; color: var(--mb-text-2); }
 .empty-hint { margin: 6px 0 0; font-size: 13px; color: var(--mb-text-3); }
 .create-modal { --n-title-text-color: var(--mb-text-1); }
+
+/* The modal preset renders its card outside this view's scoped DOM. */
+:global(.key-create-dialog) {
+  width: min(440px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid var(--mb-border);
+  border-radius: 16px;
+  box-shadow: var(--mb-shadow-3);
+}
+:global(.key-create-dialog .n-card-header) {
+  align-items: flex-start;
+  padding: 24px 24px 20px;
+  border-bottom: 1px solid var(--mb-border);
+  background: linear-gradient(115deg, var(--mb-tint-blue), var(--mb-surface) 85%);
+}
+.key-create-title {
+  margin: 0;
+  color: var(--mb-text-1);
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.key-create-description {
+  margin: 6px 0 0;
+  color: var(--mb-text-2);
+  font-size: 13px;
+  font-weight: 400;
+}
+.key-create-description strong { font-weight: 600; }
+:global(.key-create-dialog .n-card-content) { padding: 20px 24px 24px; }
+.key-create-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--mb-text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+.key-create-label span {
+  color: var(--mb-text-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+:global(.key-create-dialog .n-card__action) {
+  padding: 14px 24px;
+  border-top: 1px solid var(--mb-border);
+  background: var(--mb-bg);
+}
+:global(.key-create-dialog .n-button) { min-width: 68px; }
 </style>
