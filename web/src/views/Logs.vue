@@ -79,11 +79,13 @@
 </template>
 
 <script setup lang="ts">
+import { proxyScopedPath } from '../api'
 import { ref, computed, onMounted, h } from 'vue'
 import { NDataTable, NPagination, NTooltip, NModal, NButton, NSpace } from 'naive-ui'
 import { formatLocalTime } from '../utils'
 
 const API_BASE = '/api/admin'
+const props = defineProps<{ systemOne?: boolean }>()
 const logs = ref<any[]>([])
 const loading = ref(true)
 const page = ref(1)
@@ -166,7 +168,8 @@ function parseClient(ua: any): { product: string; version: string | null } | nul
 
 // 通道类型 → 短标签 + 协议族着色。openai_chat/openai_responses 同属 openai 族（青），
 // anthropic 单独一族（赭）。旧记录无 channel 时返回 null，单元格回退为「—」。
-function channelMeta(ch: any): { text: string; tier: 'openai' | 'anthropic' } | null {
+function channelMeta(ch: any): { text: string; tier: 'openai' | 'anthropic' | 'system-one' } | null {
+  if (ch === 'system_one') return { text: 'System One', tier: 'system-one' }
   if (ch === 'anthropic') return { text: 'anthropic', tier: 'anthropic' }
   if (ch === 'openai_responses') return { text: 'responses', tier: 'openai' }
   if (ch === 'openai_chat') return { text: 'chat', tier: 'openai' }
@@ -309,7 +312,7 @@ async function loadProviders() {
 async function loadLogs() {
   loading.value = true
   try {
-    const res = await fetch(`${API_BASE}/logs?page=${page.value}&page_size=${pageSize}`)
+    const res = await fetch(API_BASE + proxyScopedPath(`/logs?page=${page.value}&page_size=${pageSize}`, props.systemOne))
     const data = await res.json()
     logs.value = data.logs
     total.value = data.total
@@ -429,6 +432,7 @@ onMounted(init)
 /* 通道标签：按协议族着色（openai 系青、anthropic 赭），hover 显完整 channel 类型。 */
 .logs :deep(.ch-tag) { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.02em; white-space: nowrap; line-height: 1.4; }
 .logs :deep(.ch-tag.ch-openai) { color: var(--mb-cyan); background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.18); }
+.logs :deep(.ch-tag.ch-system-one) { color: var(--mb-success-d); background: var(--mb-surface-inset); border: 1px solid var(--mb-border); }
 .logs :deep(.ch-tag.ch-anthropic) { color: var(--mb-warning); background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.18); }
 .logs :deep(.ch-tag.ch-na) { color: var(--mb-text-3); }
 

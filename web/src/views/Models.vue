@@ -30,6 +30,7 @@
           <span class="channel-symbol" aria-hidden="true">
             <svg v-if="channel.type === 'openai_chat'" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z" /><path d="M7 10h8M7 14h5" /></svg>
             <svg v-else-if="channel.type === 'openai_responses'" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5-6 7 6 7M16 5l6 7-6 7M14 4l-4 16" /></svg>
+            <svg v-else-if="channel.type === 'system_one'" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4M12 3l9 9-9 9-9-9Z" /></svg>
             <svg v-else width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m12 3 0 18M3 12h18M5.6 5.6l12.8 12.8M5.6 18.4 18.4 5.6M8.5 3.5l7 17M3.5 8.5l17 7M3.5 15.5l17-7M8.5 20.5l7-17" /></svg>
           </span>
         </div>
@@ -85,14 +86,17 @@ import { adminRequest, errorMessage } from '../api'
 interface Model { id: string; name: string; provider_id: string; provider_name: string; provider_icon?: string | null }
 interface Channel { channel_type: string; models: Model[] }
 
-const channelDefs = [
+const props = defineProps<{ systemOne?: boolean }>()
+const channelDefs = props.systemOne ? [
+  { type: 'system_one', label: 'System One', description: 'Decisions API', tone: 'tone-chat' },
+] : [
   { type: 'openai_chat', label: 'OpenAI Chat', description: 'Chat Completions', tone: 'tone-chat' },
   { type: 'openai_responses', label: 'OpenAI Responses', description: 'Responses API', tone: 'tone-responses' },
   { type: 'anthropic', label: 'Anthropic', description: 'Messages API', tone: 'tone-anthropic' }
 ]
 const refreshKey = ref(0)
 const channels = ref<Channel[]>([])
-const selectedChannel = ref('openai_chat')
+const selectedChannel = ref(channelDefs[0].type)
 const loading = ref(false)
 const error = ref('')
 const selectedDef = computed(() => channelDefs.find(c => c.type === selectedChannel.value) || channelDefs[0])
@@ -133,7 +137,8 @@ async function loadModels() {
   loading.value = true
   error.value = ''
   try {
-    channels.value = await (await adminRequest('/channels/models')).json()
+    const list: Channel[] = await (await adminRequest('/channels/models')).json()
+    channels.value = list.filter(channel => (channel.channel_type === 'system_one') === !!props.systemOne)
   } catch (cause) {
     error.value = errorMessage(cause, '加载通道模型失败')
   } finally {

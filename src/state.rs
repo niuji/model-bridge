@@ -18,6 +18,7 @@ pub struct ProviderRoute {
     pub base_url: String,
     pub api_key: String,
     pub workspace_id: String,
+    pub system_one_beta: bool,
 }
 
 /// 应用程序全局状态
@@ -37,6 +38,7 @@ pub struct AppState {
     pub openai_responses_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
     /// anthropic 格式的检索 id → ProviderRoute（检索 key 全小写；非 claude-/anthropic 开头的模型写入时补 claude- 前缀）
     pub anthropic_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
+    pub system_one_routes: Arc<RwLock<HashMap<String, ProviderRoute>>>,
     /// Provider 定义（来自配置文件）
     pub provider_defs: Vec<ProviderDef>,
     pub db: SqlitePool,

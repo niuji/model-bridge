@@ -211,7 +211,7 @@
             </n-form-item>
             <template v-if="supportsWorkspace">
               <n-form-item label="Workspace ID">
-                <n-input v-model:value="form.workspace_id" placeholder="可选，wrkspc_..." class="mono" />
+                <n-input v-model:value="form.workspace_id" :placeholder="needsWorkspace ? '百炼业务空间 ID' : '可选，wrkspc_...'" class="mono" />
               </n-form-item>
             </template>
           </div>
@@ -370,6 +370,7 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { adminRequest, errorMessage } from '../api'
 import { NButton, NCheckbox, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NSwitch, useMessage } from 'naive-ui'
 
+const props = defineProps<{ systemOne?: boolean }>()
 const message = useMessage()
 const API_BASE = '/api/admin'
 
@@ -566,10 +567,13 @@ async function logoutSubscription() {
 
 onBeforeUnmount(() => { void cancelLogin() })
 
-const CHANNEL_LABELS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }
+const CHANNEL_LABELS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic', system_one: 'System One' }
 
 const isSubscription = computed(() => editProvider.value?.access_type === 'subscription')
-const supportsWorkspace = computed(() => !isSubscription.value && editProvider.value?.id === 'anthropic')
+const needsWorkspace = computed(() => editProvider.value?.channels.some(
+  channel => channel.channel_type === 'system_one' && channel.base_url.includes('{workspace_id}')
+))
+const supportsWorkspace = computed(() => !isSubscription.value && (editProvider.value?.id === 'anthropic' || needsWorkspace.value))
 
 const selectedChannelDef = computed(() => form.value.channels.find(c => c.channel_type === selectedChannel.value))
 const visibleModels = computed(() => form.value.modelsByChannel[selectedChannel.value] || [])
@@ -784,7 +788,10 @@ async function loadProviders() {
   loading.value = true
   try {
     const list: ProviderSummary[] = await (await adminRequest('/providers')).json()
-    providers.value = list.sort((a, b) => a.name.localeCompare(b.name))
+    providers.value = list.filter(provider => props.systemOne
+      ? provider.channels.some(channel => channel.channel_type === 'system_one')
+      : !provider.channels.length || provider.channels.some(channel => channel.channel_type !== 'system_one'))
+      .sort((a, b) => a.name.localeCompare(b.name))
   } catch (error) {
     message.error(errorMessage(error, '加载供应商失败'))
   } finally {

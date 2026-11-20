@@ -32,7 +32,7 @@ struct ChannelModels {
 pub async fn get_channel_models(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut channels = Vec::with_capacity(3);
+    let mut channels = Vec::with_capacity(4);
     for (channel_type, models_endpoint, routes_lock) in [
         (
             "openai_chat",
@@ -45,6 +45,7 @@ pub async fn get_channel_models(
             &state.openai_responses_routes,
         ),
         ("anthropic", "/anthropic/v1/models", &state.anthropic_routes),
+        ("system_one", "/system-one/v1/models", &state.system_one_routes),
     ] {
         let routes = routes_lock.read().await;
         // 以生效路由为准，避免把已停用或登录失效的供应商配置展示为可用模型。
@@ -74,6 +75,18 @@ pub async fn get_channel_models(
         });
     }
     axum::Json(channels)
+}
+
+pub async fn get_system_one_models(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let routes = state.system_one_routes.read().await;
+    let mut entries: Vec<_> = routes.iter().collect();
+    entries.sort_by_key(|(id, _)| *id);
+    let models: Vec<_> = entries.into_iter().map(|(id, route)| {
+        serde_json::json!({ "name": id, "displayName": route.model_name })
+    }).collect();
+    axum::Json(serde_json::json!({ "models": models }))
 }
 
 async fn openai_models_list(

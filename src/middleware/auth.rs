@@ -15,17 +15,46 @@ use crate::state::AppState;
 #[derive(Clone, Debug)]
 pub struct AuthenticatedKey(pub String);
 
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyScope {
+    #[default]
+    Llm,
+    SystemOne,
+}
+
+impl KeyScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::SystemOne => "system_one",
+        }
+    }
+
+    fn cache_key(self, hash: String) -> String {
+        match self {
+            Self::Llm => hash,
+            Self::SystemOne => format!("system_one:{hash}"),
+        }
+    }
+}
+
 /// 从数据库加载所有启用的 API Key 到内存缓存
 pub async fn refresh_api_key_cache(state: &AppState) -> anyhow::Result<()> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT key_hash, id FROM api_keys WHERE is_enabled = 1",
+    let rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT key_hash, id, proxy_scope FROM api_keys WHERE is_enabled = 1",
     )
     .fetch_all(&state.db)
     .await?;
 
     let mut cache = HashMap::new();
-    for (key_hash, id) in rows {
-        cache.insert(key_hash, id);
+    for (key_hash, id, scope) in rows {
+        let scope = match scope.as_str() {
+            "llm" => KeyScope::Llm,
+            "system_one" => KeyScope::SystemOne,
+            _ => continue,
+        };
+        cache.insert(scope.cache_key(key_hash), id);
     }
 
     let mut guard = state.api_key_cache.write().await;
@@ -39,8 +68,25 @@ pub async fn refresh_api_key_cache(state: &AppState) -> anyhow::Result<()> {
 /// 验证通过后将 AuthenticatedKey 注入 request extensions 供下游使用
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> axum::response::Response {
+    authenticate(state, request, next, KeyScope::Llm).await
+}
+
+pub async fn auth_system_one(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> axum::response::Response {
+    authenticate(state, request, next, KeyScope::SystemOne).await
+}
+
+async fn authenticate(
+    state: Arc<AppState>,
     mut request: Request,
     next: Next,
+    scope: KeyScope,
 ) -> axum::response::Response {
     // 支持两种格式: Authorization: Bearer mb-xxx (OpenAI) 和 x-api-key: mb-xxx (Anthropic)
     let key = request
@@ -67,11 +113,11 @@ pub async fn auth_middleware(
     };
 
     let key_hash = sha2::Sha256::digest(key.as_bytes());
-    let key_hash_hex = format!("{:x}", key_hash);
+    let cache_key = scope.cache_key(format!("{:x}", key_hash));
 
     // 查内存缓存，无需 DB 查询
     let cache = state.api_key_cache.read().await;
-    if let Some(api_key_id) = cache.get(&key_hash_hex) {
+    if let Some(api_key_id) = cache.get(&cache_key) {
         let api_key_id = api_key_id.clone();
         drop(cache);
         request.extensions_mut().insert(AuthenticatedKey(api_key_id));

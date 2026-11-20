@@ -146,6 +146,7 @@ pub async fn get_provider(
 pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     let mut openai_chat_routes: HashMap<String, ProviderRoute> = HashMap::new();
     let mut openai_responses_routes: HashMap<String, ProviderRoute> = HashMap::new();
+    let mut system_one_routes: HashMap<String, ProviderRoute> = HashMap::new();
     let mut anthropic_routes: HashMap<String, ProviderRoute> = HashMap::new();
 
     // 单遍加载所有启用 provider 的配置/通道/模型，避免预扫描与主循环重复查询（3N → N 次 DB 查询）。
@@ -177,7 +178,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             _ => {}
         }
         let channel_configs = get_channel_configs(&state.db, &def.id).await?;
-        let channels = merge_channels(&def.channels, &channel_configs);
+        let mut channels = merge_channels(&def.channels, &channel_configs);
         let models = sqlx::query_as::<_, ProviderModel>(
             "SELECT id, provider_id, channel_type, model_id, model_name FROM provider_models WHERE provider_id = ?",
         )
@@ -188,6 +189,16 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             .as_ref()
             .map(|c| c.workspace_id.clone())
             .unwrap_or_default();
+        channels.retain_mut(|channel| {
+            if channel.channel_type != "system_one" || !channel.base_url.contains("{workspace_id}") {
+                return true;
+            }
+            if !valid_workspace_subdomain(&workspace_id) {
+                return false;
+            }
+            channel.base_url = channel.base_url.replace("{workspace_id}", &workspace_id);
+            true
+        });
         loaded.push(LoadedProvider {
             def,
             api_key,
@@ -203,6 +214,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     let mut bare_counts: HashMap<String, usize> = HashMap::new();
     let mut openai_chat_bare_counts: HashMap<String, usize> = HashMap::new();
     let mut openai_responses_bare_counts: HashMap<String, usize> = HashMap::new();
+    let mut system_one_bare_counts: HashMap<String, usize> = HashMap::new();
     for lp in &loaded {
         let enabled: Vec<&ChannelDetail> = lp.channels
             .iter()
@@ -220,11 +232,12 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                 *bare_counts.entry(bare).or_insert(0) += 1;
             }
         }
-        for ch in enabled.iter().copied().filter(|c| c.channel_type == "openai_chat" || c.channel_type == "openai_responses") {
+        for ch in &enabled {
             let table: &mut HashMap<String, usize> = match ch.channel_type.as_str() {
                 "openai_chat" => &mut openai_chat_bare_counts,
                 "openai_responses" => &mut openai_responses_bare_counts,
-                _ => unreachable!(),
+                "system_one" => &mut system_one_bare_counts,
+                _ => continue,
             };
             for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let bare = model.model_id.to_lowercase();
@@ -278,6 +291,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
                     workspace_id: lp.workspace_id.clone(),
+                    system_one_beta: false,
                 };
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
@@ -336,9 +350,10 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             let table: &mut HashMap<String, ProviderRoute> = match ch.channel_type.as_str() {
                 "openai_chat" => &mut openai_chat_routes,
                 "openai_responses" => &mut openai_responses_routes,
+                "system_one" => &mut system_one_routes,
                 other => {
                     tracing::warn!(
-                        "provider '{}' channel '{}' has unknown openai channel type, skipped from routing",
+                        "provider '{}' channel '{}' has unknown channel type, skipped from routing",
                         def.id, other
                     );
                     continue;
@@ -348,8 +363,13 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             let bare_counts: &HashMap<String, usize> = match ch.channel_type.as_str() {
                 "openai_chat" => &openai_chat_bare_counts,
                 "openai_responses" => &openai_responses_bare_counts,
+                "system_one" => &system_one_bare_counts,
                 _ => unreachable!(),
             };
+            let system_one_beta = ch.channel_type == "system_one"
+                && def.channels.iter().any(|def_channel| {
+                    def_channel.channel_type == "system_one" && def_channel.system_one_beta
+                });
             for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let key_lower = model.model_id.to_lowercase();
                 let route = ProviderRoute { access_type: def.access_type,
@@ -360,6 +380,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
                     workspace_id: String::new(),
+                    system_one_beta,
                 };
                 if bare_counts.get(&key_lower).copied().unwrap_or(0) == 1 {
                     // 非冲突：裸名 key（count==1 保证唯一，无冲突分支）
@@ -411,11 +432,14 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         *a = anthropic_routes;
     }
 
+    *state.system_one_routes.write().await = system_one_routes;
+
     tracing::info!(
-        "Routes refreshed: {} chat models, {} responses models, {} anthropic models",
+        "Routes refreshed: {} chat models, {} responses models, {} anthropic models, {} System One models",
         state.openai_chat_routes.read().await.len(),
         state.openai_responses_routes.read().await.len(),
-        state.anthropic_routes.read().await.len()
+        state.anthropic_routes.read().await.len(),
+        state.system_one_routes.read().await.len()
     );
 
     Ok(())
@@ -603,18 +627,24 @@ pub async fn fetch_models_from_api(
             anyhow::bail!("HTTP {}", resp.status());
         }
         let body: serde_json::Value = resp.json().await?;
-        let data = body["data"]
+        let native_system_one = ch.channel_type == "system_one" && body.get("models").is_some();
+        let (list_field, id_field, label_field) = if native_system_one {
+            ("models", "name", "displayName")
+        } else {
+            ("data", "id", "display_name")
+        };
+        let data = body[list_field]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("missing model data array"))?;
         for model in data {
-            let id = model["id"]
+            let id = model[id_field]
                 .as_str()
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("missing model id"))?;
             if seen_models.insert(id.to_string()) {
                 models.push((
                     id.to_string(),
-                    model["display_name"].as_str().unwrap_or(id).to_string(),
+                    model[label_field].as_str().unwrap_or(id).to_string(),
                 ));
             }
         }
@@ -689,6 +719,7 @@ mod anthropic_model_tests {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
                 models_endpoint: Some(format!("{}/v1/models", server.uri())),
+                system_one_beta: false,
             }],
             usage: None,
             config_error: None,
@@ -916,6 +947,16 @@ fn merge_channels(
             }
         })
         .collect()
+}
+
+// 工作空间 ID 会进入主机名，必须限制为单个 DNS 标签。
+pub(crate) fn valid_workspace_subdomain(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 63
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-')
 }
 
 /// 仅允许 http(s) 的 base_url，拒绝 file:// 等本地协议及非 URL 字符串。
@@ -1250,7 +1291,7 @@ mod drift_tests {
     }
 
     fn chan(ct: &str, base: &str, ep: Option<&str>) -> ChannelDef {
-        ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from) }
+        ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from), system_one_beta: false }
     }
     fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
         ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None, id: id.into(), name: id.into(), icon: None, console_url: None, channels: chans, usage: None, config_error: None }
@@ -1396,6 +1437,7 @@ mod config_error_tests {
             openai_chat_routes: Default::default(),
             openai_responses_routes: Default::default(),
             anthropic_routes: Default::default(),
+            system_one_routes: Default::default(),
             provider_defs: vec![def],
             db: pool,
             client: reqwest::Client::new(),
@@ -1441,6 +1483,7 @@ mod config_error_tests {
             channel_type: "openai_chat".into(),
             base_url: b.into(),
             models_endpoint: None,
+            system_one_beta: false,
         };
         let mut def = ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "dup".into(),
@@ -1462,6 +1505,7 @@ mod config_error_tests {
             openai_chat_routes: Default::default(),
             openai_responses_routes: Default::default(),
             anthropic_routes: Default::default(),
+            system_one_routes: Default::default(),
             provider_defs: vec![def],
             db: pool,
             client: reqwest::Client::new(),

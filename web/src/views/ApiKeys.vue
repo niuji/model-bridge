@@ -1,7 +1,7 @@
 <template>
   <div class="api-keys">
     <div class="page-header">
-      <div><h1 class="page-title serif">API 密钥</h1><p class="page-subtitle mono">管理访问令牌 · 密钥仅在创建时完整显示</p></div>
+      <div><h1 class="page-title serif">API 密钥</h1><p class="page-subtitle mono">{{ systemOne ? 'System One' : 'LLM' }} 代理的访问令牌</p></div>
       <n-button type="primary" @click="showCreate = true" class="create-btn">
         <template #icon><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg></template>生成密钥
       </n-button>
@@ -29,7 +29,8 @@
 import { ref, onMounted, h } from 'vue'
 import { NDataTable, NButton, NModal, NCard, NForm, NFormItem, NInput, NSpace, NSwitch, NIcon, NPopconfirm, useMessage } from 'naive-ui'
 import { formatLocalTime } from '../utils'
-import { adminRequest, errorMessage } from '../api'
+import { adminRequest, errorMessage, proxyScopedPath } from '../api'
+const props = defineProps<{ systemOne?: boolean }>()
 const message = useMessage()
 const creating = ref(false)
 const renaming = ref(false)
@@ -55,7 +56,7 @@ async function handleCopy(id: string) {
 async function loadKeys() {
   loading.value = true
   try {
-    keys.value = await (await adminRequest('/api-keys')).json()
+    keys.value = await (await adminRequest(proxyScopedPath('/api-keys', props.systemOne))).json()
   } catch (error) { message.error(errorMessage(error, '加载密钥失败')) }
   finally { loading.value = false }
 }
@@ -66,7 +67,7 @@ async function handleCreate() {
   try {
     await adminRequest('/api-keys', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: form.value.name })
+      body: JSON.stringify({ name: form.value.name, scope: props.systemOne ? 'system_one' : 'llm' })
     })
     showCreate.value = false
     form.value.name = ''

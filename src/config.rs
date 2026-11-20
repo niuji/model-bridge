@@ -136,6 +136,9 @@ pub struct ChannelDef {
     /// 拉取该通道模型列表的端点（不配置则该通道不支持「同步」）
     #[serde(default)]
     pub models_endpoint: Option<String>,
+    /// 火山方舟的 System One beta 端点需要由网关设置专用请求头。
+    #[serde(default)]
+    pub system_one_beta: bool,
 }
 
 impl Default for AppConfig {
@@ -368,6 +371,7 @@ mod tests {
                     channel_type: (*t).into(),
                     base_url: "https://example.com/v1".into(),
                     models_endpoint: None,
+                    system_one_beta: false,
                 })
                 .collect(),
             usage: None,

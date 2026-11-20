@@ -31,7 +31,7 @@ import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { CustomChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
-import { adminRequest, errorMessage } from '../api'
+import { adminRequest, errorMessage, proxyScopedPath } from '../api'
 import { usageSeries } from '../utils/usageSeries'
 import { centeredBar } from '../utils/centeredBars'
 import { isDark } from '../theme'
@@ -151,7 +151,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await (await adminRequest('/stats/channels')).json()
+    const result = await (await adminRequest(proxyScopedPath('/stats/channels', props.channel === 'system_one'))).json()
     if (id === requestId) data.value = result
   } catch (cause) {
     if (id === requestId) error.value = errorMessage(cause, '加载通道用量失败')

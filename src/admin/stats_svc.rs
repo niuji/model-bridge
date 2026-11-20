@@ -3,6 +3,25 @@ use sqlx::SqlitePool;
 
 /// 删除超过 retention_days 天的 usage_records。
 /// 返回被删除的行数。
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyScope {
+    #[default]
+    All,
+    Llm,
+    SystemOne,
+}
+
+impl ProxyScope {
+    fn system_one(self) -> Option<bool> {
+        match self {
+            Self::All => None,
+            Self::Llm => Some(false),
+            Self::SystemOne => Some(true),
+        }
+    }
+}
+
 pub async fn prune_old_records(pool: &SqlitePool, retention_days: u64) -> anyhow::Result<u64> {
     let result = sqlx::query(
         "DELETE FROM usage_records WHERE created_at < datetime('now', ? || ' days')",
@@ -101,11 +120,15 @@ pub async fn get_logs(
     page: i64,
     page_size: i64,
     enc_key: Option<&[u8; 32]>,
+    scope: ProxyScope,
 ) -> anyhow::Result<PaginatedLogs> {
     let page_size = page_size.clamp(1, 500);
     let page = page.max(1);
 
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_records")
+    let total: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM usage_records WHERE COALESCE((COALESCE(channel, '') = 'system_one') = ?, 1)",
+    )
+        .bind(scope.system_one())
         .fetch_one(pool)
         .await?;
 
@@ -122,10 +145,12 @@ pub async fn get_logs(
                strftime('%Y-%m-%dT%H:%M:%SZ', u.created_at) as created_at
         FROM usage_records u
         LEFT JOIN api_keys k ON u.api_key_id = k.id
+        WHERE COALESCE((COALESCE(u.channel, '') = 'system_one') = ?, 1)
         ORDER BY u.id DESC
         LIMIT ? OFFSET ?
         "#,
     )
+    .bind(scope.system_one())
     .bind(page_size)
     .bind(offset)
     .fetch_all(pool)
@@ -169,7 +194,7 @@ pub struct HourlyStats {
     pub total_tokens: i64,
 }
 
-pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
+pub async fn get_overview(pool: &SqlitePool, scope: ProxyScope) -> anyhow::Result<StatsOverview> {
     let row = sqlx::query_as::<_, (i64, i64, i64, f64, i64)>(
         r#"
         SELECT
@@ -180,8 +205,10 @@ pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
             COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)
         FROM usage_records
         WHERE created_at >= datetime('now', '-7 days')
+            AND COALESCE((COALESCE(channel, '') = 'system_one') = ?, 1)
         "#,
     )
+    .bind(scope.system_one())
     .fetch_one(pool)
     .await?;
 
@@ -194,7 +221,7 @@ pub async fn get_overview(pool: &SqlitePool) -> anyhow::Result<StatsOverview> {
     })
 }
 
-pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats>> {
+pub async fn get_model_stats(pool: &SqlitePool, scope: ProxyScope) -> anyhow::Result<Vec<ModelStats>> {
     let rows = sqlx::query_as::<_, (String, String, String, i64, i64, i64, i64, i64)>(
         r#"
         SELECT
@@ -208,10 +235,12 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
             COALESCE(SUM(cache_write_tokens), 0)
         FROM usage_records
         WHERE created_at >= datetime('now', '-30 days')
+            AND COALESCE((COALESCE(channel, '') = 'system_one') = ?, 1)
         GROUP BY provider_id, COALESCE(channel, ''), model_id
         ORDER BY cnt DESC, provider_id, channel, model_id
         "#,
     )
+    .bind(scope.system_one())
     .fetch_all(pool)
     .await?;
 
@@ -240,7 +269,7 @@ pub async fn get_model_stats(pool: &SqlitePool) -> anyhow::Result<Vec<ModelStats
         .collect())
 }
 
-pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec<DailyStats>> {
+pub async fn get_daily_stats(pool: &SqlitePool, days: i64, scope: ProxyScope) -> anyhow::Result<Vec<DailyStats>> {
     // Generate the complete daily series over the window and LEFT JOIN the
     // aggregated usage onto it, so days with no requests still appear with zero
     // tokens (consistent with the hourly view).
@@ -263,6 +292,7 @@ pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec
                    SUM(input_tokens + output_tokens) as tot
             FROM usage_records
             WHERE created_at >= datetime('now', ? || ' days')
+                AND COALESCE((COALESCE(channel, '') = 'system_one') = ?, 1)
             GROUP BY DATE(created_at)
         )
         SELECT dd.d, COALESCE(a.cnt, 0), COALESCE(a.inp, 0), COALESCE(a.outp, 0), COALESCE(a.tot, 0)
@@ -273,6 +303,7 @@ pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec
     )
     .bind(&bound)
     .bind(&bound)
+    .bind(scope.system_one())
     .fetch_all(pool)
     .await?;
 
@@ -290,7 +321,7 @@ pub async fn get_daily_stats(pool: &SqlitePool, days: i64) -> anyhow::Result<Vec
         .collect())
 }
 
-pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlyStats>> {
+pub async fn get_hourly_stats(pool: &SqlitePool, scope: ProxyScope) -> anyhow::Result<Vec<HourlyStats>> {
     // Generate the complete hourly series over the last 7 days (UTC) and LEFT JOIN
     // the aggregated usage onto it, so hours with no requests still appear on the
     // chart with zero tokens instead of being silently dropped by the GROUP BY.
@@ -308,6 +339,7 @@ pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlySta
                    SUM(input_tokens + output_tokens) as total_tokens
             FROM usage_records
             WHERE created_at >= datetime('now', '-7 days')
+            AND COALESCE((COALESCE(channel, '') = 'system_one') = ?, 1)
             GROUP BY strftime('%Y-%m-%dT%H:00:00Z', created_at)
         )
         SELECT h.hour, COALESCE(a.total_tokens, 0) as total_tokens
@@ -316,6 +348,7 @@ pub async fn get_hourly_stats(pool: &SqlitePool) -> anyhow::Result<Vec<HourlySta
         ORDER BY h.hour ASC
         "#,
     )
+    .bind(scope.system_one())
     .fetch_all(pool)
     .await?;
 
@@ -364,7 +397,7 @@ fn client_family(user_agent: &str) -> String {
     name.join(" ")
 }
 
-pub async fn get_channel_usage(pool: &SqlitePool) -> anyhow::Result<ChannelUsage> {
+pub async fn get_channel_usage(pool: &SqlitePool, scope: ProxyScope) -> anyhow::Result<ChannelUsage> {
     // 同一条 SQL 固定窗口边界，跨 UTC 午夜查询时日期轴与用量仍保持一致。
     let rows = sqlx::query_as::<_, ChannelUsageRow>(
         r#"
@@ -381,10 +414,14 @@ pub async fn get_channel_usage(pool: &SqlitePool) -> anyhow::Result<ChannelUsage
         FROM dates
         LEFT JOIN usage_records u ON u.created_at >= dates.d
             AND u.created_at < datetime(dates.d, '+1 day')
+            AND COALESCE((COALESCE(u.channel, '') = 'system_one') = ?, 1)
         GROUP BY dates.d, COALESCE(u.channel, ''), COALESCE(u.client, ''), u.model_id, u.provider_id
         ORDER BY dates.d, channel, client, model_id, provider_id
         "#,
-    ).fetch_all(pool).await?;
+    )
+    .bind(scope.system_one())
+    .fetch_all(pool)
+    .await?;
     let mut dates = Vec::new();
     for row in &rows {
         if dates.last() != Some(&row.date) {
@@ -416,6 +453,34 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn proxy_scope_preserves_legacy_llm_usage_and_separates_decisions() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::schema::run_migrations(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO usage_records (provider_id, model_id, channel, input_tokens) VALUES
+             ('llm', 'legacy-model', NULL, 11),
+             ('decisions', 'decision-model', 'system_one', 23)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for (scope, model, tokens) in [
+            (ProxyScope::Llm, "legacy-model", 11),
+            (ProxyScope::SystemOne, "decision-model", 23),
+        ] {
+            let logs = get_logs(&pool, 1, 1, None, scope).await.unwrap();
+            assert_eq!(logs.total, 1);
+            assert_eq!(logs.logs[0].model_id, model);
+            assert_eq!(get_overview(&pool, scope).await.unwrap().total_input_tokens, tokens);
+            assert_eq!(get_model_stats(&pool, scope).await.unwrap()[0].model_id, model);
+            assert_eq!(get_hourly_stats(&pool, scope).await.unwrap().iter().map(|row| row.total_tokens).sum::<i64>(), tokens);
+            assert_eq!(get_daily_stats(&pool, 7, scope).await.unwrap().iter().map(|row| row.total_tokens).sum::<i64>(), tokens);
+            assert_eq!(get_channel_usage(&pool, scope).await.unwrap().rows[0].model_id, model);
+        }
+    }
+
+    #[tokio::test]
     async fn channel_usage_merges_client_versions_without_rewriting_logs() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::schema::run_migrations(&pool).await.unwrap();
@@ -435,7 +500,7 @@ mod tests {
                 .bind(client).bind(provider).bind(model).bind(channel).bind(age).bind(input).bind(output)
                 .execute(&pool).await.unwrap();
         }
-        let stats = get_channel_usage(&pool).await.unwrap();
+        let stats = get_channel_usage(&pool, ProxyScope::All).await.unwrap();
         assert_eq!(stats.rows.len(), 7);
         let merged = stats.rows.iter().find(|r| r.client == "claude-cli" && r.provider_id == "p1" && r.model_id == "m1" && r.channel == "anthropic" && r.request_count == 2).unwrap();
         assert_eq!((merged.input_tokens, merged.output_tokens), (300, 30));
@@ -468,7 +533,7 @@ mod tests {
                 .bind(client).bind(model).bind(provider).bind(channel).bind(input).bind(output).bind(age)
                 .execute(&pool).await.unwrap();
         }
-        let stats = get_channel_usage(&pool).await.unwrap();
+        let stats = get_channel_usage(&pool, ProxyScope::All).await.unwrap();
         assert_eq!(stats.dates.len(), 7);
         assert_eq!(stats.rows.len(), 6);
         let row = stats.rows.iter().find(|r| r.client == "cli" && r.model_id == "m1" && r.provider_id == "p1" && r.channel == "openai_chat").unwrap();
@@ -478,7 +543,7 @@ mod tests {
         assert_eq!(unknown.channel, "");
         assert_eq!((unknown.request_count, unknown.input_tokens, unknown.output_tokens), (2, 150, 17));
         sqlx::query("DELETE FROM usage_records").execute(&pool).await.unwrap();
-        let empty = get_channel_usage(&pool).await.unwrap();
+        let empty = get_channel_usage(&pool, ProxyScope::All).await.unwrap();
         assert_eq!(empty.dates.len(), 7);
         assert!(empty.rows.is_empty());
     }
@@ -500,7 +565,7 @@ mod tests {
                 .bind(provider).bind(channel).bind(input).bind(output).bind(cached).bind(age)
                 .execute(&pool).await.unwrap();
         }
-        let rows = serde_json::to_value(get_model_stats(&pool).await.unwrap()).unwrap();
+        let rows = serde_json::to_value(get_model_stats(&pool, ProxyScope::All).await.unwrap()).unwrap();
         let rows = rows.as_array().unwrap();
         assert_eq!(
             rows.len(),
@@ -528,6 +593,6 @@ mod tests {
     async fn model_stats_empty_database_returns_empty_rows() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::schema::run_migrations(&pool).await.unwrap();
-        assert!(get_model_stats(&pool).await.unwrap().is_empty());
+        assert!(get_model_stats(&pool, ProxyScope::All).await.unwrap().is_empty());
     }
 }

@@ -128,5 +128,30 @@
       { "type": "openai_chat", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "models_endpoint": "https://ark.cn-beijing.volces.com/api/v3/models" },
       { "type": "openai_responses", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "models_endpoint": "https://ark.cn-beijing.volces.com/api/v3/models" }
     ]
+  },
+  {
+    "id": "system-one",
+    "name": "System One",
+    "console_url": "https://system-one.dev/",
+    "channels": [
+      { "type": "system_one", "base_url": "https://system-one.dev/v1", "models_endpoint": "https://system-one.dev/v1/models" }
+    ]
+  },
+  {
+    "id": "dashscope-system-one",
+    "name": "阿里云百炼决策",
+    "console_url": "https://bailian.console.aliyun.com/",
+    "channels": [
+      { "type": "system_one", "base_url": "https://{workspace_id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" }
+    ]
+  },
+  {
+    "id": "volcark-system-one",
+    "name": "火山方舟决策",
+    "console_url": "https://console.volcengine.com/ark/",
+    "icon": "volcark.svg",
+    "channels": [
+      { "type": "system_one", "base_url": "https://ark.cn-beijing.volces.com/api/v1", "system_one_beta": true }
+    ]
   }
 ]
