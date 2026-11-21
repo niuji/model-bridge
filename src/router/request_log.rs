@@ -7,13 +7,11 @@ use tokio::io::AsyncWriteExt;
 // 或会破坏链路的头。用排除而非白名单是承重设计——Claude Code 每个版本会新增 capability 头
 // 与请求体字段（自动模式的服务端检查即依赖 `safeguards` 字段与 `safeguard_results` 原样
 // 透传），白名单会在版本升级时静默剥掉它们，把功能坏在上游无法察觉的地方。
-pub(super) const NON_FORWARDED_HEADERS: &[&str] = &[
+const BLOCKED_UPSTREAM_HEADERS: &[&str] = &[
     // 认证头：网关按路由注入上游凭证；reqwest 的 .header() 是 append 而非 insert，
     // 透传会与上游凭证并存为两个同名头，并泄漏客户端的网关 key。
     "authorization",
     "x-api-key",
-    // 由 route.workspace_id 注入，客户端再带一个同样会 append 成两个。
-    "anthropic-workspace-id",
     // 请求体被改写过（model 名长度可变），客户端的长度会与实际 body 不符。
     "content-length",
     // reqwest 未启用 gzip/brotli feature：上游一旦压缩，SSE 行解析与 usage 提取会在压缩
@@ -36,8 +34,13 @@ pub(super) const NON_FORWARDED_HEADERS: &[&str] = &[
 ];
 
 /// HeaderMap 的 key 在解析时已归一化为小写，故可直接按字面量比较。
-pub(super) fn is_forwardable(name: &str) -> bool {
-    !NON_FORWARDED_HEADERS.contains(&name)
+pub(crate) fn is_forwardable(name: &str) -> bool {
+    // 工作区由管理员选择，客户端不能用上游凭证切换工作区。
+    name != "anthropic-workspace-id" && is_configurable_upstream_header(name)
+}
+
+pub(crate) fn is_configurable_upstream_header(name: &str) -> bool {
+    !BLOCKED_UPSTREAM_HEADERS.contains(&name)
 }
 
 pub(super) async fn write_request(
@@ -48,7 +51,7 @@ pub(super) async fn write_request(
     upstream_body: &[u8],
 ) -> anyhow::Result<String> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    // 记「实际转发的头」：与转发共用 is_forwardable，认证头与 cookie 因此不会落盘。
+    // 仅记录透传的客户端头。网关注入的头可能含凭证，不能落盘。
     let headers: serde_json::Map<String, Value> = headers
         .iter()
         .filter(|(name, _)| is_forwardable(name.as_str()))

@@ -1,5 +1,7 @@
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -136,9 +138,31 @@ pub struct ChannelDef {
     /// 拉取该通道模型列表的端点（不配置则该通道不支持「同步」）
     #[serde(default)]
     pub models_endpoint: Option<String>,
-    /// 火山方舟的 System One beta 端点需要由网关设置专用请求头。
-    #[serde(default)]
-    pub system_one_beta: bool,
+    /// 上游推理与模型同步共用，优先于客户端的同名请求头。
+    #[serde(default, deserialize_with = "deserialize_channel_headers")]
+    pub headers: HeaderMap,
+}
+
+fn deserialize_channel_headers<'de, D>(deserializer: D) -> Result<HeaderMap, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let values = HashMap::<String, String>::deserialize(deserializer)?;
+    let mut headers = HeaderMap::try_with_capacity(values.len()).map_err(Error::custom)?;
+    for (name, value) in values {
+        let name = HeaderName::try_from(name.as_str()).map_err(Error::custom)?;
+        if !crate::router::request_log::is_configurable_upstream_header(name.as_str()) {
+            return Err(Error::custom(format!("通道不能配置请求头 {name}")));
+        }
+        let mut value = HeaderValue::try_from(value.as_str()).map_err(Error::custom)?;
+        value.set_sensitive(true);
+        if headers.try_insert(name.clone(), value).map_err(Error::custom)?.is_some() {
+            return Err(Error::custom(format!("通道请求头重复: {name}")));
+        }
+    }
+    Ok(headers)
 }
 
 impl Default for AppConfig {
@@ -196,6 +220,11 @@ pub fn validate_channel_types(def: &ProviderDef) -> Option<String> {
     }
     if def.access_type == AccessType::ApiKey && def.adapter.is_some() {
         return Some("API Key 接入不支持订阅 adapter".into());
+    }
+    if def.access_type == AccessType::Subscription
+        && def.channels.iter().any(|channel| !channel.headers.is_empty())
+    {
+        return Some("订阅接入不支持自定义请求头".into());
     }
     let mut seen: Vec<&str> = Vec::new();
     let mut dups: Vec<&str> = Vec::new();
@@ -316,6 +345,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn channel_headers_reject_invalid_and_gateway_managed_headers() {
+        for headers in [
+            serde_json::json!({"invalid name": "value"}),
+            serde_json::json!({"x-test": "invalid\nvalue"}),
+            serde_json::json!({"x-test": true}),
+            serde_json::json!({"X-Test": "first", "x-test": "second"}),
+            serde_json::json!({"Authorization": "secret"}),
+        ] {
+            let channel = serde_json::json!({
+                "type": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "headers": headers,
+            });
+            assert!(serde_json::from_value::<ChannelDef>(channel).is_err());
+        }
+    }
+
+    #[test]
     fn access_type_defaults_and_subscription_constraints() {
         let default: ProviderDef = serde_json::from_str(r#"{"id":"x","name":"X"}"#).unwrap();
         assert_eq!(default.access_type, AccessType::ApiKey);
@@ -371,7 +418,7 @@ mod tests {
                     channel_type: (*t).into(),
                     base_url: "https://example.com/v1".into(),
                     models_endpoint: None,
-                    system_one_beta: false,
+                    headers: Default::default(),
                 })
                 .collect(),
             usage: None,

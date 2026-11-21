@@ -223,7 +223,7 @@ async fn proxy_to_provider(
     method: Method,
     path: &str,
     query: Option<&str>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     body: &[u8],
     api_key_id: Option<String>,
     client: Option<String>,
@@ -242,7 +242,7 @@ async fn proxy_to_provider(
     // 2. 查传入的路由表
     let routes = routes_lock.read().await;
 
-    let route = match routes.get(&model_lower) {
+    let mut route = match routes.get(&model_lower) {
         Some(r) => r.clone(),
         None => {
             let available_models: Vec<String> = routes.keys().cloned().collect();
@@ -286,34 +286,29 @@ async fn proxy_to_provider(
     }
 
     // 4. 构造转发请求
+    for name in route.headers.keys() {
+        headers.remove(name);
+    }
     let mut req = state
         .client
-        .request(method.clone(), &target_url);
+        .request(method.clone(), &target_url)
+        .headers(std::mem::take(&mut route.headers));
 
     // 根据 API 格式设置认证头
     match api_format {
         "anthropic" => {
             req = req.header("x-api-key", &route.api_key);
-            if !route.workspace_id.is_empty() {
-                req = req.header("anthropic-workspace-id", &route.workspace_id);
-            }
         }
         _ => {
             req = req.header("Authorization", format!("Bearer {}", route.api_key));
         }
     }
 
-    if route.system_one_beta {
-        req = req.header("ark-beta-systemone-api", "true");
-    }
-
-    // 5. 透传客户端请求头（排除名单，不是白名单）：只剔除网关自管或会破坏链路的头，
+    // 5. 透传剩余的客户端请求头：排除网关自管或会破坏链路的头，
     // 其余一律原样外发——Claude Code 每版本新增的 capability 头（如自动模式服务端检查依赖的
-    // 相关头）必须能透传。必须排除的理由见 request_log::NON_FORWARDED_HEADERS。
+    // 相关头）必须能透传。排除规则见 request_log::is_forwardable。
     for (name, value) in headers.iter() {
-        if !super::request_log::is_forwardable(name.as_str())
-            || (route.system_one_beta && name == "ark-beta-systemone-api")
-        {
+        if !super::request_log::is_forwardable(name.as_str()) {
             continue;
         }
         if let Ok(v) = value.to_str() {

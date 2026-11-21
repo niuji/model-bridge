@@ -153,7 +153,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
     struct LoadedProvider<'a> {
         def: &'a ProviderDef,
         api_key: String,
-        workspace_id: String,
         channels: Vec<ChannelDetail>,
         models: Vec<ProviderModel>,
     }
@@ -202,7 +201,6 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         loaded.push(LoadedProvider {
             def,
             api_key,
-            workspace_id,
             channels,
             models,
         });
@@ -264,6 +262,14 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
             .filter(|c| c.is_enabled && is_safe_base_url(&c.base_url))
             .collect();
 
+        let channel_headers = |channel_type: &str| {
+            def.channels
+                .iter()
+                .find(|channel| channel.channel_type == channel_type)
+                .map(|channel| channel.headers.clone())
+                .unwrap_or_default()
+        };
+
         // 模型按通道隔离：channel_type 为空（迁移残留）的跳过路由并告警
         for m in lp.models.iter().filter(|m| m.channel_type.is_empty()) {
             tracing::warn!(
@@ -282,6 +288,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
         //     只用 `claude-{provider}/{model}` 限定名 key，裸名 key 完全不建；
         //     model_name 改写为带 [{provider_id}] 前缀（列表侧区分同名来源，转发不看它）。
         for ch in enabled.iter().copied().filter(|c| c.channel_type == "anthropic") {
+            let headers = channel_headers(&ch.channel_type);
             for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let route = ProviderRoute { access_type: def.access_type,
                     provider_id: def.id.clone(),
@@ -290,8 +297,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     model_name: model.model_name.clone(),
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
-                    workspace_id: lp.workspace_id.clone(),
-                    system_one_beta: false,
+                    headers: headers.clone(),
                 };
                 let lower = route.model_id.to_lowercase();
                 let clean = lower.strip_suffix("[1m]").unwrap_or(&lower);
@@ -366,10 +372,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                 "system_one" => &system_one_bare_counts,
                 _ => unreachable!(),
             };
-            let system_one_beta = ch.channel_type == "system_one"
-                && def.channels.iter().any(|def_channel| {
-                    def_channel.channel_type == "system_one" && def_channel.system_one_beta
-                });
+            let headers = channel_headers(&ch.channel_type);
             for model in lp.models.iter().filter(|m| m.channel_type == ch.channel_type) {
                 let key_lower = model.model_id.to_lowercase();
                 let route = ProviderRoute { access_type: def.access_type,
@@ -379,8 +382,7 @@ pub async fn refresh_routes(state: &Arc<AppState>) -> anyhow::Result<()> {
                     model_name: model.model_name.clone(),
                     base_url: ch.base_url.clone(),
                     api_key: api_key.clone(),
-                    workspace_id: String::new(),
-                    system_one_beta,
+                    headers: headers.clone(),
                 };
                 if bare_counts.get(&key_lower).copied().unwrap_or(0) == 1 {
                     // 非冲突：裸名 key（count==1 保证唯一，无冲突分支）
@@ -497,10 +499,6 @@ async fn update_provider_inner(
 ) -> anyhow::Result<()> {
     let workspace_id = settings.workspace_id.as_deref().map(str::trim);
     let cost_api_key = settings.cost_api_key.as_deref().map(str::trim);
-    if let Some(value) = workspace_id {
-        reqwest::header::HeaderValue::from_str(value)
-            .map_err(|_| anyhow::anyhow!("invalid workspace_id header value"))?;
-    }
     // 配置、通道与模型必须同时提交，失败时保留整份旧配置。
     let mut tx = pool.begin().await?;
     if api_key.is_some() {
@@ -580,11 +578,14 @@ pub async fn fetch_models_from_api(
     provider_id: &str,
     channel_type: &str,
     ui_api_key: &str,
-    workspace_id: &str,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let Some(def) = defs.iter().find(|d| d.id == provider_id) else {
         anyhow::bail!("provider not found");
     };
+    anyhow::ensure!(
+        def.access_type == AccessType::ApiKey && def.config_error.is_none(),
+        "model discovery is unavailable for this provider configuration"
+    );
     let Some(ch) = def.channels.iter().find(|c| c.channel_type == channel_type) else {
         anyhow::bail!("channel '{}' not found on provider '{}'", channel_type, provider_id);
     };
@@ -607,14 +608,14 @@ pub async fn fetch_models_from_api(
     loop {
         let mut req = client
             .get(endpoint)
+            .headers(ch.headers.clone())
             .timeout(std::time::Duration::from_secs(10));
         if ch.channel_type == "anthropic" {
             req = req
                 .header("x-api-key", &api_key)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("anthropic-version", "2023-06-01");
-            if !workspace_id.is_empty() {
-                req = req.header("anthropic-workspace-id", workspace_id);
+                .header("Authorization", format!("Bearer {}", api_key));
+            if !ch.headers.contains_key("anthropic-version") {
+                req = req.header("anthropic-version", "2023-06-01");
             }
             if let Some(after_id) = &cursor {
                 req = req.query(&[("after_id", after_id)]);
@@ -719,7 +720,10 @@ mod anthropic_model_tests {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
                 models_endpoint: Some(format!("{}/v1/models", server.uri())),
-                system_one_beta: false,
+                headers: axum::http::HeaderMap::from_iter([(
+                    axum::http::HeaderName::from_static("anthropic-workspace-id"),
+                    axum::http::HeaderValue::from_static("wrkspc_test"),
+                )]),
             }],
             usage: None,
             config_error: None,
@@ -730,7 +734,6 @@ mod anthropic_model_tests {
             "anthropic",
             "anthropic",
             "key",
-            "wrkspc_test",
         )
         .await
         .unwrap();
@@ -772,7 +775,6 @@ mod anthropic_model_tests {
                 "a",
                 "anthropic",
                 "key",
-                ""
             )
             .await
             .is_err());
@@ -1137,13 +1139,12 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
         provider_id: String,
         is_enabled: bool,
         api_key: String,
-        workspace_id: String,
     }
     #[derive(sqlx::FromRow)]
     struct ChCfgRow { provider_id: String, channel_type: String, is_enabled: bool }
 
     let cfgs: Vec<CfgRow> = sqlx::query_as::<_, CfgRow>(
-        "SELECT c.provider_id,c.is_enabled,COALESCE(k.api_key,'') AS api_key,COALESCE(k.workspace_id,'') AS workspace_id FROM provider_config c LEFT JOIN provider_api_key_credentials k USING(provider_id)",
+        "SELECT c.provider_id,c.is_enabled,COALESCE(k.api_key,'') AS api_key FROM provider_config c LEFT JOIN provider_api_key_credentials k USING(provider_id)",
     )
     .fetch_all(&state.db).await?;
     let ch_cfgs: Vec<ChCfgRow> = sqlx::query_as::<_, ChCfgRow>(
@@ -1178,10 +1179,6 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
         &state.provider_defs, &provider_enabled, &provider_api_key, &channel_enabled,
     );
 
-    let workspaces: HashMap<_, _> = cfgs
-        .iter()
-        .map(|c| (c.provider_id.as_str(), c.workspace_id.as_str()))
-        .collect();
     for t in targets {
         tracing::debug!(
             "probing upstream '{}' '{}' at {}",
@@ -1195,10 +1192,6 @@ pub async fn probe_upstream_models(state: &Arc<AppState>) -> anyhow::Result<()> 
             &t.provider_id,
             &t.channel_type,
             &t.api_key,
-            workspaces
-                .get(t.provider_id.as_str())
-                .copied()
-                .unwrap_or_default(),
         )
         .await
         {
@@ -1291,7 +1284,7 @@ mod drift_tests {
     }
 
     fn chan(ct: &str, base: &str, ep: Option<&str>) -> ChannelDef {
-        ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from), system_one_beta: false }
+        ChannelDef { channel_type: ct.into(), base_url: base.into(), models_endpoint: ep.map(String::from), headers: Default::default() }
     }
     fn def(id: &str, chans: Vec<ChannelDef>) -> ProviderDef {
         ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None, id: id.into(), name: id.into(), icon: None, console_url: None, channels: chans, usage: None, config_error: None }
@@ -1483,7 +1476,7 @@ mod config_error_tests {
             channel_type: "openai_chat".into(),
             base_url: b.into(),
             models_endpoint: None,
-            system_one_beta: false,
+            headers: Default::default(),
         };
         let mut def = ProviderDef { access_type: crate::config::AccessType::ApiKey, adapter: None,
             id: "dup".into(),

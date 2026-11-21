@@ -220,8 +220,6 @@ pub struct ModelQuery {
     channel: String,
     #[serde(default)]
     api_key: Option<String>,
-    #[serde(default)]
-    workspace_id: Option<String>,
 }
 pub async fn models(
     State(state): State<Arc<AppState>>,
@@ -239,12 +237,7 @@ pub async fn models(
         return error(StatusCode::BAD_REQUEST, "invalid provider channel");
     }
     let result = if def.access_type == AccessType::Subscription {
-        if body.api_key.as_deref().is_some_and(|key| !key.is_empty())
-            || body
-                .workspace_id
-                .as_deref()
-                .is_some_and(|workspace| !workspace.is_empty())
-        {
+        if body.api_key.as_deref().is_some_and(|key| !key.is_empty()) {
             return error(
                 StatusCode::BAD_REQUEST,
                 "subscription credentials are managed by the server",
@@ -266,18 +259,12 @@ pub async fn models(
             .as_deref()
             .or_else(|| saved.as_ref().map(|c| c.api_key.as_str()))
             .unwrap_or("");
-        let workspace = body
-            .workspace_id
-            .as_deref()
-            .or_else(|| saved.as_ref().map(|c| c.workspace_id.as_str()))
-            .unwrap_or("");
         provider_svc::fetch_models_from_api(
             &state.client,
             &state.provider_defs,
             &id,
             &body.channel,
             key,
-            workspace,
         )
         .await
     };
@@ -465,7 +452,10 @@ mod tests {
     async fn subscription_models_reject_all_api_key_credentials() {
         let (base, task) = server().await;
         let client = reqwest::Client::new();
-        for field in ["api_key", "workspace_id"] {
+        for (field, status) in [
+            ("api_key", StatusCode::BAD_REQUEST),
+            ("workspace_id", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
             let mut body = json!({"channel":"openai_responses"});
             body[field] = json!("should-not-be-used");
             let response = client
@@ -474,7 +464,7 @@ mod tests {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{field}");
+            assert_eq!(response.status(), status, "{field}");
         }
         task.abort();
     }

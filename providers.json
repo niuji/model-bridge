@@ -151,7 +151,7 @@
     "console_url": "https://console.volcengine.com/ark/",
     "icon": "volcark.svg",
     "channels": [
-      { "type": "system_one", "base_url": "https://ark.cn-beijing.volces.com/api/v1", "system_one_beta": true }
+      { "type": "system_one", "base_url": "https://ark.cn-beijing.volces.com/api/v1", "headers": { "ark-beta-systemone-api": "true" } }
     ]
   }
 ]

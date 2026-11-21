@@ -2,7 +2,7 @@ pub mod admin;
 pub mod update;
 pub mod models_list;
 pub mod proxy;
-mod request_log;
+pub(crate) mod request_log;
 mod subscription_proxy;
 mod subscription_admin;
 

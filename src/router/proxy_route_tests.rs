@@ -135,8 +135,7 @@ fn route(model_id: &str, base_url: &str) -> ProviderRoute {
         model_name: model_id.into(),
         base_url: base_url.into(),
         api_key: UPSTREAM_KEY.into(),
-        workspace_id: String::new(),
-        system_one_beta: false,
+        headers: Default::default(),
     }
 }
 
@@ -528,7 +527,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
                 channel_type: "anthropic".into(),
                 base_url: server_a.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -542,7 +541,7 @@ async fn anthropic_qualified_name_routes_to_correct_provider() {
                 channel_type: "anthropic".into(),
                 base_url: server_b.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -693,7 +692,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -707,7 +706,7 @@ async fn anthropic_qualified_name_upstream_body_is_clean_model_id() {
                 channel_type: "anthropic".into(),
                 base_url: server.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -779,7 +778,7 @@ async fn anthropic_non_conflicting_uses_only_bare_key() {
             channel_type: "anthropic".into(),
             base_url: server.uri(),
             models_endpoint: None,
-            system_one_beta: false,
+            headers: Default::default(),
         }],
         usage: None,
         config_error: None,
@@ -869,7 +868,7 @@ async fn anthropic_same_provider_1m_variant_preferred() {
             channel_type: "anthropic".into(),
             base_url: server.uri(),
             models_endpoint: None,
-            system_one_beta: false,
+            headers: Default::default(),
         }],
         usage: None,
         config_error: None,
@@ -985,7 +984,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
                 channel_type: "anthropic".into(),
                 base_url: server_a.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -999,7 +998,7 @@ async fn anthropic_qualified_name_lowercases_provider_id_in_key() {
                 channel_type: "anthropic".into(),
                 base_url: server_b.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -1100,7 +1099,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
                 channel_type: "openai_chat".into(),
                 base_url: server_a.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -1114,7 +1113,7 @@ async fn openai_chat_conflicting_models_use_qualified_key() {
                 channel_type: "openai_chat".into(),
                 base_url: server_b.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -1237,7 +1236,7 @@ async fn openai_chat_non_conflicting_uses_only_bare_key() {
             channel_type: "openai_chat".into(),
             base_url: server.uri(),
             models_endpoint: None,
-            system_one_beta: false,
+            headers: Default::default(),
         }],
         usage: None,
         config_error: None,
@@ -1322,13 +1321,13 @@ async fn openai_chat_responses_conflict_independent() {
                 channel_type: "openai_chat".into(),
                 base_url: server_chat.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             },
             ChannelDef {
                 channel_type: "openai_responses".into(),
                 base_url: server_resp.uri(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             },
         ],
         usage: None,
@@ -1689,7 +1688,7 @@ async fn provider_refresh_test_state() -> Arc<AppState> {
                 channel_type: "openai_chat".into(),
                 base_url: "https://example.com/v1".into(),
                 models_endpoint: None,
-                system_one_beta: false,
+                headers: Default::default(),
             }],
             usage: None,
             config_error: None,
@@ -1785,7 +1784,7 @@ async fn provider_save_reports_route_refresh_failure() {
 }
 
 #[tokio::test]
-async fn anthropic_provider_saves_workspace_and_keeps_cost_key_private() {
+async fn anthropic_uses_channel_workspace_header_and_keeps_cost_key_private() {
     use axum::{
         extract::{Path, State},
         response::IntoResponse,
@@ -1812,12 +1811,13 @@ async fn anthropic_provider_saves_workspace_and_keeps_cost_key_private() {
         .await;
     let defs: Vec<ProviderDef> = serde_json::from_value(serde_json::json!([{
         "id": "anthropic", "name": "Anthropic", "channels": [{
-            "type": "anthropic", "base_url": server.uri(), "models_endpoint": format!("{}/models", server.uri())
+            "type": "anthropic", "base_url": server.uri(), "models_endpoint": format!("{}/models", server.uri()),
+            "headers": {"Anthropic-Workspace-Id": "wrkspc_test"}
         }]
     }])).unwrap();
     let state = build_state_with_defs(defs).await;
     let request = serde_json::from_value(serde_json::json!({
-        "api_key": "inference-key", "workspace_id": "wrkspc_test", "cost_api_key": "secret-admin-key",
+        "api_key": "inference-key", "workspace_id": "wrkspc_cost", "cost_api_key": "secret-admin-key",
         "is_enabled": true, "channels": [{"channel_type": "anthropic", "is_enabled": true}],
         "models": [{"channel_type": "anthropic", "model_id": "claude-test", "model_name": "Test"}]
     })).unwrap();
@@ -1833,9 +1833,21 @@ async fn anthropic_provider_saves_workspace_and_keeps_cost_key_private() {
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["workspace_id"], "wrkspc_test");
+    assert_eq!(body["workspace_id"], "wrkspc_cost");
     assert_eq!(body["has_cost_api_key"], true);
     assert!(!String::from_utf8_lossy(&bytes).contains("secret-admin-key"));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let admin_addr = listener.local_addr().unwrap();
+    let admin = crate::router::create_admin_router(state.clone());
+    let admin_task = tokio::spawn(async move { axum::serve(listener, admin).await.unwrap() });
+    let result: serde_json::Value = http()
+        .post(format!("http://{admin_addr}/api/admin/providers/anthropic/models/query"))
+        .json(&serde_json::json!({"channel": "anthropic"}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(result["models"][0]["model_id"], "claude-discovered");
+    admin_task.abort();
+
     crate::admin::provider_svc::probe_upstream_models(&state)
         .await
         .unwrap();
@@ -2389,6 +2401,7 @@ async fn system_one_routes_decisions_and_records_usage() {
         .and(path("/api/v1/systemone"))
         .and(header("authorization", format!("Bearer {UPSTREAM_KEY}").as_str()))
         .and(header("ark-beta-systemone-api", "true"))
+        .and(header("x-custom-upstream", "from-config"))
         .and(body_partial_json(request.clone()))
         .respond_with(ResponseTemplate::new(200).set_body_json(answer.clone()))
         .expect(1)
@@ -2396,6 +2409,7 @@ async fn system_one_routes_decisions_and_records_usage() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/models"))
+        .and(header("x-custom-upstream", "from-config"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "models": [{"name": "decision", "displayName": "Decision"}]
         })))
@@ -2404,12 +2418,13 @@ async fn system_one_routes_decisions_and_records_usage() {
     let mut state = build_state(HashMap::new(), HashMap::new(), HashMap::new()).await;
     Arc::get_mut(&mut state).unwrap().provider_defs = vec![serde_json::from_value(serde_json::json!({
         "id": "ark-test", "name": "Ark", "channels": [{
-            "type": "system_one", "base_url": format!("{}/api/v1", upstream.uri()), "system_one_beta": true,
+            "type": "system_one", "base_url": format!("{}/api/v1", upstream.uri()),
+            "headers": {"Ark-Beta-SystemOne-API": "true", "X-Custom-Upstream": "from-config"},
             "models_endpoint": format!("{}/api/v1/models", upstream.uri())
         }]
     })).unwrap()];
     let models = crate::admin::provider_svc::fetch_models_from_api(
-        &state.client, &state.provider_defs, "ark-test", "system_one", UPSTREAM_KEY, "",
+        &state.client, &state.provider_defs, "ark-test", "system_one", UPSTREAM_KEY,
     ).await.unwrap();
     assert_eq!(models, [("decision".into(), "Decision".into())]);
     update_provider(&state.db, "ark-test", UPSTREAM_KEY, true,
@@ -2430,6 +2445,7 @@ async fn system_one_routes_decisions_and_records_usage() {
     assert_eq!(client.post(&endpoint).json(&request).send().await.unwrap().status(), 401);
     let response = client.post(&endpoint).bearer_auth(system_one_key)
         .header("ark-beta-systemone-api", "false")
+        .header("x-custom-upstream", "from-client")
         .json(&request).send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.json::<serde_json::Value>().await.unwrap(), answer);

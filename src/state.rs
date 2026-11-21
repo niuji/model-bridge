@@ -17,8 +17,7 @@ pub struct ProviderRoute {
     pub model_name: String,
     pub base_url: String,
     pub api_key: String,
-    pub workspace_id: String,
-    pub system_one_beta: bool,
+    pub headers: axum::http::HeaderMap,
 }
 
 /// 应用程序全局状态

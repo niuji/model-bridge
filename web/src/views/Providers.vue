@@ -210,7 +210,7 @@
               </div>
             </n-form-item>
             <template v-if="supportsWorkspace">
-              <n-form-item label="Workspace ID">
+              <n-form-item :label="needsWorkspace ? 'Workspace ID' : '费用查询工作区'">
                 <n-input v-model:value="form.workspace_id" :placeholder="needsWorkspace ? '百炼业务空间 ID' : '可选，wrkspc_...'" class="mono" />
               </n-form-item>
             </template>
@@ -573,7 +573,9 @@ const isSubscription = computed(() => editProvider.value?.access_type === 'subsc
 const needsWorkspace = computed(() => editProvider.value?.channels.some(
   channel => channel.channel_type === 'system_one' && channel.base_url.includes('{workspace_id}')
 ))
-const supportsWorkspace = computed(() => !isSubscription.value && (editProvider.value?.id === 'anthropic' || needsWorkspace.value))
+const supportsWorkspace = computed(() => !isSubscription.value && (
+  needsWorkspace.value || providers.value.some(p => p.id === editProvider.value?.id && isCost(p))
+))
 
 const selectedChannelDef = computed(() => form.value.channels.find(c => c.channel_type === selectedChannel.value))
 const visibleModels = computed(() => form.value.modelsByChannel[selectedChannel.value] || [])
@@ -841,8 +843,7 @@ async function fetchModels() {
     const res = await adminRequest(`/providers/${editProvider.value.id}/models/query`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: selectedChannel.value,
-        ...(!isSubscription.value ? { api_key: form.value.api_key.trim() } : {}),
-        ...(supportsWorkspace.value ? { workspace_id: form.value.workspace_id.trim() } : {}) })
+        ...(!isSubscription.value ? { api_key: form.value.api_key.trim() } : {}) })
     })
     if (res.ok) {
       const data = await res.json()
