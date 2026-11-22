@@ -342,7 +342,7 @@ onMounted(init)
 .count-num::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mb-success); margin-left: 8px; vertical-align: 5px; box-shadow: 0 0 6px rgba(34,197,94,0.5); }
 
 .table-container { background: var(--mb-surface); border: 1px solid var(--mb-border); border-radius: 12px; overflow: hidden; }
-.logs-table { --n-td-color: var(--mb-surface); --n-th-color: var(--mb-surface-inset); --n-td-color-hover: var(--mb-surface-inset); min-height: 200px; }
+.logs-table { --n-td-color: var(--mb-surface); --n-th-color: var(--mb-surface-inset); --n-td-color-hover: var(--mb-surface-inset); }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 70px 20px 80px; text-align: center; }
 .empty-icon { width: 56px; height: 56px; border-radius: 50%; background: var(--mb-surface-inset); border: 1px solid var(--mb-divider); display: flex; align-items: center; justify-content: center; color: var(--mb-muted); margin-bottom: 18px; }
