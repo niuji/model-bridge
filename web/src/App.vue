@@ -19,11 +19,11 @@
               <span v-show="!collapsed" class="brand-text serif">Model Bridge</span>
             </div>
             <nav class="proxy-switch" aria-label="代理类型">
-              <router-link to="/" :class="{ active: !systemOne }" :aria-current="!systemOne ? 'true' : undefined" title="LLM 代理">
-                {{ collapsed ? 'LLM' : 'LLM 代理' }}
+              <router-link to="/" :class="{ active: !systemOne }" :aria-current="!systemOne ? 'true' : undefined" title="LLM">
+                LLM
               </router-link>
-              <router-link to="/system-one" :class="{ active: systemOne }" :aria-current="systemOne ? 'true' : undefined" title="System One 代理">
-                {{ collapsed ? 'S1' : 'System One' }}
+              <router-link to="/system-one" :class="{ active: systemOne }" :aria-current="systemOne ? 'true' : undefined" title="SystemOne">
+                {{ collapsed ? 'S1' : 'SystemOne' }}
               </router-link>
             </nav>
             <n-menu
